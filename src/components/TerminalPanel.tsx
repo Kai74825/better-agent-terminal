@@ -161,7 +161,12 @@ export function TerminalPanel({ terminalId, isActive = true }: TerminalPanelProp
 
     const fitAddon = new FitAddon()
     const unicode11Addon = new Unicode11Addon()
+    const webLinksAddon = new WebLinksAddon((event, uri) => {
+      // Open URL in default browser
+      window.electronAPI.shell.openExternal(uri)
+    })
     terminal.loadAddon(fitAddon)
+    terminal.loadAddon(webLinksAddon)
     terminal.open(containerRef.current)
 
     // Load unicode11 addon after terminal is open
