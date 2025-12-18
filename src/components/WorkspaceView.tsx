@@ -11,6 +11,7 @@ interface WorkspaceViewProps {
   workspace: Workspace
   terminals: TerminalInstance[]
   focusedTerminalId: string | null
+  isActive: boolean
 }
 
 // Helper to get shell path from settings
@@ -22,7 +23,7 @@ async function getShellFromSettings(): Promise<string | undefined> {
   return window.electronAPI.settings.getShellPath(settings.shell)
 }
 
-export function WorkspaceView({ workspace, terminals, focusedTerminalId }: WorkspaceViewProps) {
+export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActive }: WorkspaceViewProps) {
   const [showCloseConfirm, setShowCloseConfirm] = useState<string | null>(null)
 
   const claudeCode = terminals.find(t => t.type === 'claude-code')
@@ -65,12 +66,12 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId }: Works
     }
   }, [workspace.id, regularTerminals.length, claudeCode])
 
-  // Set default focus
+  // Set default focus - only for active workspace
   useEffect(() => {
-    if (!focusedTerminalId && claudeCode) {
+    if (isActive && !focusedTerminalId && claudeCode) {
       workspaceStore.setFocusedTerminal(claudeCode.id)
     }
-  }, [focusedTerminalId, claudeCode])
+  }, [isActive, focusedTerminalId, claudeCode])
 
   const handleAddTerminal = useCallback(async () => {
     const terminal = workspaceStore.addTerminal(workspace.id, 'terminal')

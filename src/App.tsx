@@ -77,6 +77,7 @@ export default function App() {
                 workspace={workspace}
                 terminals={workspaceStore.getWorkspaceTerminals(workspace.id)}
                 focusedTerminalId={workspace.id === state.activeWorkspaceId ? state.focusedTerminalId : null}
+                isActive={workspace.id === state.activeWorkspaceId}
               />
             </div>
           ))
