@@ -23,9 +23,6 @@ function getCurrentVersion(): string {
 }
 
 function compareVersions(current: string, latest: string): boolean {
-  // DEBUG: 測試用，強制顯示更新
-  return true
-
   // Remove 'v' prefix if present
   const cleanCurrent = current.replace(/^v/, '')
   const cleanLatest = latest.replace(/^v/, '')
