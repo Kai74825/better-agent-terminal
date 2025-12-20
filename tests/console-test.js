@@ -20,7 +20,7 @@ let ptyAvailable = false
 // 這個測試腳本預設使用 child_process，除非設定 USE_PTY=1
 if (process.env.USE_PTY === '1') {
   try {
-    pty = require('node-pty')
+    pty = require('@lydell/node-pty')
     if (pty && typeof pty.spawn === 'function') {
       ptyAvailable = true
       console.log('[Console Test] node-pty 已載入（需要 rebuild 才能在 Node.js 使用）')

@@ -137,7 +137,7 @@ async function checkEnvironment() {
 async function checkPty() {
   let pty = null
   try {
-    pty = require('node-pty')
+    pty = require('@lydell/node-pty')
     if (pty && typeof pty.spawn === 'function') {
       log('node-pty 已載入', 'success')
       diagnosis.tests.push({

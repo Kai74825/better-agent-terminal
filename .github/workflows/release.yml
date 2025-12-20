@@ -32,11 +32,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Rebuild node-pty for Electron (Windows)
+      - name: Rebuild @lydell/node-pty for Electron (Windows)
         if: matrix.platform == 'win'
         run: npx --yes @electron/rebuild
 
-      - name: Rebuild node-pty for Electron (macOS/Linux)
+      - name: Rebuild @lydell/node-pty for Electron (macOS/Linux)
         if: matrix.platform != 'win'
         run: npx --yes @electron/rebuild
 

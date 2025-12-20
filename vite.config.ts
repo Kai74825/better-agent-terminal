@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['node-pty']
+              external: ['@lydell/node-pty']
             }
           }
         }
@@ -40,7 +40,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      external: ['node-pty']
+      external: ['@lydell/node-pty']
     }
   }
 })
