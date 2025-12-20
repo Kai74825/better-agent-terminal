@@ -5,6 +5,8 @@ export interface Workspace {
   role?: string;
   folderPath: string;
   createdAt: number;
+  archived?: boolean;  // Whether the workspace is archived (hidden)
+  order?: number;      // Custom sort order
 }
 
 // Preset roles for quick selection

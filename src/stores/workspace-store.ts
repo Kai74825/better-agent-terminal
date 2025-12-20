@@ -97,6 +97,61 @@ class WorkspaceStore {
     this.save()
   }
 
+  // Archive actions
+  archiveWorkspace(id: string): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, archived: true } : w
+      ),
+      // If archiving the active workspace, switch to first non-archived one
+      activeWorkspaceId: this.state.activeWorkspaceId === id
+        ? (this.state.workspaces.find(w => w.id !== id && !w.archived)?.id ?? null)
+        : this.state.activeWorkspaceId
+    }
+
+    this.notify()
+    this.save()
+  }
+
+  unarchiveWorkspace(id: string): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, archived: false } : w
+      )
+    }
+
+    this.notify()
+    this.save()
+  }
+
+  getActiveWorkspaces(): Workspace[] {
+    return this.state.workspaces
+      .filter(w => !w.archived)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  }
+
+  getArchivedWorkspaces(): Workspace[] {
+    return this.state.workspaces
+      .filter(w => w.archived)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  }
+
+  // Reorder workspaces by providing ordered array of IDs
+  reorderWorkspaces(workspaceIds: string[]): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w => {
+        const index = workspaceIds.indexOf(w.id)
+        return index >= 0 ? { ...w, order: index } : w
+      })
+    }
+
+    this.notify()
+    this.save()
+  }
+
   // Terminal actions
   addTerminal(workspaceId: string, type: 'terminal' | 'code-agent'): TerminalInstance {
     const workspace = this.state.workspaces.find(w => w.id === workspaceId)

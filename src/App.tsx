@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { workspaceStore } from './stores/workspace-store'
 import { settingsStore } from './stores/settings-store'
 import { Sidebar } from './components/Sidebar'
@@ -7,10 +7,20 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { AboutPanel } from './components/AboutPanel'
 import type { AppState } from './types'
 
+const MIN_SIDEBAR_WIDTH = 160
+const MAX_SIDEBAR_WIDTH = 400
+const DEFAULT_SIDEBAR_WIDTH = 220
+
 export default function App() {
   const [state, setState] = useState<AppState>(workspaceStore.getState())
   const [showSettings, setShowSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('sidebarWidth')
+    return saved ? parseInt(saved, 10) : DEFAULT_SIDEBAR_WIDTH
+  })
+  const [isResizing, setIsResizing] = useState(false)
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
   useEffect(() => {
     const unsubscribe = workspaceStore.subscribe(() => {
@@ -33,6 +43,40 @@ export default function App() {
     }
   }, [])
 
+  // Sidebar resize handlers
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizing(true)
+    resizeRef.current = { startX: e.clientX, startWidth: sidebarWidth }
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    let currentWidth = sidebarWidth
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return
+      const delta = e.clientX - resizeRef.current.startX
+      currentWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, resizeRef.current.startWidth + delta))
+      setSidebarWidth(currentWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+      resizeRef.current = null
+      localStorage.setItem('sidebarWidth', currentWidth.toString())
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing, sidebarWidth])
+
   const handleAddWorkspace = useCallback(async () => {
     const folderPath = await window.electronAPI.dialog.selectFolder()
     if (folderPath) {
@@ -45,9 +89,11 @@ export default function App() {
   const activeWorkspace = state.workspaces.find(w => w.id === state.activeWorkspaceId)
 
   return (
-    <div className="app">
+    <div className={`app ${isResizing ? 'resizing' : ''}`}>
       <Sidebar
-        workspaces={state.workspaces}
+        width={sidebarWidth}
+        workspaces={workspaceStore.getActiveWorkspaces()}
+        archivedWorkspaces={workspaceStore.getArchivedWorkspaces()}
         activeWorkspaceId={state.activeWorkspaceId}
         onSelectWorkspace={(id) => workspaceStore.setActiveWorkspace(id)}
         onAddWorkspace={handleAddWorkspace}
@@ -62,8 +108,21 @@ export default function App() {
         onSetWorkspaceRole={(id, role) => {
           workspaceStore.setWorkspaceRole(id, role)
         }}
+        onArchiveWorkspace={(id) => {
+          workspaceStore.archiveWorkspace(id)
+        }}
+        onUnarchiveWorkspace={(id) => {
+          workspaceStore.unarchiveWorkspace(id)
+        }}
+        onReorderWorkspaces={(ids) => {
+          workspaceStore.reorderWorkspaces(ids)
+        }}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
+      />
+      <div
+        className="sidebar-resizer"
+        onMouseDown={handleResizeStart}
       />
       <main className="main-content">
         {state.workspaces.length > 0 ? (
