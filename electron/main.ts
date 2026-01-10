@@ -245,9 +245,20 @@ ipcMain.handle('settings:get-shell-path', async (_event, shellType: string) => {
     if (shellType === 'auto') {
       return process.env.SHELL || '/bin/zsh'
     }
-    // For non-auto, return the shellType as-is (custom path) or default shell
+    // Handle specific shell types
+    if (shellType === 'zsh') {
+      return '/bin/zsh'
+    }
+    if (shellType === 'bash') {
+      if (fs.existsSync('/opt/homebrew/bin/bash')) return '/opt/homebrew/bin/bash'
+      if (fs.existsSync('/usr/local/bin/bash')) return '/usr/local/bin/bash'
+      return '/bin/bash'
+    }
+    if (shellType === 'sh') {
+      return '/bin/sh'
+    }
+    // Windows shells requested on Unix - fall back to default
     if (shellType === 'pwsh' || shellType === 'powershell' || shellType === 'cmd') {
-      // Windows shells requested on Unix - fall back to default
       return process.env.SHELL || '/bin/zsh'
     }
     return shellType // custom path

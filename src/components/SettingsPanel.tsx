@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { AppSettings, ShellType, FontType, ColorPresetId } from '../types'
-import { FONT_OPTIONS, COLOR_PRESETS } from '../types'
+import { FONT_OPTIONS, COLOR_PRESETS, SHELL_OPTIONS } from '../types'
 import { settingsStore } from '../stores/settings-store'
 import { EnvVarEditor } from './EnvVarEditor'
 import { AGENT_PRESETS, AgentPresetId } from '../types/agent-presets'
@@ -25,6 +25,10 @@ const checkFontAvailable = (fontFamily: string): boolean => {
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [settings, setSettings] = useState<AppSettings>(settingsStore.getSettings())
   const [availableFonts, setAvailableFonts] = useState<Set<FontType>>(new Set())
+
+  // Get current platform for filtering shell options
+  const platform = window.electronAPI?.platform || 'darwin'
+  const platformShellOptions = SHELL_OPTIONS.filter(opt => opt.platforms.includes(platform))
 
   useEffect(() => {
     return settingsStore.subscribe(() => {
@@ -104,11 +108,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 value={settings.shell}
                 onChange={e => handleShellChange(e.target.value as ShellType)}
               >
-                <option value="auto">Auto (prefer pwsh)</option>
-                <option value="pwsh">PowerShell 7 (pwsh)</option>
-                <option value="powershell">Windows PowerShell</option>
-                <option value="cmd">Command Prompt (cmd)</option>
-                <option value="custom">Custom</option>
+                {platformShellOptions.map(opt => (
+                  <option key={opt.id} value={opt.id}>{opt.name}</option>
+                ))}
               </select>
             </div>
 
@@ -119,7 +121,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   type="text"
                   value={settings.customShellPath}
                   onChange={e => handleCustomPathChange(e.target.value)}
-                  placeholder="C:\path\to\shell.exe"
+                  placeholder={platform === 'win32' ? 'C:\\path\\to\\shell.exe' : '/path/to/shell'}
                 />
               </div>
             )}

@@ -1,6 +1,7 @@
 import type { CreatePtyOptions } from './index'
 
 interface ElectronAPI {
+  platform: 'win32' | 'darwin' | 'linux'
   pty: {
     create: (options: CreatePtyOptions) => Promise<boolean>
     write: (id: string, data: string) => Promise<void>

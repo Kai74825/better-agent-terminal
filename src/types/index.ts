@@ -69,7 +69,25 @@ export interface PtyExit {
   exitCode: number;
 }
 
-export type ShellType = 'auto' | 'pwsh' | 'powershell' | 'cmd' | 'custom';
+// Shell types: platform-specific options
+// Windows: pwsh, powershell, cmd
+// macOS/Linux: zsh, bash, sh
+export type ShellType = 'auto' | 'pwsh' | 'powershell' | 'cmd' | 'zsh' | 'bash' | 'sh' | 'custom';
+
+// Shell options grouped by platform
+export const SHELL_OPTIONS: { id: ShellType; name: string; platforms: ('win32' | 'darwin' | 'linux')[] }[] = [
+  { id: 'auto', name: 'Auto Detect', platforms: ['win32', 'darwin', 'linux'] },
+  // Windows shells
+  { id: 'pwsh', name: 'PowerShell 7 (pwsh)', platforms: ['win32'] },
+  { id: 'powershell', name: 'Windows PowerShell', platforms: ['win32'] },
+  { id: 'cmd', name: 'Command Prompt (cmd)', platforms: ['win32'] },
+  // macOS/Linux shells
+  { id: 'zsh', name: 'Zsh', platforms: ['darwin', 'linux'] },
+  { id: 'bash', name: 'Bash', platforms: ['darwin', 'linux'] },
+  { id: 'sh', name: 'sh', platforms: ['darwin', 'linux'] },
+  // Custom (all platforms)
+  { id: 'custom', name: 'Custom', platforms: ['win32', 'darwin', 'linux'] },
+];
 
 export type FontType = 'system' | 'sf-mono' | 'menlo' | 'consolas' | 'monaco' | 'fira-code' | 'jetbrains-mono' | 'custom';
 

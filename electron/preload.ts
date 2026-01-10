@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { CreatePtyOptions } from '../src/types'
 
 const electronAPI = {
+  platform: process.platform as 'win32' | 'darwin' | 'linux',
   pty: {
     create: (options: CreatePtyOptions) => ipcRenderer.invoke('pty:create', options),
     write: (id: string, data: string) => ipcRenderer.invoke('pty:write', id, data),
