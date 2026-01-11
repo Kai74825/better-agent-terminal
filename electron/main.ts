@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor } from 'electron'
 import path from 'path'
 import { PtyManager } from './pty-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
@@ -141,6 +141,14 @@ function createWindow() {
 app.whenReady().then(async () => {
   buildMenu()
   createWindow()
+
+  // Listen for system resume from sleep/hibernate
+  powerMonitor.on('resume', () => {
+    console.log('System resumed from sleep')
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('system:resume')
+    }
+  })
 
   // Check for updates after startup
   setTimeout(async () => {
