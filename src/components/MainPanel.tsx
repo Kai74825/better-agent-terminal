@@ -108,7 +108,7 @@ export function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId,
             savedSdkSessionId={lastSdkSessionId}
           />
         ) : (
-          <TerminalPanel terminalId={terminal.id} />
+          <TerminalPanel terminalId={terminal.id} isActive={isActive} />
         )}
       </div>
       {!isClaudeCode && showPromptBox && (

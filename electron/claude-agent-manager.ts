@@ -365,6 +365,15 @@ export class ClaudeAgentManager {
         if (message.type === 'assistant') {
           const content = message.message?.content
           if (Array.isArray(content)) {
+            // Collect thinking text from thinking blocks
+            const thinkingParts: string[] = []
+            for (const block of content) {
+              if ('type' in block && block.type === 'thinking' && 'thinking' in block) {
+                thinkingParts.push((block as { thinking: string }).thinking)
+              }
+            }
+            const thinkingText = thinkingParts.join('\n') || undefined
+
             for (const block of content) {
               if ('text' in block && block.text) {
                 this.addMessage(sessionId, {
@@ -372,6 +381,7 @@ export class ClaudeAgentManager {
                   sessionId,
                   role: 'assistant',
                   content: block.text,
+                  thinking: thinkingText,
                   timestamp: Date.now(),
                 })
               }

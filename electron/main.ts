@@ -313,6 +313,10 @@ ipcMain.handle('shell:open-external', async (_event, url: string) => {
   await shell.openExternal(url)
 })
 
+ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
+  await shell.openPath(folderPath)
+})
+
 // Update checker handlers
 ipcMain.handle('update:check', async () => {
   try {

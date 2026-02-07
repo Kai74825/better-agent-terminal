@@ -96,6 +96,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [showModelList, setShowModelList] = useState(false)
   const historyLoadedRef = useRef(false)
   const sessionStartedRef = useRef(false)
+  const inputHistoryRef = useRef<string[]>([])
+  const inputHistoryIndexRef = useRef(-1)
+  const inputDraftRef = useRef('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const permissionCardRef = useRef<HTMLDivElement>(null)
@@ -136,13 +139,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           setSessionMeta(null)
           return
         }
-        // Deduplicate by id
-        setMessages(prev => {
-          if (prev.some(m => m.id === message.id)) return prev
-          return [...prev, message]
+        // Deduplicate by id; attach streaming thinking if backend didn't provide it
+        setStreamingThinking(prevThinking => {
+          const finalMsg = (!message.thinking && prevThinking && message.role === 'assistant')
+            ? { ...message, thinking: prevThinking }
+            : message
+          setMessages(prev => {
+            if (prev.some(m => m.id === finalMsg.id)) return prev
+            return [...prev, finalMsg]
+          })
+          return ''
         })
         setStreamingText('')
-        setStreamingThinking('')
       }),
 
       api.onToolUse((sid: string, tool: unknown) => {
@@ -304,6 +312,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     const trimmed = input.trim()
     if (!trimmed) return
 
+    // Save to input history
+    inputHistoryRef.current.push(trimmed)
+    inputHistoryIndexRef.current = -1
+    inputDraftRef.current = ''
+
     // Intercept /resume command (only when not streaming)
     if (!isStreaming && trimmed === '/resume') {
       setInput('')
@@ -394,11 +407,39 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       handlePermissionModeCycle()
       return
     }
+    if (e.key === 'ArrowUp' && !e.shiftKey) {
+      const history = inputHistoryRef.current
+      if (history.length === 0) return
+      e.preventDefault()
+      if (inputHistoryIndexRef.current === -1) {
+        // Save current draft before navigating
+        inputDraftRef.current = input
+        inputHistoryIndexRef.current = history.length - 1
+      } else if (inputHistoryIndexRef.current > 0) {
+        inputHistoryIndexRef.current--
+      }
+      setInput(history[inputHistoryIndexRef.current])
+      return
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey) {
+      if (inputHistoryIndexRef.current === -1) return
+      e.preventDefault()
+      const history = inputHistoryRef.current
+      if (inputHistoryIndexRef.current < history.length - 1) {
+        inputHistoryIndexRef.current++
+        setInput(history[inputHistoryIndexRef.current])
+      } else {
+        // Back to draft
+        inputHistoryIndexRef.current = -1
+        setInput(inputDraftRef.current)
+      }
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
-  }, [handleSend, handlePermissionModeCycle])
+  }, [handleSend, handlePermissionModeCycle, input])
 
   const handleModelCycle = useCallback(async () => {
     if (availableModels.length === 0) return
