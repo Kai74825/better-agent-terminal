@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, clipboard, nativeImage } from 'electron'
 import path from 'path'
 import { PtyManager } from './pty-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
@@ -355,4 +355,23 @@ ipcMain.handle('snippet:getCategories', () => {
 
 ipcMain.handle('snippet:getFavorites', () => {
   return snippetDb.getFavorites()
+})
+
+// Clipboard image handlers
+ipcMain.handle('clipboard:saveImage', async () => {
+  const image = clipboard.readImage()
+  if (image.isEmpty()) return null
+  const fs = await import('fs/promises')
+  const os = await import('os')
+  const tempDir = os.tmpdir()
+  const filePath = path.join(tempDir, `bat-clipboard-${Date.now()}.png`)
+  await fs.writeFile(filePath, image.toPNG())
+  return filePath
+})
+
+ipcMain.handle('clipboard:writeImage', async (_event, filePath: string) => {
+  const image = nativeImage.createFromPath(filePath)
+  if (image.isEmpty()) return false
+  clipboard.writeImage(image)
+  return true
 })

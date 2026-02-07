@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { TerminalInstance } from '../types'
 import { TerminalPanel } from './TerminalPanel'
 import { ActivityIndicator } from './ActivityIndicator'
+import { PromptBox } from './PromptBox'
 import { getAgentPreset } from '../types/agent-presets'
 import { workspaceStore } from '../stores/workspace-store'
 
@@ -13,9 +14,11 @@ interface MainPanelProps {
 
 export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelProps>) {
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
+  const isClaudeCode = terminal.agentPreset === 'claude-code'
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(terminal.title)
+  const [showPromptBox, setShowPromptBox] = useState(false)
 
   const handleDoubleClick = () => {
     setEditValue(terminal.title)
@@ -66,6 +69,15 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
             terminalId={terminal.id}
             size="small"
           />
+          {isClaudeCode && (
+            <button
+              className={`action-btn ${showPromptBox ? 'active' : ''}`}
+              onClick={() => setShowPromptBox(!showPromptBox)}
+              title={showPromptBox ? 'Hide prompt box' : 'Show prompt box'}
+            >
+              💬
+            </button>
+          )}
           <button
             className="action-btn"
             onClick={() => onRestart(terminal.id)}
@@ -85,6 +97,9 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
       <div className="main-panel-content">
         <TerminalPanel terminalId={terminal.id} />
       </div>
+      {isClaudeCode && showPromptBox && (
+        <PromptBox terminalId={terminal.id} />
+      )}
     </div>
   )
 }

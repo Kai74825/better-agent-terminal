@@ -2000,3 +2000,102 @@ body {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
+/* Prompt Box */
+.prompt-box {
+  border-top: 1px solid var(--border-color);
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.prompt-box-inner {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.prompt-box-textarea {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 60px;
+  max-height: 200px;
+  outline: none;
+  line-height: 1.4;
+}
+
+.prompt-box-textarea:focus {
+  border-color: var(--accent-color);
+}
+
+.prompt-box-textarea::placeholder {
+  color: var(--text-secondary);
+}
+
+.prompt-box-send {
+  width: 40px;
+  background: var(--accent-color);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.prompt-box-send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.prompt-box-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.prompt-box-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Prompt Box image badge */
+.prompt-box-image-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--accent-color);
+}
+
+.prompt-box-image-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.prompt-box-image-remove:hover {
+  color: var(--danger-color);
+}
+
+/* Prompt Box toggle active state */
+.action-btn.active {
+  color: var(--accent-color);
+}

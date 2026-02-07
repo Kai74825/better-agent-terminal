@@ -40,6 +40,10 @@ const electronAPI = {
     check: () => ipcRenderer.invoke('update:check'),
     getVersion: () => ipcRenderer.invoke('update:get-version')
   },
+  clipboard: {
+    saveImage: () => ipcRenderer.invoke('clipboard:saveImage'),
+    writeImage: (filePath: string) => ipcRenderer.invoke('clipboard:writeImage', filePath),
+  },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),
     getById: (id: number) => ipcRenderer.invoke('snippet:getById', id),

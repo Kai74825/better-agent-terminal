@@ -24,6 +24,10 @@ interface ElectronAPI {
   dialog: {
     selectFolder: () => Promise<string | null>
   }
+  clipboard: {
+    saveImage: () => Promise<string | null>
+    writeImage: (filePath: string) => Promise<boolean>
+  }
 }
 
 declare global {
