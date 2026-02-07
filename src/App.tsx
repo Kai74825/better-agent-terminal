@@ -37,7 +37,7 @@ function loadPanelSettings(): PanelSettings {
       // Ensure sidebar settings exist (migration from old format)
       return {
         sidebar: parsed.sidebar || { width: DEFAULT_SIDEBAR_WIDTH },
-        snippetSidebar: parsed.snippetSidebar || { width: DEFAULT_SNIPPET_WIDTH, collapsed: false }
+        snippetSidebar: parsed.snippetSidebar || { width: DEFAULT_SNIPPET_WIDTH, collapsed: true }
       }
     }
   } catch (e) {
@@ -45,7 +45,7 @@ function loadPanelSettings(): PanelSettings {
   }
   return {
     sidebar: { width: DEFAULT_SIDEBAR_WIDTH },
-    snippetSidebar: { width: DEFAULT_SNIPPET_WIDTH, collapsed: false }
+    snippetSidebar: { width: DEFAULT_SNIPPET_WIDTH, collapsed: true }
   }
 }
 

@@ -4,11 +4,13 @@ import { FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS } from '../types'
 
 type Listener = () => void
 
+const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+
 const defaultSettings: AppSettings = {
   shell: 'auto',
   customShellPath: '',
   fontSize: 14,
-  fontFamily: 'sf-mono',
+  fontFamily: isWindows ? 'cascadia-code' : 'sf-mono',
   customFontFamily: '',
   theme: 'dark',
   colorPreset: 'novel',

@@ -89,16 +89,22 @@ export const SHELL_OPTIONS: { id: ShellType; name: string; platforms: ('win32' |
   { id: 'custom', name: 'Custom', platforms: ['win32', 'darwin', 'linux'] },
 ];
 
-export type FontType = 'system' | 'sf-mono' | 'menlo' | 'consolas' | 'monaco' | 'fira-code' | 'jetbrains-mono' | 'custom';
+export type FontType = 'system' | 'sf-mono' | 'menlo' | 'consolas' | 'monaco' | 'fira-code' | 'jetbrains-mono' | 'cascadia-code' | 'custom';
 
+const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+
+// Cross-platform fallback chains for reliable xterm.js rendering
 export const FONT_OPTIONS: { id: FontType; name: string; fontFamily: string }[] = [
-  { id: 'system', name: 'System Default', fontFamily: 'monospace' },
-  { id: 'sf-mono', name: 'SF Mono', fontFamily: '"SF Mono", monospace' },
-  { id: 'menlo', name: 'Menlo', fontFamily: 'Menlo, monospace' },
-  { id: 'consolas', name: 'Consolas', fontFamily: 'Consolas, monospace' },
-  { id: 'monaco', name: 'Monaco', fontFamily: 'Monaco, monospace' },
-  { id: 'fira-code', name: 'Fira Code', fontFamily: '"Fira Code", monospace' },
-  { id: 'jetbrains-mono', name: 'JetBrains Mono', fontFamily: '"JetBrains Mono", monospace' },
+  { id: 'system', name: 'System Default', fontFamily: isWindows
+    ? 'Consolas, "Courier New", monospace'
+    : '"SF Mono", Menlo, Monaco, monospace' },
+  { id: 'cascadia-code', name: 'Cascadia Code', fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, monospace' },
+  { id: 'consolas', name: 'Consolas', fontFamily: 'Consolas, "Courier New", monospace' },
+  { id: 'sf-mono', name: 'SF Mono', fontFamily: '"SF Mono", Menlo, Consolas, monospace' },
+  { id: 'menlo', name: 'Menlo', fontFamily: 'Menlo, Consolas, monospace' },
+  { id: 'monaco', name: 'Monaco', fontFamily: 'Monaco, Consolas, monospace' },
+  { id: 'fira-code', name: 'Fira Code', fontFamily: '"Fira Code", Consolas, monospace' },
+  { id: 'jetbrains-mono', name: 'JetBrains Mono', fontFamily: '"JetBrains Mono", Consolas, monospace' },
   { id: 'custom', name: 'Custom', fontFamily: 'monospace' },
 ];
 
