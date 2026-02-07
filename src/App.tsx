@@ -187,9 +187,6 @@ export default function App() {
           workspaceStore.renameWorkspace(id, alias)
           workspaceStore.save()
         }}
-        onSetWorkspaceRole={(id, role) => {
-          workspaceStore.setWorkspaceRole(id, role)
-        }}
         onReorderWorkspaces={(workspaceIds) => {
           workspaceStore.reorderWorkspaces(workspaceIds)
         }}

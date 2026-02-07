@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, clipboard, nativeImage } from 'electron'
 import path from 'path'
 import { PtyManager } from './pty-manager'
+import { ClaudeAgentManager } from './claude-agent-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
 import { snippetDb, CreateSnippetInput } from './snippet-db'
 
@@ -11,6 +12,7 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
+let claudeManager: ClaudeAgentManager | null = null
 let updateCheckResult: UpdateCheckResult | null = null
 
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
@@ -123,6 +125,7 @@ function createWindow() {
   })
 
   ptyManager = new PtyManager(mainWindow)
+  claudeManager = new ClaudeAgentManager(mainWindow)
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
@@ -135,6 +138,8 @@ function createWindow() {
     mainWindow = null
     ptyManager?.dispose()
     ptyManager = null
+    claudeManager?.dispose()
+    claudeManager = null
   })
 }
 
@@ -355,6 +360,19 @@ ipcMain.handle('snippet:getCategories', () => {
 
 ipcMain.handle('snippet:getFavorites', () => {
   return snippetDb.getFavorites()
+})
+
+// Claude Agent SDK handlers
+ipcMain.handle('claude:start-session', async (_event, sessionId: string, options: { cwd: string; prompt?: string }) => {
+  return claudeManager?.startSession(sessionId, options)
+})
+
+ipcMain.handle('claude:send-message', async (_event, sessionId: string, prompt: string) => {
+  return claudeManager?.sendMessage(sessionId, prompt)
+})
+
+ipcMain.handle('claude:stop-session', async (_event, sessionId: string) => {
+  return claudeManager?.stopSession(sessionId)
 })
 
 // Clipboard image handlers

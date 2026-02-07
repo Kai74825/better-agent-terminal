@@ -86,18 +86,6 @@ class WorkspaceStore {
     this.notify()
   }
 
-  setWorkspaceRole(id: string, role: string): void {
-    this.state = {
-      ...this.state,
-      workspaces: this.state.workspaces.map(w =>
-        w.id === id ? { ...w, role: role.trim() || undefined } : w
-      )
-    }
-
-    this.notify()
-    this.save()
-  }
-
   reorderWorkspaces(workspaceIds: string[]): void {
     const workspaceMap = new Map(this.state.workspaces.map(w => [w.id, w]))
     const reordered = workspaceIds

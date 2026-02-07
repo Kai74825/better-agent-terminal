@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { TerminalInstance } from '../types'
 import { TerminalPanel } from './TerminalPanel'
+import { ClaudeAgentPanel } from './ClaudeAgentPanel'
 import { ActivityIndicator } from './ActivityIndicator'
 import { PromptBox } from './PromptBox'
 import { getAgentPreset } from '../types/agent-presets'
@@ -69,7 +70,7 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
             terminalId={terminal.id}
             size="small"
           />
-          {isClaudeCode && (
+          {isAgent && !isClaudeCode && (
             <button
               className={`action-btn ${showPromptBox ? 'active' : ''}`}
               onClick={() => setShowPromptBox(!showPromptBox)}
@@ -95,9 +96,17 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
         </div>
       </div>
       <div className="main-panel-content">
-        <TerminalPanel terminalId={terminal.id} />
+        {isClaudeCode ? (
+          <ClaudeAgentPanel
+            sessionId={terminal.id}
+            cwd={terminal.cwd}
+            isActive={true}
+          />
+        ) : (
+          <TerminalPanel terminalId={terminal.id} />
+        )}
       </div>
-      {isClaudeCode && showPromptBox && (
+      {!isClaudeCode && showPromptBox && (
         <PromptBox terminalId={terminal.id} />
       )}
     </div>

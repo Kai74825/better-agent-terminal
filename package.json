@@ -17,7 +17,7 @@
     "diagnose:ctrl-o:verbose": "npx electron tests/diagnose-ctrl-o.js --verbose"
   },
   "dependencies": {
-    "@lydell/node-pty": "^1.1.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.34",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode11": "^0.8.0",
     "@xterm/addon-web-links": "^0.11.0",
@@ -58,7 +58,10 @@
       "output": "release"
     },
     "win": {
-      "target": ["nsis", "zip"],
+      "target": [
+        "nsis",
+        "zip"
+      ],
       "signAndEditExecutable": false,
       "icon": "assets/icon.ico"
     },
