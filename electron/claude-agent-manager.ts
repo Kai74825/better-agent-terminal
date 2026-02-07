@@ -1,6 +1,10 @@
 import { BrowserWindow } from 'electron'
 import { createRequire } from 'module'
+import * as fsSync from 'fs'
+import * as fsPromises from 'fs/promises'
+import * as pathModule from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
+import type { Query, PermissionMode, CanUseTool } from '@anthropic-ai/claude-agent-sdk'
 
 // Lazy import the SDK (it's an ES module)
 let queryFn: typeof import('@anthropic-ai/claude-agent-sdk').query | null = null
@@ -11,6 +15,34 @@ async function getQuery() {
     queryFn = sdk.query
   }
   return queryFn
+}
+
+// Map file extension to media type for image content blocks
+function getMediaType(filePath: string): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' {
+  const ext = pathModule.extname(filePath).toLowerCase()
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.gif':
+      return 'image/gif'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return 'image/png'
+  }
+}
+
+async function imageToContentBlock(filePath: string): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> {
+  const data = await fsPromises.readFile(filePath)
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: getMediaType(filePath),
+      data: data.toString('base64'),
+    },
+  }
 }
 
 // Resolve the Claude Code CLI path at module level
@@ -28,6 +60,13 @@ function resolveClaudeCodePath(): string {
   }
 }
 
+export interface SessionSummary {
+  sdkSessionId: string
+  timestamp: number
+  preview: string
+  messageCount: number
+}
+
 interface SessionMetadata {
   model?: string
   sdkSessionId?: string
@@ -37,6 +76,11 @@ interface SessionMetadata {
   outputTokens: number
   durationMs: number
   numTurns: number
+  contextWindow: number
+}
+
+interface PendingRequest {
+  resolve: (value: unknown) => void
 }
 
 interface SessionInstance {
@@ -45,6 +89,9 @@ interface SessionInstance {
   sdkSessionId?: string
   cwd: string
   metadata: SessionMetadata
+  queryInstance?: Query
+  pendingPermissions: Map<string, PendingRequest>
+  pendingAskUser: Map<string, PendingRequest>
 }
 
 // Persists SDK session IDs across stop/restart so we can resume conversations
@@ -93,7 +140,7 @@ export class ClaudeAgentManager {
     this.send('claude:tool-result', sessionId, { id: toolId, ...updates })
   }
 
-  async startSession(sessionId: string, options: { cwd: string; prompt?: string }): Promise<boolean> {
+  async startSession(sessionId: string, options: { cwd: string; prompt?: string; sdkSessionId?: string }): Promise<boolean> {
     // Prevent duplicate session creation
     if (this.sessions.has(sessionId)) {
       return true
@@ -105,6 +152,11 @@ export class ClaudeAgentManager {
         sessionId,
         messages: [],
         isStreaming: false,
+      }
+
+      // If an explicit SDK session ID was given (e.g. from /resume), store it
+      if (options.sdkSessionId) {
+        sdkSessionIds.set(sessionId, options.sdkSessionId)
       }
 
       // Restore SDK session ID if we had one before (for resume after restart)
@@ -121,7 +173,10 @@ export class ClaudeAgentManager {
           outputTokens: 0,
           durationMs: 0,
           numTurns: 0,
+          contextWindow: 0,
         },
+        pendingPermissions: new Map(),
+        pendingAskUser: new Map(),
       })
 
       // If no initial prompt, just set up session and wait
@@ -146,7 +201,7 @@ export class ClaudeAgentManager {
     }
   }
 
-  async sendMessage(sessionId: string, prompt: string): Promise<boolean> {
+  async sendMessage(sessionId: string, prompt: string, images?: string[]): Promise<boolean> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       this.send('claude:error', sessionId, 'Session not found')
@@ -158,20 +213,12 @@ export class ClaudeAgentManager {
       return false
     }
 
-    // Add user message
-    this.addMessage(sessionId, {
-      id: `user-${Date.now()}`,
-      sessionId,
-      role: 'user',
-      content: prompt,
-      timestamp: Date.now(),
-    })
-
-    await this.runQuery(sessionId, prompt)
+    // Note: user message is added by the frontend — don't duplicate here
+    await this.runQuery(sessionId, prompt, images)
     return true
   }
 
-  private async runQuery(sessionId: string, prompt: string) {
+  private async runQuery(sessionId: string, prompt: string, images?: string[]) {
     const session = this.sessions.get(sessionId)
     if (!session) return
 
@@ -184,6 +231,30 @@ export class ClaudeAgentManager {
       // Build options — resume if we have a previous SDK session ID
       const resumeId = session.sdkSessionId
       const claudeCodePath = resolveClaudeCodePath()
+      const canUseTool: CanUseTool = async (toolName, input, opts) => {
+        // Check if this is an AskUserQuestion tool
+        if (toolName === 'AskUserQuestion') {
+          return new Promise((resolve) => {
+            session.pendingAskUser.set(opts.toolUseID, { resolve })
+            this.send('claude:ask-user', sessionId, {
+              toolUseId: opts.toolUseID,
+              questions: (input as Record<string, unknown>).questions,
+            })
+          })
+        }
+
+        // For all other tools, send permission request to frontend
+        return new Promise((resolve) => {
+          session.pendingPermissions.set(opts.toolUseID, { resolve })
+          this.send('claude:permission-request', sessionId, {
+            toolUseId: opts.toolUseID,
+            toolName,
+            input,
+            suggestions: opts.suggestions,
+          })
+        })
+      }
+
       const queryOptions: Record<string, unknown> = {
         abortController: session.abortController,
         cwd: session.cwd,
@@ -192,6 +263,8 @@ export class ClaudeAgentManager {
         permissionMode: 'default',
         includePartialMessages: true,
         settingSources: ['user', 'project', 'local'],
+        maxThinkingTokens: 31999,
+        canUseTool,
         ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
       }
 
@@ -200,10 +273,38 @@ export class ClaudeAgentManager {
         queryOptions.continue = true
       }
 
+      // Build prompt: if images are attached, construct a multi-content SDKUserMessage
+      let promptArg: unknown = prompt
+      if (images && images.length > 0) {
+        const imageBlocks = await Promise.all(
+          images.filter(p => fsSync.existsSync(p)).map(p => imageToContentBlock(p))
+        )
+        if (imageBlocks.length > 0) {
+          const contentBlocks = [
+            ...imageBlocks,
+            { type: 'text' as const, text: prompt },
+          ]
+          const userMessage = {
+            type: 'user' as const,
+            message: {
+              role: 'user' as const,
+              content: contentBlocks,
+            },
+          }
+          async function* singleMessage() {
+            yield userMessage
+          }
+          promptArg = singleMessage()
+        }
+      }
+
       const generator = query({
-        prompt,
+        prompt: promptArg as Parameters<typeof query>[0]['prompt'],
         options: queryOptions as Parameters<typeof query>[0]['options'],
       })
+
+      // Store the query instance so we can call runtime methods
+      session.queryInstance = generator
 
       for await (const message of generator) {
         // Check abort
@@ -211,7 +312,7 @@ export class ClaudeAgentManager {
 
         if (message.type === 'system' && message.subtype === 'init') {
           // Capture and persist the SDK session ID
-          const initMsg = message as { session_id: string; model?: string; cwd?: string }
+          const initMsg = message as { session_id: string; model?: string; cwd?: string; permissionMode?: string }
           session.sdkSessionId = initMsg.session_id
           sdkSessionIds.set(sessionId, initMsg.session_id)
 
@@ -219,7 +320,11 @@ export class ClaudeAgentManager {
           session.metadata.model = initMsg.model
           session.metadata.sdkSessionId = initMsg.session_id
           session.metadata.cwd = initMsg.cwd || session.cwd
-          this.send('claude:status', sessionId, { ...session.metadata })
+          this.send('claude:status', sessionId, {
+            ...session.metadata,
+            permissionMode: initMsg.permissionMode || 'default',
+          })
+
         }
 
         if (message.type === 'assistant') {
@@ -281,12 +386,20 @@ export class ClaudeAgentManager {
 
         if (message.type === 'stream_event') {
           // Partial streaming content
-          const event = message.event as { type?: string; delta?: { text?: string }; content_block?: { type?: string; id?: string; name?: string; input?: string } }
-          if (event.type === 'content_block_delta' && event.delta?.text) {
-            this.send('claude:stream', sessionId, {
-              text: event.delta.text,
-              parentToolUseId: message.parent_tool_use_id,
-            })
+          const event = message.event as { type?: string; delta?: { text?: string; thinking?: string }; content_block?: { type?: string; id?: string; name?: string; input?: string } }
+          if (event.type === 'content_block_delta') {
+            if (event.delta?.text) {
+              this.send('claude:stream', sessionId, {
+                text: event.delta.text,
+                parentToolUseId: message.parent_tool_use_id,
+              })
+            }
+            if (event.delta?.thinking) {
+              this.send('claude:stream', sessionId, {
+                thinking: event.delta.thinking,
+                parentToolUseId: message.parent_tool_use_id,
+              })
+            }
           }
         }
 
@@ -299,6 +412,7 @@ export class ClaudeAgentManager {
             num_turns?: number
             result?: string
             errors?: string[]
+            modelUsage?: Record<string, { contextWindow?: number; inputTokens?: number; outputTokens?: number }>
           }
 
           session.state.totalCost = resultMsg.total_cost_usd
@@ -311,6 +425,14 @@ export class ClaudeAgentManager {
           session.metadata.outputTokens += resultMsg.usage?.output_tokens || 0
           session.metadata.durationMs += resultMsg.duration_ms || 0
           session.metadata.numTurns += resultMsg.num_turns || 0
+
+          // Extract contextWindow from modelUsage
+          if (resultMsg.modelUsage) {
+            const firstModel = Object.values(resultMsg.modelUsage)[0]
+            if (firstModel?.contextWindow) {
+              session.metadata.contextWindow = firstModel.contextWindow
+            }
+          }
 
           this.send('claude:status', sessionId, { ...session.metadata })
 
@@ -340,8 +462,8 @@ export class ClaudeAgentManager {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.abortController.abort()
-      // Keep sdkSessionIds so restart can resume the conversation
-      this.sessions.delete(sessionId)
+      session.state.isStreaming = false
+      // Keep the session alive so the user can continue the conversation
       return true
     }
     return false
@@ -350,6 +472,327 @@ export class ClaudeAgentManager {
   getSessionState(sessionId: string): ClaudeSessionState | null {
     const session = this.sessions.get(sessionId)
     return session?.state || null
+  }
+
+  async setPermissionMode(sessionId: string, mode: PermissionMode): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.queryInstance) return false
+    try {
+      await session.queryInstance.setPermissionMode(mode)
+      return true
+    } catch (e) {
+      console.warn('setPermissionMode failed:', e)
+      return false
+    }
+  }
+
+  async setModel(sessionId: string, model: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.queryInstance) return false
+    try {
+      await session.queryInstance.setModel(model)
+      return true
+    } catch (e) {
+      console.warn('setModel failed:', e)
+      return false
+    }
+  }
+
+  async setMaxThinkingTokens(sessionId: string, tokens: number | null): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.queryInstance) return false
+    try {
+      await session.queryInstance.setMaxThinkingTokens(tokens)
+      return true
+    } catch (e) {
+      console.warn('setMaxThinkingTokens failed:', e)
+      return false
+    }
+  }
+
+  async getSupportedModels(sessionId: string): Promise<Array<{ value: string; displayName: string; description: string }>> {
+    const session = this.sessions.get(sessionId)
+    if (!session?.queryInstance) return []
+    try {
+      return await session.queryInstance.supportedModels()
+    } catch (e) {
+      console.warn('getSupportedModels failed:', e)
+      return []
+    }
+  }
+
+  resolvePermission(sessionId: string, toolUseId: string, result: { behavior: string; updatedInput?: Record<string, unknown>; message?: string }): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    const pending = session.pendingPermissions.get(toolUseId)
+    if (!pending) return false
+    pending.resolve(result)
+    session.pendingPermissions.delete(toolUseId)
+    return true
+  }
+
+  resolveAskUser(sessionId: string, toolUseId: string, answers: Record<string, string>): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    const pending = session.pendingAskUser.get(toolUseId)
+    if (!pending) return false
+    // AskUserQuestion expects a PermissionResult with behavior 'allow' and updatedInput containing answers
+    pending.resolve({
+      behavior: 'allow',
+      updatedInput: { answers },
+    })
+    session.pendingAskUser.delete(toolUseId)
+    return true
+  }
+
+  async listSessions(cwd: string): Promise<SessionSummary[]> {
+    const os = await import('os')
+    const readline = await import('readline')
+
+    // Encode CWD to match SDK's project directory naming
+    // SDK encodes: colons become dashes, slashes become dashes
+    const encoded = cwd.replace(/:/g, '-').replace(/[\\/]/g, '-')
+    const projectDir = pathModule.join(os.homedir(), '.claude', 'projects', encoded)
+
+    const results: SessionSummary[] = []
+
+    // Try the exact encoded path and common casing variants
+    const candidates = [projectDir]
+    // On Windows, drive letter casing may differ
+    if (process.platform === 'win32' && encoded.length > 0) {
+      const lower = encoded[0].toLowerCase() + encoded.slice(1)
+      const upper = encoded[0].toUpperCase() + encoded.slice(1)
+      if (lower !== encoded) candidates.push(pathModule.join(os.homedir(), '.claude', 'projects', lower))
+      if (upper !== encoded) candidates.push(pathModule.join(os.homedir(), '.claude', 'projects', upper))
+    }
+
+    for (const dir of candidates) {
+      let files: string[]
+      try {
+        files = (await fsPromises.readdir(dir)).filter(f => f.endsWith('.jsonl'))
+      } catch {
+        continue
+      }
+
+      for (const file of files) {
+        const filePath = pathModule.join(dir, file)
+        const sdkSessionId = pathModule.basename(file, '.jsonl')
+        try {
+          const stat = await fsPromises.stat(filePath)
+          let preview = ''
+          let messageCount = 0
+
+          // Read first 20 lines to find a user message for preview
+          const stream = fsSync.createReadStream(filePath, { encoding: 'utf-8' })
+          const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+          let lineCount = 0
+          for await (const line of rl) {
+            lineCount++
+            if (lineCount > 20) break
+            try {
+              const obj = JSON.parse(line)
+              messageCount++
+              if (!preview && obj.type === 'user') {
+                const content = obj.message?.content
+                if (typeof content === 'string') {
+                  preview = content.slice(0, 120)
+                } else if (Array.isArray(content)) {
+                  const textBlock = content.find((b: { type?: string }) => b.type === 'text')
+                  if (textBlock?.text) preview = String(textBlock.text).slice(0, 120)
+                }
+              }
+            } catch {
+              // skip malformed lines
+            }
+          }
+          stream.destroy()
+
+          results.push({
+            sdkSessionId,
+            timestamp: stat.mtimeMs,
+            preview: preview || '(no preview)',
+            messageCount,
+          })
+        } catch {
+          // skip files that can't be read
+        }
+      }
+    }
+
+    // Deduplicate by sdkSessionId and sort by time descending
+    const seen = new Set<string>()
+    const deduped = results.filter(r => {
+      if (seen.has(r.sdkSessionId)) return false
+      seen.add(r.sdkSessionId)
+      return true
+    })
+    deduped.sort((a, b) => b.timestamp - a.timestamp)
+    return deduped
+  }
+
+  private async loadSessionHistory(sessionId: string, sdkSessionId: string, cwd: string): Promise<void> {
+    const os = await import('os')
+    const readline = await import('readline')
+
+    const encoded = cwd.replace(/:/g, '-').replace(/[\\/]/g, '-')
+    const projectDir = pathModule.join(os.homedir(), '.claude', 'projects', encoded)
+    const filePath = pathModule.join(projectDir, `${sdkSessionId}.jsonl`)
+
+    try {
+      await fsPromises.stat(filePath)
+    } catch {
+      return // file not found
+    }
+
+    const stream = fsSync.createReadStream(filePath, { encoding: 'utf-8' })
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity })
+
+    // Collect all JSONL entries, dedup by uuid (keep last), filter by sessionId
+    const entriesByUuid = new Map<string, unknown>()
+    const orderedKeys: string[] = []
+    let seqCounter = 0
+
+    for await (const line of rl) {
+      try {
+        const obj = JSON.parse(line) as {
+          type: string; uuid?: string; sessionId?: string;
+          message?: { role?: string; content?: unknown };
+          timestamp?: string
+        }
+        // Skip entries from other sessions
+        if (obj.sessionId && obj.sessionId !== sdkSessionId) continue
+        // Skip non-message types
+        if (obj.type !== 'user' && obj.type !== 'assistant') continue
+
+        const key = obj.uuid || `seq-${seqCounter++}`
+        if (!entriesByUuid.has(key)) {
+          orderedKeys.push(key)
+        }
+        entriesByUuid.set(key, obj) // last write wins (most complete)
+      } catch {
+        // skip malformed lines
+      }
+    }
+    stream.destroy()
+
+    // Build message items from deduplicated entries
+    type HistoryItem = (ClaudeMessage | ClaudeToolCall)
+    const items: HistoryItem[] = []
+    // Track tool_use IDs to their index in items for result matching
+    const toolIndexMap = new Map<string, number>()
+
+    for (const key of orderedKeys) {
+      const obj = entriesByUuid.get(key) as {
+        type: string; uuid?: string; message?: { role?: string; content?: unknown }; timestamp?: string
+      }
+      const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : Date.now()
+
+      if (obj.type === 'user' && obj.message?.role === 'user') {
+        const content = obj.message.content
+        let text = ''
+        if (typeof content === 'string') {
+          text = content
+        } else if (Array.isArray(content)) {
+          const textBlock = content.find((b: { type?: string }) => b.type === 'text')
+          if (textBlock?.text) text = String(textBlock.text)
+          // Match tool results to their tool calls
+          for (const block of content) {
+            if (block.type === 'tool_result' && block.tool_use_id) {
+              const idx = toolIndexMap.get(block.tool_use_id)
+              if (idx !== undefined) {
+                const tool = items[idx] as ClaudeToolCall
+                const resultStr = typeof block.content === 'string'
+                  ? block.content
+                  : JSON.stringify(block.content)
+                tool.status = block.is_error ? 'error' : 'completed'
+                tool.result = resultStr?.slice(0, 2000)
+              }
+            }
+          }
+        }
+        // Filter out SDK noise and system caveats
+        const isNoise = !text
+          || text === '[Request interrupted by user for tool use]'
+          || text.startsWith('<local-command-caveat>')
+          || text === 'No response requested.'
+          || text.startsWith('Unknown skill:')
+        if (!isNoise) {
+          items.push({
+            id: obj.uuid || `hist-user-${items.length}`,
+            sessionId,
+            role: 'user' as const,
+            content: text,
+            timestamp: ts,
+          })
+        }
+      }
+
+      if (obj.type === 'assistant' && obj.message?.role === 'assistant') {
+        const content = obj.message.content
+        if (Array.isArray(content)) {
+          // Collect thinking text
+          const thinkingBlocks = content.filter((b: { type?: string }) => b.type === 'thinking')
+          const thinkingText = thinkingBlocks.map((b: { thinking?: string }) => b.thinking || '').join('\n').trim()
+
+          // Collect assistant text
+          const textBlocks = content.filter((b: { type?: string }) => b.type === 'text')
+          const assistantText = textBlocks.map((b: { text?: string }) => b.text || '').join('\n').trim()
+
+          // Filter out assistant noise
+          const isAssistantNoise = assistantText === 'No response requested.'
+          if ((assistantText || thinkingText) && !isAssistantNoise) {
+            const item = {
+              id: `${obj.uuid || 'hist'}-text-${items.length}`,
+              sessionId,
+              role: 'assistant' as const,
+              content: assistantText || '',
+              ...(thinkingText ? { thinking: thinkingText } : {}),
+              timestamp: ts,
+            }
+            items.push(item)
+          }
+
+          // Tool uses
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              const toolItem: ClaudeToolCall = {
+                id: block.id,
+                sessionId,
+                toolName: block.name,
+                input: block.input || {},
+                status: 'completed',
+                timestamp: ts,
+              }
+              toolIndexMap.set(block.id, items.length)
+              items.push(toolItem)
+            }
+          }
+        }
+      }
+    }
+
+    // Send all history as a single batch
+    this.send('claude:history', sessionId, items)
+  }
+
+  async resumeSession(sessionId: string, sdkSessionIdToResume: string, cwd: string): Promise<boolean> {
+    // Stop current session if running
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      session.abortController.abort()
+      this.sessions.delete(sessionId)
+    }
+
+    // Store the SDK session ID so startSession will use it for resume
+    sdkSessionIds.set(sessionId, sdkSessionIdToResume)
+    const result = await this.startSession(sessionId, { cwd })
+
+    // Load and replay historical messages from the JSONL file
+    if (result) {
+      await this.loadSessionHistory(sessionId, sdkSessionIdToResume, cwd)
+    }
+
+    return result
   }
 
   dispose() {

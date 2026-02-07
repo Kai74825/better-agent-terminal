@@ -15,6 +15,8 @@ export interface Workspace {
   createdAt: number;
   defaultAgent?: AgentPresetId;  // Workspace 預設 Agent
   envVars?: EnvVariable[];       // Workspace 專屬環境變數
+  group?: string;                // Workspace 分組
+  lastSdkSessionId?: string;     // 上次使用的 SDK session ID，下次自動 resume
 }
 
 export interface TerminalInstance {
@@ -179,4 +181,5 @@ export interface AppSettings {
   agentCustomCommand: string;     // 自定義 Agent 命令
   defaultTerminalCount: number;   // 每個 workspace 預設的 terminal 數量
   createDefaultAgentTerminal: boolean;  // 是否預設建立 Agent Terminal
+  allowBypassPermissions: boolean;  // 允許切換 bypassPermissions 模式時不再確認
 }

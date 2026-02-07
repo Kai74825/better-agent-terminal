@@ -202,6 +202,12 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     workspaceStore.setFocusedTerminal(terminal.id)
   }, [workspace.id, workspace.folderPath, workspace.envVars])
 
+  const handleAddClaudeAgent = useCallback(() => {
+    const agentTerminal = workspaceStore.addTerminal(workspace.id, 'claude-code' as AgentPresetId)
+    // Claude Agent SDK session will be started by ClaudeAgentPanel on mount
+    workspaceStore.setFocusedTerminal(agentTerminal.id)
+  }, [workspace.id])
+
   const handleCloseTerminal = useCallback((id: string) => {
     const terminal = terminals.find(t => t.id === id)
     // Show confirm for agent terminals
@@ -251,8 +257,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   // mainTerminal: the currently focused or first available terminal
   const mainTerminal = focusedTerminal || agentTerminal || terminals[0]
 
-  // Show all terminals in thumbnail bar (except the currently focused one)
-  const thumbnailTerminals = terminals.filter(t => t.id !== mainTerminal?.id)
+  // Show all terminals in thumbnail bar (clicking switches focus)
+  const thumbnailTerminals = terminals
 
   return (
     <div className="workspace-view">
@@ -265,8 +271,11 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           >
             <MainPanel
               terminal={terminal}
+              isActive={isActive && terminal.id === mainTerminal?.id}
               onClose={handleCloseTerminal}
               onRestart={handleRestart}
+              workspaceId={workspace.id}
+              lastSdkSessionId={workspace.lastSdkSessionId}
             />
           </div>
         ))}
@@ -286,6 +295,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
         focusedTerminalId={focusedTerminalId}
         onFocus={handleFocus}
         onAddTerminal={handleAddTerminal}
+        onAddClaudeAgent={handleAddClaudeAgent}
         showAddButton={true}
         height={thumbnailSettings.height}
         collapsed={thumbnailSettings.collapsed}

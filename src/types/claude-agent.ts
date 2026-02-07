@@ -3,6 +3,7 @@ export interface ClaudeMessage {
   sessionId: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  thinking?: string
   timestamp: number
 }
 
@@ -13,6 +14,8 @@ export interface ClaudeToolCall {
   input: Record<string, unknown>
   status: 'running' | 'completed' | 'error'
   result?: string
+  denyReason?: string
+  denied?: boolean
   timestamp: number
 }
 

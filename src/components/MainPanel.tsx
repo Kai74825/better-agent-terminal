@@ -9,11 +9,14 @@ import { workspaceStore } from '../stores/workspace-store'
 
 interface MainPanelProps {
   terminal: TerminalInstance
+  isActive: boolean
   onClose: (id: string) => void
   onRestart: (id: string) => void
+  workspaceId?: string
+  lastSdkSessionId?: string
 }
 
-export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelProps>) {
+export function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId, lastSdkSessionId }: Readonly<MainPanelProps>) {
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
   const isClaudeCode = terminal.agentPreset === 'claude-code'
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
@@ -100,7 +103,9 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
           <ClaudeAgentPanel
             sessionId={terminal.id}
             cwd={terminal.cwd}
-            isActive={true}
+            isActive={isActive}
+            workspaceId={workspaceId}
+            savedSdkSessionId={lastSdkSessionId}
           />
         ) : (
           <TerminalPanel terminalId={terminal.id} />

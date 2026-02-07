@@ -13,6 +13,7 @@ class WorkspaceStore {
     focusedTerminalId: null
   }
 
+  private activeGroup: string | null = null
   private listeners: Set<Listener> = new Set()
 
   getState(): AppState {
@@ -134,6 +135,18 @@ class WorkspaceStore {
       e.key === key ? { ...e, ...updates } : e
     )
     this.setWorkspaceEnvVars(id, envVars)
+  }
+
+  // SDK session persistence
+  setLastSdkSessionId(workspaceId: string, sdkSessionId: string): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === workspaceId ? { ...w, lastSdkSessionId: sdkSessionId } : w
+      )
+    }
+    this.notify()
+    this.save()
   }
 
   // Terminal actions
@@ -266,6 +279,50 @@ class WorkspaceStore {
     )
   }
 
+  // Group management
+  getActiveGroup(): string | null {
+    return this.activeGroup
+  }
+
+  setActiveGroup(group: string | null): void {
+    this.activeGroup = group
+
+    // Auto-select first workspace in the group if current is not visible
+    if (group) {
+      const visibleWorkspaces = this.state.workspaces.filter(w => w.group === group)
+      const currentVisible = visibleWorkspaces.some(w => w.id === this.state.activeWorkspaceId)
+      if (!currentVisible && visibleWorkspaces.length > 0) {
+        this.state = {
+          ...this.state,
+          activeWorkspaceId: visibleWorkspaces[0].id,
+          focusedTerminalId: null
+        }
+      }
+    }
+
+    this.notify()
+    this.save()
+  }
+
+  setWorkspaceGroup(id: string, group: string | undefined): void {
+    this.state = {
+      ...this.state,
+      workspaces: this.state.workspaces.map(w =>
+        w.id === id ? { ...w, group } : w
+      )
+    }
+    this.notify()
+    this.save()
+  }
+
+  getGroups(): string[] {
+    const groups = new Set<string>()
+    for (const w of this.state.workspaces) {
+      if (w.group) groups.add(w.group)
+    }
+    return Array.from(groups).sort()
+  }
+
   // Activity tracking
   private lastActivityNotify: number = 0
 
@@ -297,7 +354,8 @@ class WorkspaceStore {
   async save(): Promise<void> {
     const data = JSON.stringify({
       workspaces: this.state.workspaces,
-      activeWorkspaceId: this.state.activeWorkspaceId
+      activeWorkspaceId: this.state.activeWorkspaceId,
+      activeGroup: this.activeGroup
     })
     await window.electronAPI.workspace.save(data)
   }
@@ -312,6 +370,7 @@ class WorkspaceStore {
           workspaces: parsed.workspaces || [],
           activeWorkspaceId: parsed.activeWorkspaceId || null
         }
+        this.activeGroup = parsed.activeGroup || null
         this.notify()
       } catch (e) {
         console.error('Failed to parse workspace data:', e)
