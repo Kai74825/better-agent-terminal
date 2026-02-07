@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { createRequire } from 'module'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
 
 // Lazy import the SDK (it's an ES module)
@@ -10,6 +11,21 @@ async function getQuery() {
     queryFn = sdk.query
   }
   return queryFn
+}
+
+// Resolve the Claude Code CLI path at module level
+function resolveClaudeCodePath(): string {
+  try {
+    const req = createRequire(import.meta.url ?? __filename)
+    return req.resolve('@anthropic-ai/claude-code/cli.js')
+  } catch {
+    // Fallback: try require.resolve directly (works in CommonJS context)
+    try {
+      return require.resolve('@anthropic-ai/claude-code/cli.js')
+    } catch {
+      return ''
+    }
+  }
 }
 
 interface SessionMetadata {
@@ -167,6 +183,7 @@ export class ClaudeAgentManager {
 
       // Build options — resume if we have a previous SDK session ID
       const resumeId = session.sdkSessionId
+      const claudeCodePath = resolveClaudeCodePath()
       const queryOptions: Record<string, unknown> = {
         abortController: session.abortController,
         cwd: session.cwd,
@@ -175,6 +192,7 @@ export class ClaudeAgentManager {
         permissionMode: 'default',
         includePartialMessages: true,
         settingSources: ['user', 'project', 'local'],
+        ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
       }
 
       if (resumeId) {
