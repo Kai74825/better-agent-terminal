@@ -23,7 +23,8 @@ const defaultSettings: AppSettings = {
   agentCommandType: 'claude',
   agentCustomCommand: '',
   defaultTerminalCount: 1,
-  createDefaultAgentTerminal: false
+  createDefaultAgentTerminal: false,
+  allowBypassPermissions: false
 }
 
 class SettingsStore {
@@ -167,6 +168,12 @@ class SettingsStore {
 
   setDefaultAgent(agent: AgentPresetId): void {
     this.settings = { ...this.settings, defaultAgent: agent }
+    this.notify()
+    this.save()
+  }
+
+  setAllowBypassPermissions(allow: boolean): void {
+    this.settings = { ...this.settings, allowBypassPermissions: allow }
     this.notify()
     this.save()
   }

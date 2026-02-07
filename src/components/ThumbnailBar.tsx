@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect } from 'react'
 import type { TerminalInstance } from '../types'
 import { TerminalThumbnail } from './TerminalThumbnail'
 import { getAgentPreset } from '../types/agent-presets'
@@ -7,6 +8,7 @@ interface ThumbnailBarProps {
   focusedTerminalId: string | null
   onFocus: (id: string) => void
   onAddTerminal?: () => void
+  onAddClaudeAgent?: () => void
   showAddButton: boolean
   height?: number
   collapsed?: boolean
@@ -18,6 +20,7 @@ export function ThumbnailBar({
   focusedTerminalId,
   onFocus,
   onAddTerminal,
+  onAddClaudeAgent,
   showAddButton,
   height,
   collapsed = false,
@@ -44,6 +47,21 @@ export function ThumbnailBar({
     )
   }
 
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
+
+  // Close menu on outside click
+  useEffect(() => {
+    if (!showAddMenu) return
+    const handleClick = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setShowAddMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showAddMenu])
+
   const style = height ? { height: `${height}px`, flex: 'none' } : undefined
 
   return (
@@ -52,9 +70,35 @@ export function ThumbnailBar({
         <span>{label}</span>
         <div className="thumbnail-bar-actions">
           {onAddTerminal && (
-            <button className="thumbnail-add-btn" onClick={onAddTerminal} title="Add Terminal">
-              +
-            </button>
+            <div className="thumbnail-add-wrapper" ref={addMenuRef}>
+              <button
+                className="thumbnail-add-btn"
+                onClick={() => setShowAddMenu(prev => !prev)}
+                title="Add Terminal or Agent"
+              >
+                +
+              </button>
+              {showAddMenu && (
+                <div className="thumbnail-add-menu">
+                  <div
+                    className="thumbnail-add-menu-item"
+                    onClick={() => { onAddTerminal(); setShowAddMenu(false) }}
+                  >
+                    <span className="thumbnail-add-menu-icon">⌘</span>
+                    Terminal
+                  </div>
+                  {onAddClaudeAgent && (
+                    <div
+                      className="thumbnail-add-menu-item"
+                      onClick={() => { onAddClaudeAgent(); setShowAddMenu(false) }}
+                    >
+                      <span className="thumbnail-add-menu-icon" style={{ color: '#d97706' }}>✦</span>
+                      Claude Code
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           {onCollapse && (
             <button className="thumbnail-collapse-btn" onClick={onCollapse} title="Collapse Panel">

@@ -6,6 +6,10 @@ interface SidebarProps {
   width: number
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  groups: string[]
+  activeGroup: string | null
+  onSetActiveGroup: (group: string | null) => void
+  onSetWorkspaceGroup: (id: string, group: string | undefined) => void
   onSelectWorkspace: (id: string) => void
   onAddWorkspace: () => void
   onRemoveWorkspace: (id: string) => void
@@ -20,6 +24,10 @@ export function Sidebar({
   width,
   workspaces,
   activeWorkspaceId,
+  groups,
+  activeGroup,
+  onSetActiveGroup,
+  onSetWorkspaceGroup,
   onSelectWorkspace,
   onAddWorkspace,
   onRemoveWorkspace,
@@ -35,8 +43,16 @@ export function Sidebar({
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [dragPosition, setDragPosition] = useState<'before' | 'after' | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; workspaceId: string } | null>(null)
+  const [groupEditTarget, setGroupEditTarget] = useState<string | null>(null)
+  const [groupEditValue, setGroupEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const groupInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  // Filter workspaces by active group
+  const filteredWorkspaces = activeGroup
+    ? workspaces.filter(w => w.group === activeGroup)
+    : workspaces
 
   useEffect(() => {
     if (editingId && inputRef.current) {
@@ -44,6 +60,13 @@ export function Sidebar({
       inputRef.current.select()
     }
   }, [editingId])
+
+  useEffect(() => {
+    if (groupEditTarget && groupInputRef.current) {
+      groupInputRef.current.focus()
+      groupInputRef.current.select()
+    }
+  }, [groupEditTarget])
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -83,6 +106,32 @@ export function Sidebar({
       setEditingId(null)
     }
   }
+
+  // Set Group via inline edit
+  const handleSetGroup = useCallback((workspaceId: string) => {
+    const workspace = workspaces.find(w => w.id === workspaceId)
+    setGroupEditTarget(workspaceId)
+    setGroupEditValue(workspace?.group || '')
+    setContextMenu(null)
+  }, [workspaces])
+
+  const handleGroupEditSubmit = useCallback(() => {
+    if (groupEditTarget) {
+      const trimmed = groupEditValue.trim()
+      onSetWorkspaceGroup(groupEditTarget, trimmed || undefined)
+      setGroupEditTarget(null)
+      setGroupEditValue('')
+    }
+  }, [groupEditTarget, groupEditValue, onSetWorkspaceGroup])
+
+  const handleGroupEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleGroupEditSubmit()
+    } else if (e.key === 'Escape') {
+      setGroupEditTarget(null)
+      setGroupEditValue('')
+    }
+  }, [handleGroupEditSubmit])
 
   // Drag and drop handlers
   const handleDragStart = useCallback((e: React.DragEvent, workspaceId: string) => {
@@ -160,8 +209,22 @@ export function Sidebar({
   return (
     <aside className="sidebar" style={{ width }}>
       <div className="sidebar-header">Workspaces</div>
+      {/* Group Filter */}
+      {groups.length > 0 && (
+        <div className="sidebar-group-filter">
+          <select
+            value={activeGroup || ''}
+            onChange={(e) => onSetActiveGroup(e.target.value || null)}
+          >
+            <option value="">All</option>
+            {groups.map(g => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="workspace-list">
-        {workspaces.map(workspace => (
+        {filteredWorkspaces.map(workspace => (
           <div
             key={workspace.id}
             className={`workspace-item ${workspace.id === activeWorkspaceId ? 'active' : ''} ${dragOverId === workspace.id ? `drag-over-${dragPosition}` : ''}`}
@@ -203,7 +266,24 @@ export function Sidebar({
                 ) : (
                   <>
                     <span className="workspace-alias">{workspace.alias || workspace.name}</span>
-                    <span className="workspace-folder">{workspace.name}</span>
+                    {groupEditTarget === workspace.id ? (
+                      <input
+                        ref={groupInputRef}
+                        type="text"
+                        className="workspace-rename-input"
+                        value={groupEditValue}
+                        onChange={(e) => setGroupEditValue(e.target.value)}
+                        onBlur={handleGroupEditSubmit}
+                        onKeyDown={handleGroupEditKeyDown}
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="Group name (empty to remove)"
+                        style={{ fontSize: '11px' }}
+                      />
+                    ) : (
+                      <span className="workspace-folder">
+                        {workspace.group ? `[${workspace.group}] ` : ''}{workspace.name}
+                      </span>
+                    )}
                   </>
                 )}
               </div>
@@ -239,6 +319,15 @@ export function Sidebar({
           className="workspace-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
+          <div
+            className="context-menu-item"
+            onClick={() => handleSetGroup(contextMenu.workspaceId)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            Set Group...
+          </div>
           <div
             className="context-menu-item"
             onClick={() => {
