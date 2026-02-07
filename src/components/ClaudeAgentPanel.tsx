@@ -3,6 +3,7 @@ import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
+import { LinkedText } from './PathLinker'
 
 interface SessionMeta {
   model?: string
@@ -754,7 +755,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                 title="Click to copy"
               >
                 <span className="claude-tool-row-label">IN</span>
-                <span className="claude-tool-row-content">{inContent}</span>
+                <span className="claude-tool-row-content"><LinkedText text={inContent} /></span>
                 <span className={`claude-tool-row-copy ${copiedId === inBlockId ? 'copied' : ''}`}>
                   {copiedId === inBlockId ? '✓' : '⧉'}
                 </span>
@@ -766,7 +767,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   title="Click to copy"
                 >
                   <span className="claude-tool-row-label">OUT</span>
-                  <span className="claude-tool-row-content">{item.result}</span>
+                  <span className="claude-tool-row-content"><LinkedText text={typeof item.result === 'string' ? item.result : String(item.result)} /></span>
                   <span className={`claude-tool-row-copy ${copiedId === outBlockId ? 'copied' : ''}`}>
                     {copiedId === outBlockId ? '✓' : '⧉'}
                   </span>

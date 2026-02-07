@@ -6,7 +6,20 @@ import { ThumbnailBar } from './ThumbnailBar'
 import { CloseConfirmDialog } from './CloseConfirmDialog'
 import { MainPanel } from './MainPanel'
 import { ResizeHandle } from './ResizeHandle'
+import { FileTree } from './FileTree'
+import { GitPanel } from './GitPanel'
 import { AgentPresetId, getAgentPreset } from '../types/agent-presets'
+
+type WorkspaceTab = 'terminal' | 'files' | 'git'
+const TAB_KEY = 'better-terminal-workspace-tab'
+
+function loadWorkspaceTab(): WorkspaceTab {
+  try {
+    const saved = localStorage.getItem(TAB_KEY)
+    if (saved === 'terminal' || saved === 'files' || saved === 'git') return saved
+  } catch { /* ignore */ }
+  return 'terminal'
+}
 
 // ThumbnailBar panel settings
 const THUMBNAIL_SETTINGS_KEY = 'better-terminal-thumbnail-settings'
@@ -79,6 +92,12 @@ const initializedWorkspaces = new Set<string>()
 export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActive }: Readonly<WorkspaceViewProps>) {
   const [showCloseConfirm, setShowCloseConfirm] = useState<string | null>(null)
   const [thumbnailSettings, setThumbnailSettings] = useState<ThumbnailSettings>(loadThumbnailSettings)
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(loadWorkspaceTab)
+
+  const handleTabChange = useCallback((tab: WorkspaceTab) => {
+    setActiveTab(tab)
+    try { localStorage.setItem(TAB_KEY, tab) } catch { /* ignore */ }
+  }, [])
 
   // Handle thumbnail bar resize
   const handleThumbnailResize = useCallback((delta: number) => {
@@ -262,8 +281,30 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
 
   return (
     <div className="workspace-view">
-      {/* Render ALL terminals, show/hide with CSS - keeps processes running */}
-      <div className="terminals-container">
+      {/* Top tab bar: Terminal | Files | Git */}
+      <div className="workspace-tab-bar">
+        <button
+          className={`workspace-tab-btn ${activeTab === 'terminal' ? 'active' : ''}`}
+          onClick={() => handleTabChange('terminal')}
+        >
+          Terminal
+        </button>
+        <button
+          className={`workspace-tab-btn ${activeTab === 'files' ? 'active' : ''}`}
+          onClick={() => handleTabChange('files')}
+        >
+          Files
+        </button>
+        <button
+          className={`workspace-tab-btn ${activeTab === 'git' ? 'active' : ''}`}
+          onClick={() => handleTabChange('git')}
+        >
+          Git
+        </button>
+      </div>
+
+      {/* Main content area - terminals always rendered (keep processes alive) */}
+      <div className={`terminals-container ${activeTab !== 'terminal' ? 'hidden' : ''}`}>
         {terminals.map(terminal => (
           <div
             key={terminal.id}
@@ -271,7 +312,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           >
             <MainPanel
               terminal={terminal}
-              isActive={isActive && terminal.id === mainTerminal?.id}
+              isActive={isActive && activeTab === 'terminal' && terminal.id === mainTerminal?.id}
               onClose={handleCloseTerminal}
               onRestart={handleRestart}
               workspaceId={workspace.id}
@@ -280,6 +321,18 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           </div>
         ))}
       </div>
+
+      {activeTab === 'files' && (
+        <div className="workspace-tab-content">
+          <FileTree rootPath={workspace.folderPath} />
+        </div>
+      )}
+
+      {activeTab === 'git' && (
+        <div className="workspace-tab-content">
+          <GitPanel workspaceFolderPath={workspace.folderPath} />
+        </div>
+      )}
 
       {/* Resize handle for thumbnail bar */}
       {!thumbnailSettings.collapsed && (
@@ -302,14 +355,12 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
         onCollapse={handleThumbnailCollapse}
       />
 
-      {
-        showCloseConfirm && (
-          <CloseConfirmDialog
-            onConfirm={handleConfirmClose}
-            onCancel={() => setShowCloseConfirm(null)}
-          />
-        )
-      }
-    </div >
+      {showCloseConfirm && (
+        <CloseConfirmDialog
+          onConfirm={handleConfirmClose}
+          onCancel={() => setShowCloseConfirm(null)}
+        />
+      )}
+    </div>
   )
 }

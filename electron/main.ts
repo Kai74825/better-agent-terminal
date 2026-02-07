@@ -428,6 +428,105 @@ ipcMain.handle('git:branch', async (_event, cwd: string) => {
   }
 })
 
+// Git log
+ipcMain.handle('git:log', async (_event, cwd: string, count: number = 50) => {
+  try {
+    const { execSync } = await import('child_process')
+    const raw = execSync(
+      `git log --pretty=format:"%H||%an||%ai||%s" -n ${count}`,
+      { cwd, encoding: 'utf-8', timeout: 5000 }
+    ).trim()
+    if (!raw) return []
+    return raw.split('\n').map(line => {
+      const parts = line.split('||')
+      return { hash: parts[0], author: parts[1], date: parts[2], message: parts.slice(3).join('||') }
+    })
+  } catch { return [] }
+})
+
+// Git diff (full or single file)
+ipcMain.handle('git:diff', async (_event, cwd: string, commitHash?: string, filePath?: string) => {
+  try {
+    const { execSync } = await import('child_process')
+    let cmd: string
+    if (commitHash && commitHash !== 'working') {
+      cmd = `git diff ${commitHash}~1..${commitHash}`
+    } else {
+      cmd = 'git diff HEAD'
+    }
+    if (filePath) cmd += ` -- "${filePath}"`
+    return execSync(cmd, { cwd, encoding: 'utf-8', timeout: 10000, maxBuffer: 1024 * 1024 * 5 })
+  } catch { return '' }
+})
+
+// Git changed files for a commit
+ipcMain.handle('git:diff-files', async (_event, cwd: string, commitHash?: string) => {
+  try {
+    const { execSync } = await import('child_process')
+    let cmd: string
+    if (commitHash && commitHash !== 'working') {
+      cmd = `git diff --name-status ${commitHash}~1..${commitHash}`
+    } else {
+      cmd = 'git diff --name-status HEAD'
+    }
+    const raw = execSync(cmd, { cwd, encoding: 'utf-8', timeout: 5000 })
+    if (!raw.trim()) return []
+    return raw.trim().split('\n').map(line => {
+      const tab = line.indexOf('\t')
+      return {
+        status: tab > 0 ? line.substring(0, tab).trim() : line.charAt(0),
+        file: tab > 0 ? line.substring(tab + 1) : line.substring(2),
+      }
+    })
+  } catch { return [] }
+})
+
+// Git status
+ipcMain.handle('git:status', async (_event, cwd: string) => {
+  try {
+    const { execSync } = await import('child_process')
+    const raw = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 })
+    if (!raw.trim()) return []
+    return raw.trim().split('\n').map(line => ({
+      status: line.substring(0, 2).trim(),
+      file: line.substring(3),
+    }))
+  } catch { return [] }
+})
+
+// File system: read directory
+ipcMain.handle('fs:readdir', async (_event, dirPath: string) => {
+  const fs = await import('fs/promises')
+  const IGNORED = new Set(['.git', 'node_modules', '.next', 'dist', 'dist-electron', '.cache', '__pycache__', '.DS_Store'])
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true })
+    return entries
+      .filter(e => !IGNORED.has(e.name))
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      .map(e => ({
+        name: e.name,
+        path: path.join(dirPath, e.name),
+        isDirectory: e.isDirectory(),
+      }))
+  } catch { return [] }
+})
+
+// File system: read file (text, max 500KB)
+ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
+  const fs = await import('fs/promises')
+  try {
+    const stat = await fs.stat(filePath)
+    if (stat.size > 512 * 1024) return { error: 'File too large', size: stat.size }
+    const content = await fs.readFile(filePath, 'utf-8')
+    return { content }
+  } catch {
+    return { error: 'Failed to read file' }
+  }
+})
+
 // Clipboard image handlers
 ipcMain.handle('clipboard:saveImage', async () => {
   const image = clipboard.readImage()
