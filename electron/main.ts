@@ -169,6 +169,12 @@ app.whenReady().then(async () => {
   }, 2000)
 })
 
+app.on('before-quit', () => {
+  // Safety net: ensure all Claude subprocesses are terminated
+  claudeManager?.dispose()
+  ptyManager?.dispose()
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()

@@ -92,6 +92,11 @@ interface PendingRequest {
   resolve: (value: unknown) => void
 }
 
+interface QueuedMessage {
+  prompt: string
+  images?: string[]
+}
+
 interface SessionInstance {
   abortController: AbortController
   state: ClaudeSessionState
@@ -101,6 +106,8 @@ interface SessionInstance {
   queryInstance?: Query
   pendingPermissions: Map<string, PendingRequest>
   pendingAskUser: Map<string, PendingRequest>
+  permissionMode: PermissionMode
+  messageQueue: QueuedMessage[]
 }
 
 // Persists SDK session IDs across stop/restart so we can resume conversations
@@ -186,6 +193,8 @@ export class ClaudeAgentManager {
         },
         pendingPermissions: new Map(),
         pendingAskUser: new Map(),
+        permissionMode: 'default',
+        messageQueue: [],
       })
 
       // If no initial prompt, just set up session and wait
@@ -198,6 +207,12 @@ export class ClaudeAgentManager {
           content: `Claude Code session ready${resumeNote}. Type a message to start.`,
           timestamp: Date.now(),
         } satisfies ClaudeMessage)
+        // Load history from previous session if resuming
+        if (previousSdkSessionId) {
+          this.loadSessionHistory(sessionId, previousSdkSessionId, options.cwd).catch(e => {
+            console.warn('Failed to load session history on auto-resume:', e)
+          })
+        }
         return true
       }
 
@@ -218,8 +233,9 @@ export class ClaudeAgentManager {
     }
 
     if (session.state.isStreaming) {
-      this.send('claude:error', sessionId, 'Session is busy')
-      return false
+      // Queue the message instead of rejecting
+      session.messageQueue.push({ prompt, images })
+      return true
     }
 
     // Note: user message is added by the frontend — don't duplicate here
@@ -268,12 +284,14 @@ export class ClaudeAgentManager {
         })
       }
 
+      const currentMode = session.permissionMode
       const queryOptions: Record<string, unknown> = {
         abortController: session.abortController,
         cwd: session.cwd,
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         tools: { type: 'preset', preset: 'claude_code' },
-        permissionMode: 'default',
+        permissionMode: currentMode,
+        ...(currentMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
         includePartialMessages: true,
         settingSources: ['user', 'project', 'local'],
         maxThinkingTokens: 31999,
@@ -496,6 +514,11 @@ export class ClaudeAgentManager {
     } finally {
       if (session) {
         session.state.isStreaming = false
+        // Process queued messages
+        const next = session.messageQueue.shift()
+        if (next) {
+          this.runQuery(sessionId, next.prompt, next.images)
+        }
       }
     }
   }
@@ -504,6 +527,7 @@ export class ClaudeAgentManager {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.abortController.abort()
+      session.messageQueue.length = 0
       session.state.isStreaming = false
       // Keep the session alive so the user can continue the conversation
       return true
@@ -518,7 +542,10 @@ export class ClaudeAgentManager {
 
   async setPermissionMode(sessionId: string, mode: PermissionMode): Promise<boolean> {
     const session = this.sessions.get(sessionId)
-    if (!session?.queryInstance) return false
+    if (!session) return false
+    // Always track the mode on the session so the next runQuery picks it up
+    session.permissionMode = mode
+    if (!session.queryInstance) return true
     try {
       await session.queryInstance.setPermissionMode(mode)
       return true
@@ -838,9 +865,16 @@ export class ClaudeAgentManager {
   }
 
   dispose() {
-    for (const [id] of this.sessions) {
+    for (const [id, session] of this.sessions) {
       this.stopSession(id)
+      // Forcefully terminate the CLI subprocess
+      try {
+        session.queryInstance?.close()
+      } catch {
+        // Ignore errors during shutdown
+      }
     }
+    this.sessions.clear()
     sdkSessionIds.clear()
   }
 }

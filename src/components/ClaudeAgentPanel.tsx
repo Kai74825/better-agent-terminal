@@ -93,6 +93,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [showResumeList, setShowResumeList] = useState(false)
   const [resumeSessions, setResumeSessions] = useState<SessionSummary[]>([])
   const [resumeLoading, setResumeLoading] = useState(false)
+  const [showModelList, setShowModelList] = useState(false)
   const historyLoadedRef = useRef(false)
   const sessionStartedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -108,6 +109,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     scrollToBottom()
   }, [messages, streamingText, streamingThinking, scrollToBottom])
 
+  // Sync pending action state to workspace store for breathing light indicator
+  useEffect(() => {
+    const hasPending = !!(pendingPermission || pendingQuestion)
+    workspaceStore.setTerminalPendingAction(sessionId, hasPending)
+  }, [sessionId, pendingPermission, pendingQuestion])
+
   // Subscribe to IPC events
   useEffect(() => {
     const api = window.electronAPI.claude
@@ -115,6 +122,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
         if (sid !== sessionId) return
+        workspaceStore.updateTerminalActivity(sessionId)
         const message = msg as ClaudeMessage
         // On restart, sys-init message arrives again — reset messages
         // But skip reset if history will be loaded (resume flow)
@@ -139,6 +147,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
       api.onToolUse((sid: string, tool: unknown) => {
         if (sid !== sessionId) return
+        workspaceStore.updateTerminalActivity(sessionId)
         const toolCall = tool as ClaudeToolCall
         setMessages(prev => {
           if (prev.some(m => 'toolName' in m && m.id === toolCall.id)) return prev
@@ -148,6 +157,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
       api.onToolResult((sid: string, result: unknown) => {
         if (sid !== sessionId) return
+        workspaceStore.updateTerminalActivity(sessionId)
         const { id, ...updates } = result as { id: string; status: string; result?: string }
         setMessages(prev => prev.map(m => {
           if ('toolName' in m && m.id === id) {
@@ -178,6 +188,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
       api.onStream((sid: string, data: unknown) => {
         if (sid !== sessionId) return
+        workspaceStore.updateTerminalActivity(sessionId)
         const d = data as { text?: string; thinking?: string }
         if (d.text) setStreamingText(prev => prev + d.text)
         if (d.thinking) setStreamingThinking(prev => prev + d.thinking)
@@ -266,6 +277,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
   }, [isActive])
 
+  const handleModelSelect = useCallback(async (modelValue: string) => {
+    setShowModelList(false)
+    setCurrentModel(modelValue)
+    await window.electronAPI.claude.setModel(sessionId, modelValue)
+  }, [sessionId])
+
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
     setShowResumeList(false)
     setResumeSessions([])
@@ -285,10 +302,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
-    if (!trimmed || isStreaming) return
+    if (!trimmed) return
 
-    // Intercept /resume command
-    if (trimmed === '/resume') {
+    // Intercept /resume command (only when not streaming)
+    if (!isStreaming && trimmed === '/resume') {
       setInput('')
       setResumeLoading(true)
       setShowResumeList(true)
@@ -303,12 +320,21 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       return
     }
 
+    // Intercept /model command
+    if (trimmed === '/model') {
+      setInput('')
+      setShowModelList(true)
+      return
+    }
+
     const imagePaths = attachedImages.map(i => i.path)
     setInput('')
     setAttachedImages([])
-    setIsStreaming(true)
-    setStreamingText('')
-    setStreamingThinking('')
+    if (!isStreaming) {
+      setIsStreaming(true)
+      setStreamingText('')
+      setStreamingThinking('')
+    }
 
     // Add user message locally
     const imageNote = imagePaths.length > 0
@@ -342,13 +368,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     textareaRef.current?.focus()
   }, [sessionId, isStreaming])
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }, [handleSend])
-
   const permissionModes = ['default', 'acceptEdits', 'bypassPermissions', 'plan'] as const
   const permissionModeLabels: Record<string, string> = {
     default: '\u270F Ask before edits',
@@ -368,6 +387,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     setPermissionMode(nextMode)
     await window.electronAPI.claude.setPermissionMode(sessionId, nextMode)
   }, [sessionId, permissionMode])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault()
+      handlePermissionModeCycle()
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }, [handleSend, handlePermissionModeCycle])
 
   const handleModelCycle = useCallback(async () => {
     if (availableModels.length === 0) return
@@ -456,6 +487,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (!isActive) return
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (showModelList) {
+          e.preventDefault()
+          setShowModelList(false)
+          return
+        }
         if (showResumeList) {
           e.preventDefault()
           setShowResumeList(false)
@@ -515,7 +551,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -943,8 +979,34 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         </div>
       )}
 
-      {/* Input area — hidden when permission card, ask-user card, or resume list is visible */}
-      {!pendingPermission && !pendingQuestion && !showResumeList && (
+      {/* Model Selection List */}
+      {showModelList && (
+        <div className="claude-resume-card">
+          <div className="claude-permission-title">Select a model</div>
+          {availableModels.length === 0 ? (
+            <div className="claude-resume-empty">No models available</div>
+          ) : (
+            <div className="claude-resume-list">
+              {availableModels.map(m => (
+                <div
+                  key={m.value}
+                  className={`claude-resume-item${m.value === currentModel ? ' active' : ''}`}
+                  onClick={() => handleModelSelect(m.value)}
+                >
+                  <div className="claude-resume-item-header">
+                    <span className="claude-resume-item-id">{m.displayName}</span>
+                  </div>
+                  <div className="claude-resume-item-preview">{m.description}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="claude-permission-hint">Esc to cancel</div>
+        </div>
+      )}
+
+      {/* Input area — hidden when permission card, ask-user card, or resume/model list is visible */}
+      {!pendingPermission && !pendingQuestion && !showResumeList && !showModelList && (
       <div className={`claude-input-area${isDragOver ? ' drag-over' : ''}`}>
         <textarea
           ref={textareaRef}
@@ -953,7 +1015,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={isStreaming ? 'Press Escape to stop...' : 'Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)'}
+          placeholder={isStreaming ? 'Press Escape to stop...' : 'Type a message... (Enter to send, Shift+Tab to switch mode)'}
           disabled={false}
           rows={1}
         />

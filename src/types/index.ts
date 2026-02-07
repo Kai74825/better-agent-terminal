@@ -30,6 +30,7 @@ export interface TerminalInstance {
   cwd: string;
   scrollbackBuffer: string[];
   lastActivityTime?: number;
+  hasPendingAction?: boolean;
 }
 
 export interface AppState {

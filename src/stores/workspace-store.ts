@@ -341,6 +341,16 @@ class WorkspaceStore {
     }
   }
 
+  setTerminalPendingAction(id: string, pending: boolean): void {
+    this.state = {
+      ...this.state,
+      terminals: this.state.terminals.map(t =>
+        t.id === id ? { ...t, hasPendingAction: pending } : t
+      )
+    }
+    this.notify()
+  }
+
   getWorkspaceLastActivity(workspaceId: string): number | null {
     const terminals = this.getWorkspaceTerminals(workspaceId)
     const lastActivities = terminals

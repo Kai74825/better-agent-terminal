@@ -15,17 +15,25 @@ export function ActivityIndicator({
   size = 'small'
 }: ActivityIndicatorProps) {
   const [isActive, setIsActive] = useState(false)
+  const [hasPending, setHasPending] = useState(false)
 
   useEffect(() => {
     const checkActivity = () => {
       let lastActivityTime: number | null = propActivityTime ?? null
+      let pending = false
 
       if (terminalId) {
         const terminal = workspaceStore.getState().terminals.find(t => t.id === terminalId)
         lastActivityTime = terminal?.lastActivityTime ?? null
+        pending = terminal?.hasPendingAction ?? false
       } else if (workspaceId) {
         lastActivityTime = workspaceStore.getWorkspaceLastActivity(workspaceId)
+        // Check if any terminal in the workspace has a pending action
+        const terminals = workspaceStore.getWorkspaceTerminals(workspaceId)
+        pending = terminals.some(t => t.hasPendingAction)
       }
+
+      setHasPending(pending)
 
       if (!lastActivityTime) {
         setIsActive(false)
@@ -45,7 +53,11 @@ export function ActivityIndicator({
     return () => clearInterval(interval)
   }, [propActivityTime, workspaceId, terminalId])
 
-  const className = `activity-indicator ${size} ${isActive ? 'active' : 'inactive'}`
+  const className = `activity-indicator ${size} ${isActive ? 'active' : 'inactive'}${hasPending ? ' pending' : ''}`
 
-  return <div className={className} />
+  return (
+    <div className={className}>
+      {hasPending && <span className="activity-indicator-badge">?</span>}
+    </div>
+  )
 }
