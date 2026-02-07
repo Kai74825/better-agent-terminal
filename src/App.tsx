@@ -177,6 +177,10 @@ export default function App() {
         width={panelSettings.sidebar.width}
         workspaces={state.workspaces}
         activeWorkspaceId={state.activeWorkspaceId}
+        groups={workspaceStore.getGroups()}
+        activeGroup={workspaceStore.getActiveGroup()}
+        onSetActiveGroup={(group) => workspaceStore.setActiveGroup(group)}
+        onSetWorkspaceGroup={(id, group) => workspaceStore.setWorkspaceGroup(id, group)}
         onSelectWorkspace={(id) => workspaceStore.setActiveWorkspace(id)}
         onAddWorkspace={handleAddWorkspace}
         onRemoveWorkspace={(id) => {
@@ -186,9 +190,6 @@ export default function App() {
         onRenameWorkspace={(id, alias) => {
           workspaceStore.renameWorkspace(id, alias)
           workspaceStore.save()
-        }}
-        onSetWorkspaceRole={(id, role) => {
-          workspaceStore.setWorkspaceRole(id, role)
         }}
         onReorderWorkspaces={(workspaceIds) => {
           workspaceStore.reorderWorkspaces(workspaceIds)

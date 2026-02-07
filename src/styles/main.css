@@ -101,6 +101,28 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
+/* Group Filter */
+.sidebar-group-filter {
+  padding: 8px 8px 0;
+  flex-shrink: 0;
+}
+
+.sidebar-group-filter select {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+.sidebar-group-filter select:focus {
+  border-color: var(--accent-color);
+}
+
 .workspace-list {
   flex: 1;
   overflow-y: auto;
@@ -167,125 +189,6 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.workspace-role-badge {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 8px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  border: 1px solid transparent;
-}
-
-.workspace-role-badge:hover {
-  border-color: rgba(255, 255, 255, 0.3);
-  transform: scale(1.05);
-}
-
-.workspace-item.active .workspace-role-badge {
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-/* Role Selector Menu */
-.role-selector-menu {
-  position: absolute;
-  top: 100%;
-  left: 8px;
-  right: 8px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  z-index: 100;
-  margin-top: 4px;
-  padding: 4px 0;
-}
-
-.role-menu-title {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 6px 10px 4px;
-}
-
-.role-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.role-menu-item:hover {
-  background: var(--bg-hover);
-}
-
-.role-menu-item.selected {
-  background: var(--accent-color);
-  color: white;
-}
-
-.role-color-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.role-menu-divider {
-  height: 1px;
-  background: var(--border-color);
-  margin: 4px 0;
-}
-
-.role-menu-custom {
-  display: flex;
-  gap: 4px;
-  padding: 6px 10px;
-}
-
-.role-menu-custom input {
-  flex: 1;
-  padding: 4px 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 11px;
-  outline: none;
-}
-
-.role-menu-custom input:focus {
-  border-color: var(--accent-color);
-}
-
-.role-menu-custom button {
-  padding: 4px 8px;
-  background: var(--accent-color);
-  border: none;
-  border-radius: 4px;
-  color: white;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.role-menu-custom button:hover {
-  background: var(--accent-hover);
-}
-
-.role-menu-clear {
-  color: var(--text-secondary);
-}
-
-.role-menu-clear:hover {
-  color: var(--danger-color);
 }
 
 .workspace-item-actions {
@@ -1985,6 +1888,47 @@ body {
   border-color: var(--accent-color);
 }
 
+.thumbnail-add-wrapper {
+  position: relative;
+}
+
+.thumbnail-add-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  min-width: 160px;
+  z-index: 100;
+  padding: 4px 0;
+}
+
+.thumbnail-add-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+
+.thumbnail-add-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.thumbnail-add-menu-icon {
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 .thumbnail-collapse-btn {
   background: transparent;
   border: none;
@@ -2098,4 +2042,946 @@ body {
 /* Prompt Box toggle active state */
 .action-btn.active {
   color: var(--accent-color);
+}
+
+/* ============================================
+   Claude Agent Panel (Timeline UI)
+   ============================================ */
+
+.claude-agent-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+.claude-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px 0;
+  min-height: 120px;
+}
+
+/* Timeline */
+.claude-timeline {
+  display: block;
+  position: relative;
+}
+
+.tl-item {
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+  padding: 6px 0 6px 40px;
+  min-height: 28px;
+}
+
+/* Vertical line */
+.tl-item::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-color);
+}
+
+/* Hide line above the first item */
+.tl-item:first-child::before {
+  top: 50%;
+}
+
+/* Dot */
+.tl-dot {
+  position: absolute;
+  left: 13px;
+  top: 12px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  z-index: 1;
+  flex-shrink: 0;
+  border: 2px solid var(--bg-primary);
+}
+
+.tl-dot.dot-assistant {
+  background: var(--text-secondary);
+}
+
+.tl-dot.dot-user {
+  background: var(--accent-color);
+}
+
+.tl-dot.dot-system {
+  background: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.tl-dot.dot-success {
+  background: #10b981;
+}
+
+.tl-dot.dot-error {
+  background: var(--danger-color);
+}
+
+.tl-dot.dot-running {
+  background: var(--claude-accent);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+.tl-dot.dot-thinking {
+  background: var(--claude-accent);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Content area */
+.tl-content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+/* Messages */
+.claude-message-user {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  font-weight: 500;
+  padding: 6px 12px;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  max-width: 100%;
+}
+
+.claude-message-assistant {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  padding: 2px 0;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.claude-message-system {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 2px 0;
+}
+
+.claude-markdown {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.claude-cursor {
+  animation: claude-blink 1s step-end infinite;
+  color: var(--claude-accent);
+  font-weight: bold;
+}
+
+@keyframes claude-blink {
+  50% { opacity: 0; }
+}
+
+/* Thinking indicator */
+.claude-thinking {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.claude-thinking-dots span {
+  animation: thinking-bounce 1.4s ease-in-out infinite;
+  display: inline-block;
+}
+
+.claude-thinking-dots span:nth-child(1) { animation-delay: 0s; }
+.claude-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.claude-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes thinking-bounce {
+  0%, 60%, 100% { opacity: 0.3; }
+  30% { opacity: 1; }
+}
+
+/* Thinking Content Block */
+.claude-thinking-block {
+  padding: 2px 0;
+}
+
+.claude-thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.claude-thinking-toggle:hover .claude-thinking-label {
+  color: var(--text-primary);
+}
+
+.claude-thinking-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.claude-thinking-content {
+  margin: 4px 0 4px 18px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 4px 4px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: inherit;
+}
+
+/* Tool Call Cards */
+.claude-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.claude-tool-header:hover .claude-tool-name {
+  text-decoration: underline;
+}
+
+.claude-tool-chevron {
+  font-size: 9px;
+  transition: transform 0.15s ease;
+  color: var(--text-secondary);
+}
+
+.claude-tool-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.claude-tool-name {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--claude-accent);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.claude-tool-summary {
+  color: var(--text-secondary);
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.claude-tool-status {
+  margin-left: auto;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.claude-tool-status.running {
+  color: var(--claude-accent);
+  animation: claude-blink 1s step-end infinite;
+}
+
+.claude-tool-status.completed {
+  color: #10b981;
+}
+
+.claude-tool-status.error {
+  color: var(--danger-color);
+}
+
+/* Tool description in header */
+.claude-tool-desc {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Deny reason */
+.claude-tool-reason {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 2px 0 4px;
+  font-style: italic;
+}
+
+/* Tool interrupted label */
+.claude-tool-interrupted {
+  font-size: 12px;
+  color: var(--danger-color);
+  font-style: italic;
+  margin: 4px 0 8px;
+  padding-bottom: 4px;
+}
+
+/* IN / OUT combined block — VS Code style */
+.claude-tool-blocks {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  margin: 4px 0;
+  overflow: hidden;
+}
+
+.claude-tool-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.claude-tool-row:hover {
+  background: var(--bg-hover);
+}
+
+.claude-tool-row + .claude-tool-row {
+  border-top: 1px solid var(--border-color);
+}
+
+.claude-tool-row-label {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 28px;
+  line-height: 1.6;
+}
+
+.claude-tool-row-content {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.claude-tool-row-copy {
+  font-size: 13px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.claude-tool-row:hover .claude-tool-row-copy {
+  opacity: 0.7;
+}
+
+.claude-tool-row-copy.copied {
+  opacity: 1;
+  color: #10b981;
+}
+
+.claude-tool-body {
+  padding: 8px 0 4px 16px;
+  border-left: 2px solid var(--border-color);
+  margin-left: 4px;
+  margin-top: 4px;
+}
+
+.claude-tool-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.claude-tool-input pre,
+.claude-tool-result pre {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.claude-tool-result {
+  margin-top: 8px;
+}
+
+/* Input Area — VS Code Claude Code style */
+.claude-input-area {
+  display: flex;
+  flex-direction: column;
+  margin: 0 12px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.claude-input-area:focus-within {
+  border-color: var(--claude-accent);
+}
+
+.claude-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  padding: 10px 12px 6px;
+  resize: none;
+  min-height: 36px;
+  max-height: 160px;
+  outline: none;
+}
+
+.claude-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.claude-input::placeholder {
+  color: var(--text-secondary);
+}
+
+/* Footer row inside the input box */
+.claude-input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 6px;
+  min-height: 28px;
+}
+
+.claude-input-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.claude-input-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.claude-input-meta {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.claude-send-btn {
+  background: var(--claude-accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.claude-send-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.claude-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.claude-stop-btn {
+  background: var(--danger-color);
+}
+
+/* Status Bar — clickable items (VS Code style) */
+.claude-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.12s;
+  white-space: nowrap;
+  height: 100%;
+  line-height: 22px;
+}
+
+.claude-status-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.claude-status-spacer {
+  flex: 1;
+}
+
+/* Permission mode colors */
+.claude-mode-default {
+  color: #4ec9b0;
+}
+
+.claude-mode-acceptEdits {
+  color: #dcdcaa;
+}
+
+.claude-mode-bypassPermissions {
+  color: var(--danger-color);
+}
+
+.claude-mode-plan {
+  color: #569cd6;
+}
+
+/* Permission Request Card — VS Code style */
+.claude-permission-card {
+  margin: 0 12px 8px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  padding: 14px 16px;
+  flex-shrink: 0;
+  outline: none;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.claude-permission-card.danger {
+  border-left-color: var(--danger-color);
+}
+
+.claude-permission-card.warning {
+  border-left-color: #f59e0b;
+}
+
+.claude-permission-card.safe {
+  border-left-color: #10b981;
+}
+
+.claude-permission-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.claude-permission-title strong {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--claude-accent);
+}
+
+.claude-permission-card.danger .claude-permission-title strong {
+  color: var(--danger-color);
+}
+
+.claude-permission-card.warning .claude-permission-title strong {
+  color: #f59e0b;
+}
+
+.claude-permission-card.safe .claude-permission-title strong {
+  color: #10b981;
+}
+
+.claude-permission-command {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-permission-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.claude-permission-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.claude-permission-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.1s;
+  border: 1px solid transparent;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.claude-permission-option:hover {
+  background: var(--bg-hover);
+}
+
+.claude-permission-option.focused {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+.claude-permission-option-num {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  min-width: 14px;
+}
+
+.claude-permission-option.focused .claude-permission-option-num {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.claude-permission-option-label {
+  font-weight: 500;
+}
+
+.claude-permission-option.custom {
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.claude-permission-option.custom.focused {
+  background: none;
+}
+
+.claude-permission-custom-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.claude-permission-custom-input:focus,
+.claude-permission-option.custom.focused .claude-permission-custom-input {
+  border-color: var(--accent-color);
+}
+
+.claude-permission-custom-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.claude-permission-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* AskUserQuestion Card */
+.claude-ask-card {
+  border-top: 1px solid var(--border-color);
+  border-left: 3px solid #569cd6;
+  background: rgba(86, 156, 214, 0.04);
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.claude-ask-question {
+  margin-bottom: 12px;
+}
+
+.claude-ask-question:last-of-type {
+  margin-bottom: 8px;
+}
+
+.claude-ask-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--claude-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.claude-ask-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.claude-ask-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.claude-ask-option {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.claude-ask-option:hover {
+  border-color: var(--claude-accent);
+  background: var(--bg-hover);
+}
+
+.claude-ask-option.selected {
+  border-color: var(--claude-accent);
+  background: rgba(217, 119, 6, 0.15);
+  color: var(--claude-accent);
+  font-weight: 500;
+}
+
+.claude-ask-other input {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.claude-ask-other input:focus {
+  border-color: var(--claude-accent);
+}
+
+.claude-ask-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Image Attachments */
+.claude-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px 6px;
+  align-items: center;
+}
+
+.claude-attachment {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.claude-attachment-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid var(--border-color);
+}
+
+.claude-attachment-remove {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.claude-attachment-remove:hover {
+  background: var(--danger-color);
+  border-color: var(--danger-color);
+  color: #fff;
+}
+
+.claude-add-image-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  border: 1px dashed var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.claude-add-image-btn:hover {
+  border-color: var(--claude-accent);
+  color: var(--claude-accent);
+}
+
+.claude-input-area.drag-over {
+  border-color: var(--claude-accent);
+  background: rgba(217, 119, 6, 0.06);
+}
+
+/* Resume Session Card */
+.claude-resume-card {
+  margin: 0 12px 8px;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--claude-accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  padding: 14px 16px;
+  flex-shrink: 0;
+}
+
+.claude-resume-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+
+.claude-resume-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s;
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+}
+
+.claude-resume-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+}
+
+.claude-resume-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.claude-resume-item-id {
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--claude-accent);
+  font-weight: 600;
+}
+
+.claude-resume-item-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.claude-resume-item-preview {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-resume-empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 20px 0;
+  font-style: italic;
+}
+
+/* Status Lines */
+.claude-statuslines {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.claude-statusline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-height: 20px;
+}
+
+.claude-statusline + .claude-statusline {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.claude-statusline-item {
+  white-space: nowrap;
+}
+
+.claude-statusline-branch {
+  color: var(--accent-color);
+  font-weight: 500;
 }

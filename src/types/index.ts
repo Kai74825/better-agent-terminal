@@ -11,23 +11,13 @@ export interface Workspace {
   id: string;
   name: string;
   alias?: string;
-  role?: string;
   folderPath: string;
   createdAt: number;
   defaultAgent?: AgentPresetId;  // Workspace 預設 Agent
   envVars?: EnvVariable[];       // Workspace 專屬環境變數
+  group?: string;                // Workspace 分組
+  lastSdkSessionId?: string;     // 上次使用的 SDK session ID，下次自動 resume
 }
-
-// Preset roles for quick selection
-export const PRESET_ROLES = [
-  { id: 'iris', name: 'Iris', color: '#7bbda4' },
-  { id: 'irisgo-pm', name: 'IrisGo PM', color: '#8ab3b5' },
-  { id: 'lucy', name: 'Lucy', color: '#a89bb9' },
-  { id: 'veda', name: 'Veda', color: '#f4bc87' },
-  { id: 'exia', name: 'Exia', color: '#cb6077' },
-  { id: 'leo', name: 'Leo', color: '#beb55b' },
-  { id: 'custom', name: 'Custom', color: '#dfdbc3' },
-] as const;
 
 export interface TerminalInstance {
   id: string;
@@ -191,4 +181,5 @@ export interface AppSettings {
   agentCustomCommand: string;     // 自定義 Agent 命令
   defaultTerminalCount: number;   // 每個 workspace 預設的 terminal 數量
   createDefaultAgentTerminal: boolean;  // 是否預設建立 Agent Terminal
+  allowBypassPermissions: boolean;  // 允許切換 bypassPermissions 模式時不再確認
 }

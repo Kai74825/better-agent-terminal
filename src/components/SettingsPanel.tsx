@@ -178,6 +178,18 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 </div>
               </>
             )}
+
+            <div className="settings-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={settings.allowBypassPermissions === true}
+                  onChange={e => settingsStore.setAllowBypassPermissions(e.target.checked)}
+                />
+                Allow bypass permissions without confirmation
+              </label>
+              <p className="settings-hint">When enabled, switching to bypassPermissions mode in Claude Agent Panel will not show a confirmation dialog. Use with caution.</p>
+            </div>
           </div>
 
           <div className="settings-section">

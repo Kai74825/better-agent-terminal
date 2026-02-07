@@ -31,7 +31,11 @@ const electronAPI = {
     getShellPath: (shell: string) => ipcRenderer.invoke('settings:get-shell-path', shell)
   },
   dialog: {
-    selectFolder: () => ipcRenderer.invoke('dialog:select-folder')
+    selectFolder: () => ipcRenderer.invoke('dialog:select-folder'),
+    selectImages: () => ipcRenderer.invoke('dialog:select-images') as Promise<string[]>,
+  },
+  image: {
+    readAsDataUrl: (filePath: string) => ipcRenderer.invoke('image:read-as-data-url', filePath) as Promise<string>,
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url)
@@ -43,6 +47,83 @@ const electronAPI = {
   clipboard: {
     saveImage: () => ipcRenderer.invoke('clipboard:saveImage'),
     writeImage: (filePath: string) => ipcRenderer.invoke('clipboard:writeImage', filePath),
+  },
+  claude: {
+    startSession: (sessionId: string, options: { cwd: string; prompt?: string }) =>
+      ipcRenderer.invoke('claude:start-session', sessionId, options),
+    sendMessage: (sessionId: string, prompt: string, images?: string[]) =>
+      ipcRenderer.invoke('claude:send-message', sessionId, prompt, images),
+    stopSession: (sessionId: string) =>
+      ipcRenderer.invoke('claude:stop-session', sessionId),
+    onMessage: (callback: (sessionId: string, message: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, message: unknown) => callback(sessionId, message)
+      ipcRenderer.on('claude:message', handler)
+      return () => ipcRenderer.removeListener('claude:message', handler)
+    },
+    onToolUse: (callback: (sessionId: string, toolCall: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, toolCall: unknown) => callback(sessionId, toolCall)
+      ipcRenderer.on('claude:tool-use', handler)
+      return () => ipcRenderer.removeListener('claude:tool-use', handler)
+    },
+    onToolResult: (callback: (sessionId: string, result: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, result: unknown) => callback(sessionId, result)
+      ipcRenderer.on('claude:tool-result', handler)
+      return () => ipcRenderer.removeListener('claude:tool-result', handler)
+    },
+    onResult: (callback: (sessionId: string, result: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, result: unknown) => callback(sessionId, result)
+      ipcRenderer.on('claude:result', handler)
+      return () => ipcRenderer.removeListener('claude:result', handler)
+    },
+    onError: (callback: (sessionId: string, error: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, error: string) => callback(sessionId, error)
+      ipcRenderer.on('claude:error', handler)
+      return () => ipcRenderer.removeListener('claude:error', handler)
+    },
+    onStream: (callback: (sessionId: string, data: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, data: unknown) => callback(sessionId, data)
+      ipcRenderer.on('claude:stream', handler)
+      return () => ipcRenderer.removeListener('claude:stream', handler)
+    },
+    onStatus: (callback: (sessionId: string, meta: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, meta: unknown) => callback(sessionId, meta)
+      ipcRenderer.on('claude:status', handler)
+      return () => ipcRenderer.removeListener('claude:status', handler)
+    },
+    setPermissionMode: (sessionId: string, mode: string) =>
+      ipcRenderer.invoke('claude:set-permission-mode', sessionId, mode),
+    setModel: (sessionId: string, model: string) =>
+      ipcRenderer.invoke('claude:set-model', sessionId, model),
+    setMaxThinkingTokens: (sessionId: string, tokens: number | null) =>
+      ipcRenderer.invoke('claude:set-max-thinking-tokens', sessionId, tokens),
+    getSupportedModels: (sessionId: string) =>
+      ipcRenderer.invoke('claude:get-supported-models', sessionId),
+    resolvePermission: (sessionId: string, toolUseId: string, result: { behavior: string; updatedInput?: Record<string, unknown>; message?: string }) =>
+      ipcRenderer.invoke('claude:resolve-permission', sessionId, toolUseId, result),
+    resolveAskUser: (sessionId: string, toolUseId: string, answers: Record<string, string>) =>
+      ipcRenderer.invoke('claude:resolve-ask-user', sessionId, toolUseId, answers),
+    listSessions: (cwd: string) =>
+      ipcRenderer.invoke('claude:list-sessions', cwd),
+    resumeSession: (sessionId: string, sdkSessionId: string, cwd: string) =>
+      ipcRenderer.invoke('claude:resume-session', sessionId, sdkSessionId, cwd),
+    onHistory: (callback: (sessionId: string, items: unknown[]) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, items: unknown[]) => callback(sessionId, items)
+      ipcRenderer.on('claude:history', handler)
+      return () => ipcRenderer.removeListener('claude:history', handler)
+    },
+    onPermissionRequest: (callback: (sessionId: string, data: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, data: unknown) => callback(sessionId, data)
+      ipcRenderer.on('claude:permission-request', handler)
+      return () => ipcRenderer.removeListener('claude:permission-request', handler)
+    },
+    onAskUser: (callback: (sessionId: string, data: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, data: unknown) => callback(sessionId, data)
+      ipcRenderer.on('claude:ask-user', handler)
+      return () => ipcRenderer.removeListener('claude:ask-user', handler)
+    },
+  },
+  git: {
+    getBranch: (cwd: string) => ipcRenderer.invoke('git:branch', cwd) as Promise<string | null>,
   },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),

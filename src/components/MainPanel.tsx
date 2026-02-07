@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { TerminalInstance } from '../types'
 import { TerminalPanel } from './TerminalPanel'
+import { ClaudeAgentPanel } from './ClaudeAgentPanel'
 import { ActivityIndicator } from './ActivityIndicator'
 import { PromptBox } from './PromptBox'
 import { getAgentPreset } from '../types/agent-presets'
@@ -8,11 +9,14 @@ import { workspaceStore } from '../stores/workspace-store'
 
 interface MainPanelProps {
   terminal: TerminalInstance
+  isActive: boolean
   onClose: (id: string) => void
   onRestart: (id: string) => void
+  workspaceId?: string
+  lastSdkSessionId?: string
 }
 
-export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelProps>) {
+export function MainPanel({ terminal, isActive, onClose, onRestart, workspaceId, lastSdkSessionId }: Readonly<MainPanelProps>) {
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
   const isClaudeCode = terminal.agentPreset === 'claude-code'
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
@@ -69,7 +73,7 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
             terminalId={terminal.id}
             size="small"
           />
-          {isClaudeCode && (
+          {isAgent && !isClaudeCode && (
             <button
               className={`action-btn ${showPromptBox ? 'active' : ''}`}
               onClick={() => setShowPromptBox(!showPromptBox)}
@@ -95,9 +99,19 @@ export function MainPanel({ terminal, onClose, onRestart }: Readonly<MainPanelPr
         </div>
       </div>
       <div className="main-panel-content">
-        <TerminalPanel terminalId={terminal.id} />
+        {isClaudeCode ? (
+          <ClaudeAgentPanel
+            sessionId={terminal.id}
+            cwd={terminal.cwd}
+            isActive={isActive}
+            workspaceId={workspaceId}
+            savedSdkSessionId={lastSdkSessionId}
+          />
+        ) : (
+          <TerminalPanel terminalId={terminal.id} />
+        )}
       </div>
-      {isClaudeCode && showPromptBox && (
+      {!isClaudeCode && showPromptBox && (
         <PromptBox terminalId={terminal.id} />
       )}
     </div>

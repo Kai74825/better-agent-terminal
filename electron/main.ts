@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, clipboard, nativeImage } from 'electron'
 import path from 'path'
 import { PtyManager } from './pty-manager'
+import { ClaudeAgentManager } from './claude-agent-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
 import { snippetDb, CreateSnippetInput } from './snippet-db'
 
@@ -11,6 +12,7 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
+let claudeManager: ClaudeAgentManager | null = null
 let updateCheckResult: UpdateCheckResult | null = null
 
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
@@ -123,6 +125,7 @@ function createWindow() {
   })
 
   ptyManager = new PtyManager(mainWindow)
+  claudeManager = new ClaudeAgentManager(mainWindow)
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
@@ -135,6 +138,8 @@ function createWindow() {
     mainWindow = null
     ptyManager?.dispose()
     ptyManager = null
+    claudeManager?.dispose()
+    claudeManager = null
   })
 }
 
@@ -357,6 +362,62 @@ ipcMain.handle('snippet:getFavorites', () => {
   return snippetDb.getFavorites()
 })
 
+// Claude Agent SDK handlers
+ipcMain.handle('claude:start-session', async (_event, sessionId: string, options: { cwd: string; prompt?: string }) => {
+  return claudeManager?.startSession(sessionId, options)
+})
+
+ipcMain.handle('claude:send-message', async (_event, sessionId: string, prompt: string, images?: string[]) => {
+  return claudeManager?.sendMessage(sessionId, prompt, images)
+})
+
+ipcMain.handle('claude:stop-session', async (_event, sessionId: string) => {
+  return claudeManager?.stopSession(sessionId)
+})
+
+ipcMain.handle('claude:set-permission-mode', async (_event, sessionId: string, mode: string) => {
+  return claudeManager?.setPermissionMode(sessionId, mode as import('@anthropic-ai/claude-agent-sdk').PermissionMode)
+})
+
+ipcMain.handle('claude:set-model', async (_event, sessionId: string, model: string) => {
+  return claudeManager?.setModel(sessionId, model)
+})
+
+ipcMain.handle('claude:set-max-thinking-tokens', async (_event, sessionId: string, tokens: number | null) => {
+  return claudeManager?.setMaxThinkingTokens(sessionId, tokens)
+})
+
+ipcMain.handle('claude:get-supported-models', async (_event, sessionId: string) => {
+  return claudeManager?.getSupportedModels(sessionId)
+})
+
+ipcMain.handle('claude:resolve-permission', async (_event, sessionId: string, toolUseId: string, result: { behavior: string; updatedInput?: Record<string, unknown>; message?: string }) => {
+  return claudeManager?.resolvePermission(sessionId, toolUseId, result)
+})
+
+ipcMain.handle('claude:resolve-ask-user', async (_event, sessionId: string, toolUseId: string, answers: Record<string, string>) => {
+  return claudeManager?.resolveAskUser(sessionId, toolUseId, answers)
+})
+
+ipcMain.handle('claude:list-sessions', async (_event, cwd: string) => {
+  return claudeManager?.listSessions(cwd)
+})
+
+ipcMain.handle('claude:resume-session', async (_event, sessionId: string, sdkSessionId: string, cwd: string) => {
+  return claudeManager?.resumeSession(sessionId, sdkSessionId, cwd)
+})
+
+// Git branch detection
+ipcMain.handle('git:branch', async (_event, cwd: string) => {
+  try {
+    const { execSync } = await import('child_process')
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 3000 }).trim()
+    return branch || null
+  } catch {
+    return null // not a git repo or git not available
+  }
+})
+
 // Clipboard image handlers
 ipcMain.handle('clipboard:saveImage', async () => {
   const image = clipboard.readImage()
@@ -374,4 +435,28 @@ ipcMain.handle('clipboard:writeImage', async (_event, filePath: string) => {
   if (image.isEmpty()) return false
   clipboard.writeImage(image)
   return true
+})
+
+// Image handlers for Claude Agent Panel
+ipcMain.handle('image:read-as-data-url', async (_event, filePath: string) => {
+  const fs = await import('fs/promises')
+  const ext = path.extname(filePath).toLowerCase()
+  const mimeMap: Record<string, string> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  }
+  const mime = mimeMap[ext] || 'image/png'
+  const data = await fs.readFile(filePath)
+  return `data:${mime};base64,${data.toString('base64')}`
+})
+
+ipcMain.handle('dialog:select-images', async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+    properties: ['openFile', 'multiSelections'],
+  })
+  return result.canceled ? [] : result.filePaths
 })
