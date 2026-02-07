@@ -46,18 +46,27 @@ async function imageToContentBlock(filePath: string): Promise<{ type: 'image'; s
 }
 
 // Resolve the Claude Code CLI path at module level
+// In packaged Electron apps, asarUnpack puts files under app.asar.unpacked
+// but require.resolve returns the app.asar path — we need to fix that.
 function resolveClaudeCodePath(): string {
+  let resolved = ''
   try {
     const req = createRequire(import.meta.url ?? __filename)
-    return req.resolve('@anthropic-ai/claude-code/cli.js')
+    resolved = req.resolve('@anthropic-ai/claude-code/cli.js')
   } catch {
     // Fallback: try require.resolve directly (works in CommonJS context)
     try {
-      return require.resolve('@anthropic-ai/claude-code/cli.js')
+      resolved = require.resolve('@anthropic-ai/claude-code/cli.js')
     } catch {
       return ''
     }
   }
+  // In packaged apps, the file is in app.asar.unpacked but resolve returns app.asar
+  // child_process.spawn cannot access files inside app.asar, so point to the unpacked copy
+  if (resolved.includes('app.asar') && !resolved.includes('app.asar.unpacked')) {
+    resolved = resolved.replace('app.asar', 'app.asar.unpacked')
+  }
+  return resolved
 }
 
 export interface SessionSummary {
@@ -225,12 +234,16 @@ export class ClaudeAgentManager {
     session.state.isStreaming = true
     session.abortController = new AbortController()
 
+    // Collect stderr output for better error diagnostics
+    let stderrOutput = ''
+
     try {
       const query = await getQuery()
 
       // Build options — resume if we have a previous SDK session ID
       const resumeId = session.sdkSessionId
       const claudeCodePath = resolveClaudeCodePath()
+      console.log(`[Claude] runQuery: cwd=${session.cwd}, resumeId=${resumeId || 'none'}, claudeCodePath=${claudeCodePath || 'none'}`)
       const canUseTool: CanUseTool = async (toolName, input, opts) => {
         // Check if this is an AskUserQuestion tool
         if (toolName === 'AskUserQuestion') {
@@ -266,6 +279,10 @@ export class ClaudeAgentManager {
         maxThinkingTokens: 31999,
         canUseTool,
         ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
+        stderr: (data: string) => {
+          console.error('[Claude Code stderr]', data)
+          stderrOutput += data
+        },
       }
 
       if (resumeId) {
@@ -448,8 +465,33 @@ export class ClaudeAgentManager {
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error)
       if (errMsg !== 'aborted' && errMsg !== 'The operation was aborted') {
+        // If we were trying to resume and the process crashed, retry without resume
+        if (resumeId && errMsg.includes('exited with code')) {
+          console.warn('Claude query failed with resume, retrying without resume:', errMsg)
+          if (stderrOutput) console.warn('stderr:', stderrOutput)
+          session.sdkSessionId = undefined
+          sdkSessionIds.delete(sessionId)
+          session.state.isStreaming = false
+          this.addMessage(sessionId, {
+            id: `sys-retry-${Date.now()}`,
+            sessionId,
+            role: 'system',
+            content: 'Previous session could not be resumed. Starting fresh...',
+            timestamp: Date.now(),
+          })
+          // Retry without resume
+          return this.runQuery(sessionId, prompt, images)
+        }
         console.error('Claude query error:', error)
-        this.send('claude:error', sessionId, errMsg)
+        if (stderrOutput) console.error('stderr output:', stderrOutput)
+        if (error instanceof Error && error.stack) {
+          console.error('Stack:', error.stack)
+        }
+        // Include stderr hint in error message if available
+        const displayMsg = stderrOutput
+          ? `${errMsg}\n${stderrOutput.slice(0, 500)}`
+          : errMsg
+        this.send('claude:error', sessionId, displayMsg)
       }
     } finally {
       if (session) {
