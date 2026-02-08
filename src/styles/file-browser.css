@@ -27,9 +27,43 @@
 
 .file-tree-header {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
   padding: 4px 8px;
   flex-shrink: 0;
+}
+
+.file-tree-search {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 3px 8px;
+  outline: none;
+}
+
+.file-tree-search:focus {
+  border-color: var(--accent-color);
+}
+
+.file-tree-search::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.file-tree-search-path {
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+.file-tree-loading-row {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
+  padding-left: 12px;
 }
 
 .file-tree-refresh-btn {

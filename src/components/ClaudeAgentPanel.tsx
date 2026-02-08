@@ -339,7 +339,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
       api.onModeChange((sid: string, mode: string) => {
         if (sid !== sessionId) return
-        setPermissionMode(mode)
+        // When exiting plan mode, restore to bypass if setting is enabled
+        if (mode === 'default' && settingsStore.getSettings().allowBypassPermissions) {
+          setPermissionMode('bypassPermissions')
+          window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
+        } else {
+          setPermissionMode(mode)
+        }
       }),
     ]
 
@@ -995,6 +1001,119 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         )
       }
 
+      // Edit tool: show diff view
+      if (item.toolName === 'Edit' && item.input.old_string !== undefined) {
+        const filePath = String(item.input.file_path || '')
+        const oldStr = String(item.input.old_string || '')
+        const newStr = String(item.input.new_string || '')
+        const isDiffExpanded = expandedTools.has(`diff-${item.id}`)
+        const oldLines = oldStr.split('\n')
+        const newLines = newStr.split('\n')
+        const totalLines = oldLines.length + newLines.length
+        const isLongDiff = totalLines > 12
+        const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
+        const { content: resultText } = splitSystemReminders(resultRaw)
+        return (
+          <div key={item.id || index} className="tl-item">
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">Edit</span>
+                <span className="claude-tool-desc"><LinkedText text={filePath} /></span>
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              <div className="claude-diff-block">
+                {(isDiffExpanded || !isLongDiff ? oldLines : oldLines.slice(0, 3)).map((line, i) => (
+                  <div key={`o${i}`} className="claude-diff-line claude-diff-del">
+                    <span className="claude-diff-sign">-</span>
+                    <span className="claude-diff-text">{line}</span>
+                  </div>
+                ))}
+                {(isDiffExpanded || !isLongDiff ? newLines : newLines.slice(0, 3)).map((line, i) => (
+                  <div key={`n${i}`} className="claude-diff-line claude-diff-add">
+                    <span className="claude-diff-sign">+</span>
+                    <span className="claude-diff-text">{line}</span>
+                  </div>
+                ))}
+                {isLongDiff && (
+                  <div className="claude-diff-toggle" onClick={() => toggleTool(`diff-${item.id}`)}>
+                    {isDiffExpanded ? 'Collapse' : `Show all ${totalLines} lines...`}
+                  </div>
+                )}
+              </div>
+              {resultText && (
+                <div className="claude-tool-blocks">
+                  <div className="claude-tool-row">
+                    <span className="claude-tool-row-label">OUT</span>
+                    <span className="claude-tool-row-content"><LinkedText text={resultText} /></span>
+                  </div>
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">Full Input</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
+      // Write tool: show content preview
+      if (item.toolName === 'Write' && item.input.content !== undefined) {
+        const filePath = String(item.input.file_path || '')
+        const content = String(item.input.content || '')
+        const isContentExpanded = expandedTools.has(`write-${item.id}`)
+        const contentLines = content.split('\n')
+        const isLong = contentLines.length > 8
+        const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
+        const { content: resultText } = splitSystemReminders(resultRaw)
+        return (
+          <div key={item.id || index} className="tl-item">
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">Write</span>
+                <span className="claude-tool-desc"><LinkedText text={filePath} /></span>
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              <div className="claude-diff-block">
+                {(isContentExpanded || !isLong ? contentLines : contentLines.slice(0, 8)).map((line, i) => (
+                  <div key={i} className="claude-diff-line claude-diff-add">
+                    <span className="claude-diff-sign">+</span>
+                    <span className="claude-diff-text">{line}</span>
+                  </div>
+                ))}
+                {isLong && (
+                  <div className="claude-diff-toggle" onClick={() => toggleTool(`write-${item.id}`)}>
+                    {isContentExpanded ? 'Collapse' : `Show all ${contentLines.length} lines...`}
+                  </div>
+                )}
+              </div>
+              {resultText && (
+                <div className="claude-tool-blocks">
+                  <div className="claude-tool-row">
+                    <span className="claude-tool-row-label">OUT</span>
+                    <span className="claude-tool-row-content"><LinkedText text={resultText} /></span>
+                  </div>
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">Full Input</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
       const inContent = toolInputContent(item.input)
       const inBlockId = `in-${item.id}`
       const outBlockId = `out-${item.id}`
@@ -1422,19 +1541,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
               {permissionModeLabels[permissionMode] || permissionMode}
             </span>
 
-            <span
-              className="claude-status-btn"
-              onClick={handleSelectImages}
-              title="Attach images (max 5)"
-            >
-              &#128206;
-            </span>
-
             {currentModel && (
               <span
                 className="claude-status-btn"
-                onClick={handleModelCycle}
-                title={`Model: ${currentModel} (click to cycle)`}
+                onClick={() => setShowModelList(true)}
+                title={`Model: ${currentModel} (click to select)`}
               >
                 {'</>'} {currentModel}
               </span>
@@ -1442,11 +1553,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           </div>
 
           <div className="claude-input-actions">
-            {sessionMeta && sessionMeta.totalCost > 0 && (
-              <span className="claude-input-meta" title={`${sessionMeta.numTurns} turns | ${sessionMeta.inputTokens.toLocaleString()}/${sessionMeta.outputTokens.toLocaleString()} tok | ${(sessionMeta.durationMs / 1000).toFixed(1)}s`}>
-                ${sessionMeta.totalCost.toFixed(4)}
-              </span>
-            )}
+            <span
+              className="claude-status-btn"
+              onClick={handleSelectImages}
+              title="Attach images (max 5)"
+            >
+              &#128206;
+            </span>
             {isStreaming ? (
               <button
                 className="claude-send-btn claude-stop-btn"

@@ -322,6 +322,22 @@ ipcMain.handle('shell:open-path', async (_event, folderPath: string) => {
   await shell.openPath(folderPath)
 })
 
+ipcMain.handle('git:get-github-url', async (_event, folderPath: string): Promise<string | null> => {
+  try {
+    const { execSync } = await import('child_process')
+    const remote = execSync('git remote get-url origin', { cwd: folderPath, encoding: 'utf-8', timeout: 3000 }).trim()
+    // SSH: git@github.com:user/repo.git
+    const sshMatch = remote.match(/^git@github\.com:(.+?)(?:\.git)?$/)
+    if (sshMatch) return `https://github.com/${sshMatch[1]}`
+    // HTTPS: https://github.com/user/repo.git
+    const httpsMatch = remote.match(/^https?:\/\/github\.com\/(.+?)(?:\.git)?$/)
+    if (httpsMatch) return `https://github.com/${httpsMatch[1]}`
+    return null
+  } catch {
+    return null
+  }
+})
+
 // Update checker handlers
 ipcMain.handle('update:check', async () => {
   try {
@@ -530,6 +546,36 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
   } catch {
     return { error: 'Failed to read file' }
   }
+})
+
+// File system: recursive search by filename
+ipcMain.handle('fs:search', async (_event, dirPath: string, query: string) => {
+  const fs = await import('fs/promises')
+  const IGNORED = new Set(['.git', 'node_modules', '.next', 'dist', 'dist-electron', '.cache', '__pycache__', '.DS_Store', 'release'])
+  const results: { name: string; path: string; isDirectory: boolean }[] = []
+  const lowerQuery = query.toLowerCase()
+
+  async function walk(dir: string, depth: number) {
+    if (depth > 8 || results.length >= 100) return
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true })
+      for (const e of entries) {
+        if (results.length >= 100) return
+        if (IGNORED.has(e.name)) continue
+        const fullPath = path.join(dir, e.name)
+        if (e.name.toLowerCase().includes(lowerQuery)) {
+          results.push({ name: e.name, path: fullPath, isDirectory: e.isDirectory() })
+        }
+        if (e.isDirectory()) await walk(fullPath, depth + 1)
+      }
+    } catch { /* skip unreadable dirs */ }
+  }
+
+  await walk(dirPath, 0)
+  return results.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
 })
 
 // Clipboard image handlers

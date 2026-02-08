@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { HighlightedCode } from './PathLinker'
 
 interface FileEntry {
@@ -38,9 +38,10 @@ function canPreview(name: string): 'text' | 'image' | null {
 }
 
 function FileTreeNode({
-  entry, depth, selectedPath, onSelect,
+  entry, depth, selectedPath, onSelect, onContextMenu,
 }: {
   entry: FileEntry; depth: number; selectedPath: string | null; onSelect: (entry: FileEntry) => void
+  onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<FileEntry[] | null>(null)
@@ -80,6 +81,7 @@ function FileTreeNode({
         className={`file-tree-item ${entry.isDirectory ? 'file-tree-folder' : 'file-tree-file'} ${isSelected ? 'selected' : ''}`}
         style={{ paddingLeft: `${12 + depth * 16}px` }}
         onClick={handleClick}
+        onContextMenu={(e) => onContextMenu(e, entry)}
       >
         <span className="file-tree-icon">{icon}</span>
         <span className="file-tree-name">{entry.name}</span>
@@ -92,6 +94,7 @@ function FileTreeNode({
           depth={depth + 1}
           selectedPath={selectedPath}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
         />
       ))}
     </>
@@ -189,6 +192,12 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<FileEntry[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadRoot = useCallback(async () => {
     setLoading(true)
@@ -205,9 +214,77 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     loadRoot()
   }, [loadRoot])
 
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+        setContextMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [contextMenu])
+
+  // Debounced search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    const q = searchQuery.trim()
+    if (!q) {
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
+    setSearching(true)
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await window.electronAPI.fs.search(rootPath, q)
+        setSearchResults(results)
+      } catch {
+        setSearchResults([])
+      }
+      setSearching(false)
+    }, 300)
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current) }
+  }, [searchQuery, rootPath])
+
   const handleSelect = useCallback((entry: FileEntry) => {
     setSelectedFile(entry)
   }, [])
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY, entry })
+  }, [])
+
+  const getRelativePath = useCallback((filePath: string) => {
+    // Normalize separators and compute relative path
+    const norm = (p: string) => p.replace(/\\/g, '/')
+    const rel = norm(filePath).replace(norm(rootPath), '').replace(/^\//, '')
+    return rel
+  }, [rootPath])
+
+  const handleCopyRelativePath = useCallback(() => {
+    if (!contextMenu) return
+    navigator.clipboard.writeText(getRelativePath(contextMenu.entry.path))
+    setContextMenu(null)
+  }, [contextMenu, getRelativePath])
+
+  const handleCopyAbsolutePath = useCallback(() => {
+    if (!contextMenu) return
+    navigator.clipboard.writeText(contextMenu.entry.path)
+    setContextMenu(null)
+  }, [contextMenu])
+
+  const handleOpenInExplorer = useCallback(() => {
+    if (!contextMenu) return
+    const target = contextMenu.entry.isDirectory
+      ? contextMenu.entry.path
+      : contextMenu.entry.path.replace(/[\\/][^\\/]+$/, '') // parent dir
+    window.electronAPI.shell.openPath(target)
+    setContextMenu(null)
+  }, [contextMenu])
 
   if (loading && entries.length === 0) {
     return <div className="file-tree-empty">Loading...</div>
@@ -217,22 +294,54 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     return <div className="file-tree-empty">No files found</div>
   }
 
+  const displayEntries = searchResults !== null ? searchResults : entries
+
   return (
     <div className="file-tree-split">
       <div className="file-tree">
         <div className="file-tree-header">
+          <input
+            className="file-tree-search"
+            type="text"
+            placeholder="Search files..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
           <button className="file-tree-refresh-btn" onClick={loadRoot} title="Refresh">↻</button>
         </div>
         <div className="file-tree-list">
-          {entries.map(entry => (
-            <FileTreeNode
-              key={entry.path}
-              entry={entry}
-              depth={0}
-              selectedPath={selectedFile?.path || null}
-              onSelect={handleSelect}
-            />
-          ))}
+          {searching && <div className="file-tree-item file-tree-loading-row">Searching...</div>}
+          {searchResults !== null ? (
+            // Search results: flat list with relative paths
+            displayEntries.map(entry => (
+              <div
+                key={entry.path}
+                className={`file-tree-item file-tree-file ${entry.path === selectedFile?.path ? 'selected' : ''}`}
+                style={{ paddingLeft: '12px' }}
+                onClick={() => {
+                  if (!entry.isDirectory) handleSelect(entry)
+                }}
+                onContextMenu={(e) => handleContextMenu(e, entry)}
+              >
+                <span className="file-tree-icon">{entry.isDirectory ? '📁' : getFileIcon(entry.name)}</span>
+                <span className="file-tree-name file-tree-search-path">{getRelativePath(entry.path)}</span>
+              </div>
+            ))
+          ) : (
+            entries.map(entry => (
+              <FileTreeNode
+                key={entry.path}
+                entry={entry}
+                depth={0}
+                selectedPath={selectedFile?.path || null}
+                onSelect={handleSelect}
+                onContextMenu={handleContextMenu}
+              />
+            ))
+          )}
+          {searchResults !== null && searchResults.length === 0 && !searching && (
+            <div className="file-tree-empty">No matches</div>
+          )}
         </div>
       </div>
       <div className="file-preview">
@@ -249,6 +358,39 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
           <div className="file-preview-status">Select a file to preview</div>
         )}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="workspace-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <div className="context-menu-item" onClick={handleCopyRelativePath}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+            </svg>
+            Copy Relative Path
+          </div>
+          <div className="context-menu-item" onClick={handleCopyAbsolutePath}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+              <line x1="8" y1="10" x2="16" y2="10" />
+              <line x1="8" y1="14" x2="12" y2="14" />
+            </svg>
+            Copy Absolute Path
+          </div>
+          <div className="context-menu-divider" />
+          <div className="context-menu-item" onClick={handleOpenInExplorer}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            Open in Explorer
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -41,6 +41,9 @@ const electronAPI = {
     openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
     openPath: (folderPath: string) => ipcRenderer.invoke('shell:open-path', folderPath),
   },
+  git: {
+    getGithubUrl: (folderPath: string) => ipcRenderer.invoke('git:get-github-url', folderPath) as Promise<string | null>,
+  },
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     getVersion: () => ipcRenderer.invoke('update:get-version')
@@ -138,6 +141,7 @@ const electronAPI = {
   fs: {
     readdir: (dirPath: string) => ipcRenderer.invoke('fs:readdir', dirPath) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath) as Promise<{ content?: string; error?: string; size?: number }>,
+    search: (dirPath: string, query: string) => ipcRenderer.invoke('fs:search', dirPath, query) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
   },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),

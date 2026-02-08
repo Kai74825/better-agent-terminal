@@ -489,6 +489,59 @@
   padding-bottom: 4px;
 }
 
+/* Diff View (Edit/Write tools) */
+.claude-diff-block {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 4px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.claude-diff-line {
+  display: flex;
+  padding: 0 8px;
+  min-height: 20px;
+}
+.claude-diff-sign {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  user-select: none;
+}
+.claude-diff-text {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.claude-diff-del {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+.claude-diff-del .claude-diff-sign {
+  color: #ef4444;
+}
+.claude-diff-add {
+  background: rgba(34, 197, 94, 0.12);
+  color: #86efac;
+}
+.claude-diff-add .claude-diff-sign {
+  color: #22c55e;
+}
+.claude-diff-toggle {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--accent-color);
+  cursor: pointer;
+  text-align: center;
+  opacity: 0.8;
+}
+.claude-diff-toggle:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
 /* Todo Checklist */
 .claude-todo-checklist {
   display: flex;
