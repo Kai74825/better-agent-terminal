@@ -483,13 +483,23 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     setIsStreaming(false)
     setStreamingText('')
     setStreamingThinking('')
-    setMessages(prev => [...prev, {
-      id: `sys-stop-${Date.now()}`,
-      sessionId,
-      role: 'system' as const,
-      content: 'Interrupted by user. You can continue typing.',
-      timestamp: Date.now(),
-    }])
+    setPendingPermission(null)
+    setMessages(prev => {
+      // Mark any running tool calls as interrupted (red dot)
+      const updated = prev.map(m => {
+        if ('toolName' in m && (m as ClaudeToolCall).status === 'running') {
+          return { ...m, status: 'error', denied: true } as ClaudeToolCall
+        }
+        return m
+      })
+      return [...updated, {
+        id: `sys-stop-${Date.now()}`,
+        sessionId,
+        role: 'system' as const,
+        content: 'Interrupted by user. You can continue typing.',
+        timestamp: Date.now(),
+      }]
+    })
     // Focus textarea so user can type immediately
     textareaRef.current?.focus()
   }, [sessionId, isStreaming])
@@ -908,8 +918,83 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         )
       }
 
-      const dotClass = item.status === 'running' ? 'dot-running' : item.status === 'completed' ? 'dot-success' : 'dot-error'
+      const dotClass = item.denied ? 'dot-denied' : item.status === 'running' ? 'dot-running' : item.status === 'completed' ? 'dot-success' : 'dot-error'
       const desc = toolDescription(item.input)
+
+      // Task tool: custom structured renderer
+      if (item.toolName === 'Task') {
+        const prompt = String(item.input.prompt || '')
+        const isPromptExpanded = expandedTools.has(`task-prompt-${item.id}`)
+        const isResultExpanded = expandedTools.has(`task-result-${item.id}`)
+        const promptLines = prompt.split('\n')
+        const isLongPrompt = promptLines.length > 3 || prompt.length > 200
+        const truncatedPrompt = isLongPrompt
+          ? promptLines.slice(0, 3).join('\n').slice(0, 200) + '...'
+          : prompt
+        const model = item.input.model ? String(item.input.model) : null
+        const maxTurns = item.input.max_turns ? String(item.input.max_turns) : null
+        const runBg = item.input.run_in_background ? true : false
+        const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
+        const { content: resultText, reminders: resultReminders } = splitSystemReminders(resultRaw)
+        return (
+          <div key={item.id || index} className="tl-item">
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">Task</span>
+                {item.input.subagent_type && <span className="claude-tool-badge">{String(item.input.subagent_type)}</span>}
+                {desc && <span className="claude-tool-desc">{desc}</span>}
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              {(model || maxTurns || runBg) && (
+                <div className="claude-task-meta">
+                  {model && <span className="claude-task-tag">model: {model}</span>}
+                  {maxTurns && <span className="claude-task-tag">max_turns: {maxTurns}</span>}
+                  {runBg && <span className="claude-task-tag">background</span>}
+                </div>
+              )}
+              <div className="claude-task-prompt">
+                <div className="claude-task-section-header" onClick={() => toggleTool(`task-prompt-${item.id}`)}>
+                  <span className="claude-task-section-label">PROMPT</span>
+                  <span className={`claude-tool-chevron ${isPromptExpanded ? 'expanded' : ''}`}>&#9654;</span>
+                </div>
+                <pre className="claude-task-prompt-text">{isPromptExpanded || !isLongPrompt ? prompt : truncatedPrompt}</pre>
+              </div>
+              {resultText && (
+                <div className="claude-task-result">
+                  <div className="claude-task-section-header" onClick={() => toggleTool(`task-result-${item.id}`)}>
+                    <span className="claude-task-section-label">RESULT</span>
+                    <span className={`claude-tool-chevron ${isResultExpanded ? 'expanded' : ''}`}>&#9654;</span>
+                  </div>
+                  {isResultExpanded && (
+                    <div className="claude-task-result-text"><LinkedText text={resultText} /></div>
+                  )}
+                </div>
+              )}
+              {resultReminders.length > 0 && (
+                <div className="claude-task-result">
+                  <div className="claude-task-section-header claude-system-reminder-row" onClick={() => toggleTool(`reminder-${item.id}`)}>
+                    <span className="claude-task-section-label claude-reminder-label">SYS</span>
+                    <span className={`claude-tool-chevron ${expandedTools.has(`reminder-${item.id}`) ? 'expanded' : ''}`}>&#9654;</span>
+                  </div>
+                  {expandedTools.has(`reminder-${item.id}`) && (
+                    <div className="claude-task-result-text" style={{ opacity: 0.6 }}>{resultReminders.join('\n\n')}</div>
+                  )}
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">Full Input</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
       const inContent = toolInputContent(item.input)
       const inBlockId = `in-${item.id}`
       const outBlockId = `out-${item.id}`
@@ -919,9 +1004,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           <div className="tl-content">
             <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
               <span className="claude-tool-name">{item.toolName}</span>
-              {item.toolName === 'Task' && item.input.subagent_type && (
-                <span className="claude-tool-badge">{String(item.input.subagent_type)}</span>
-              )}
               {desc && <span className="claude-tool-desc">{desc}</span>}
               {!desc && <span className="claude-tool-summary">{toolInputSummary(item.toolName, item.input)}</span>}
               {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}

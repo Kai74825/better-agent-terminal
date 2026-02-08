@@ -121,6 +121,11 @@
   background: var(--danger-color);
 }
 
+.tl-dot.dot-denied {
+  background: var(--danger-color);
+  animation: none;
+}
+
 .tl-dot.dot-running {
   background: var(--claude-accent);
   animation: dot-pulse 1.5s ease-in-out infinite;
@@ -404,6 +409,67 @@
   background: var(--bg-hover);
   color: var(--text-secondary);
   font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+}
+
+/* Task tool card */
+.claude-task-meta {
+  display: flex;
+  gap: 6px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+.claude-task-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+}
+.claude-task-prompt,
+.claude-task-result {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.claude-task-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s;
+}
+.claude-task-section-header:hover { opacity: 1; }
+.claude-task-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+.claude-task-prompt-text {
+  padding: 0 10px 8px;
+  margin: 0;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+.claude-task-result-text {
+  padding: 0 10px 8px;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 /* Deny reason */
