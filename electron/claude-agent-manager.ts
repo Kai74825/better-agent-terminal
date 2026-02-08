@@ -550,6 +550,18 @@ export class ClaudeAgentManager {
     return false
   }
 
+  /** Kill all sessions and their subprocesses completely */
+  killAll() {
+    for (const [id, session] of this.sessions) {
+      session.abortController.abort()
+      session.messageQueue.length = 0
+      session.state.isStreaming = false
+      try { session.queryInstance?.close() } catch { /* ignore */ }
+    }
+    this.sessions.clear()
+    sdkSessionIds.clear()
+  }
+
   getSessionState(sessionId: string): ClaudeSessionState | null {
     const session = this.sessions.get(sessionId)
     return session?.state || null

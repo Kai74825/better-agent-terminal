@@ -136,11 +136,15 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
-    ptyManager?.dispose()
-    ptyManager = null
-    claudeManager?.dispose()
-    claudeManager = null
   })
+}
+
+function cleanupAllProcesses() {
+  try { claudeManager?.killAll() } catch { /* ignore */ }
+  try { claudeManager?.dispose() } catch { /* ignore */ }
+  try { ptyManager?.dispose() } catch { /* ignore */ }
+  claudeManager = null
+  ptyManager = null
 }
 
 app.whenReady().then(async () => {
@@ -170,14 +174,15 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
-  // Safety net: ensure all Claude subprocesses are terminated
-  claudeManager?.dispose()
-  ptyManager?.dispose()
+  cleanupAllProcesses()
 })
 
 app.on('window-all-closed', () => {
+  cleanupAllProcesses()
   if (process.platform !== 'darwin') {
     app.quit()
+    // Force exit after a short delay in case child processes keep the event loop alive
+    setTimeout(() => process.exit(0), 1000)
   }
 })
 

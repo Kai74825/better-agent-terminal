@@ -58,27 +58,37 @@ function splitByPaths(text: string): { text: string; isPath: boolean }[] {
 }
 
 export function HighlightedCode({ code, ext, className }: { code: string; ext: string; className?: string }) {
-  const codeRef = useRef<HTMLElement>(null)
+  const [highlightedLines, setHighlightedLines] = useState<string[]>([])
+
   useEffect(() => {
-    if (codeRef.current) {
-      const lang = EXT_TO_LANG[ext]
-      if (lang) {
-        try {
-          codeRef.current.innerHTML = hljs.highlight(code, { language: lang }).value
-        } catch {
-          codeRef.current.textContent = code
-        }
-      } else {
-        // Auto-detect
-        try {
-          codeRef.current.innerHTML = hljs.highlightAuto(code).value
-        } catch {
-          codeRef.current.textContent = code
-        }
-      }
+    let html = ''
+    const lang = EXT_TO_LANG[ext]
+    try {
+      html = lang
+        ? hljs.highlight(code, { language: lang }).value
+        : hljs.highlightAuto(code).value
+    } catch {
+      // Escape HTML for plain text fallback
+      html = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
+    // Split highlighted HTML by newlines — preserving spans across lines
+    setHighlightedLines(html.split('\n'))
   }, [code, ext])
-  return <pre className={className || "path-preview-text"}><code ref={codeRef}>{code}</code></pre>
+
+  return (
+    <div className={`hlcode-wrapper ${className || 'path-preview-text'}`}>
+      <table className="hlcode-table">
+        <tbody>
+          {highlightedLines.map((lineHtml, i) => (
+            <tr key={i}>
+              <td className="hlcode-ln">{i + 1}</td>
+              <td className="hlcode-line" dangerouslySetInnerHTML={{ __html: lineHtml || ' ' }} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 interface FilePreviewModalProps {

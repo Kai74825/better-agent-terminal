@@ -2504,7 +2504,7 @@ body {
 
 /* Path Links (clickable file paths in terminal/agent output) */
 .path-link {
-  color: var(--accent-color, #d97706);
+  color: #e0a870;
   text-decoration: underline;
   text-decoration-style: dotted;
   cursor: pointer;
@@ -2512,7 +2512,7 @@ body {
 }
 
 .path-link:hover {
-  color: #f59e0b;
+  color: #f5c28a;
   text-decoration-style: solid;
 }
 
@@ -2620,6 +2620,34 @@ body {
 .file-preview-text code.hljs {
   background: transparent;
   padding: 0;
+}
+
+/* Highlighted code with line numbers */
+.hlcode-wrapper {
+  overflow: auto;
+}
+.hlcode-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.hlcode-ln {
+  width: 1px;
+  white-space: nowrap;
+  padding: 0 12px 0 8px;
+  text-align: right;
+  color: var(--text-secondary);
+  opacity: 0.4;
+  user-select: none;
+  vertical-align: top;
+  border-right: 1px solid var(--border-color);
+}
+.hlcode-line {
+  padding: 0 12px;
+  white-space: pre;
+  color: var(--text-primary);
 }
 
 .path-preview-image {
@@ -2864,6 +2892,7 @@ body {
   color: var(--text-secondary);
   margin-top: 4px;
   opacity: 0.7;
+  text-align: right;
 }
 
 /* Time divider between message groups */
@@ -2922,9 +2951,10 @@ body {
 
 /* Scroll to bottom button */
 .scroll-to-bottom-btn {
-  position: absolute;
-  bottom: 70px;
-  right: 20px;
+  position: sticky;
+  bottom: 8px;
+  float: right;
+  margin-right: 12px;
   width: 36px;
   height: 36px;
   border-radius: 50%;

@@ -70,7 +70,7 @@ const startedSessions = new Set<string>()
 
 export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedSdkSessionId }: Readonly<ClaudeAgentPanelProps>) {
   const [messages, setMessages] = useState<MessageItem[]>([])
-  const [input, setInput] = useState('')
+  const inputValueRef = useRef('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [streamingThinking, setStreamingThinking] = useState('')
@@ -78,7 +78,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [autoExpandThinking, setAutoExpandThinking] = useState(false)
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
-  const [permissionMode, setPermissionMode] = useState<string>('default')
+  const [permissionMode, setPermissionMode] = useState<string>(() =>
+    settingsStore.getSettings().allowBypassPermissions ? 'bypassPermissions' : 'default'
+  )
   const [currentModel, setCurrentModel] = useState<string>('')
   // const [effortLevel, setEffortLevel] = useState<string>('medium') // hidden until SDK supports per-model effort
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
@@ -100,6 +102,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const inputHistoryRef = useRef<string[]>([])
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
+  const initialModeAppliedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -229,8 +232,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         if (sid !== sessionId) return
         const m = meta as SessionMeta
         setSessionMeta(m)
-        if (m.permissionMode) setPermissionMode(m.permissionMode)
         if (m.model) setCurrentModel(m.model)
+        // On first status, apply preferred permission mode if bypass is enabled in settings
+        if (!initialModeAppliedRef.current) {
+          initialModeAppliedRef.current = true
+          if (settingsStore.getSettings().allowBypassPermissions) {
+            window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
+          } else if (m.permissionMode) {
+            setPermissionMode(m.permissionMode)
+          }
+        } else if (m.permissionMode) {
+          setPermissionMode(m.permissionMode)
+        }
         // Persist SDK session ID for auto-resume
         if (m.sdkSessionId && workspaceId) {
           workspaceStore.setLastSdkSessionId(workspaceId, m.sdkSessionId)
@@ -331,8 +344,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
   }, [sessionId, cwd, workspaceId])
 
+  const clearInput = useCallback(() => {
+    inputValueRef.current = ''
+    if (textareaRef.current) textareaRef.current.value = ''
+  }, [])
+
+  const setInputValue = useCallback((val: string) => {
+    inputValueRef.current = val
+    if (textareaRef.current) textareaRef.current.value = val
+  }, [])
+
   const handleSend = useCallback(async () => {
-    const trimmed = input.trim()
+    const trimmed = inputValueRef.current.trim()
     if (!trimmed) return
 
     // Save to input history
@@ -342,7 +365,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
     // Intercept /resume command (only when not streaming)
     if (!isStreaming && trimmed === '/resume') {
-      setInput('')
+      clearInput()
       setResumeLoading(true)
       setShowResumeList(true)
       try {
@@ -358,13 +381,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
     // Intercept /model command
     if (trimmed === '/model') {
-      setInput('')
+      clearInput()
       setShowModelList(true)
       return
     }
 
     const imagePaths = attachedImages.map(i => i.path)
-    setInput('')
+    clearInput()
     setAttachedImages([])
     if (!isStreaming) {
       setIsStreaming(true)
@@ -385,7 +408,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }])
 
     await window.electronAPI.claude.sendMessage(sessionId, trimmed, imagePaths.length > 0 ? imagePaths : undefined)
-  }, [input, isStreaming, sessionId, attachedImages])
+  }, [isStreaming, sessionId, attachedImages, clearInput])
 
   const handleStop = useCallback(() => {
     if (!isStreaming) return
@@ -435,13 +458,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       if (history.length === 0) return
       e.preventDefault()
       if (inputHistoryIndexRef.current === -1) {
-        // Save current draft before navigating
-        inputDraftRef.current = input
+        inputDraftRef.current = inputValueRef.current
         inputHistoryIndexRef.current = history.length - 1
       } else if (inputHistoryIndexRef.current > 0) {
         inputHistoryIndexRef.current--
       }
-      setInput(history[inputHistoryIndexRef.current])
+      setInputValue(history[inputHistoryIndexRef.current])
       return
     }
     if (e.key === 'ArrowDown' && !e.shiftKey) {
@@ -450,11 +472,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       const history = inputHistoryRef.current
       if (inputHistoryIndexRef.current < history.length - 1) {
         inputHistoryIndexRef.current++
-        setInput(history[inputHistoryIndexRef.current])
+        setInputValue(history[inputHistoryIndexRef.current])
       } else {
-        // Back to draft
         inputHistoryIndexRef.current = -1
-        setInput(inputDraftRef.current)
+        setInputValue(inputDraftRef.current)
       }
       return
     }
@@ -462,7 +483,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       e.preventDefault()
       handleSend()
     }
-  }, [handleSend, handlePermissionModeCycle, input])
+  }, [handleSend, handlePermissionModeCycle, setInputValue])
 
   const handleModelCycle = useCallback(async () => {
     if (availableModels.length === 0) return
@@ -1017,13 +1038,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           </div>
         )}
         <div ref={messagesEndRef} />
+        {userScrolledUp && (
+          <button className="scroll-to-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom">
+            &#x2193;
+          </button>
+        )}
       </div>
-
-      {userScrolledUp && (
-        <button className="scroll-to-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom">
-          &#x2193;
-        </button>
-      )}
 
       {/* Permission Request Card — VS Code style vertical list */}
       {pendingPermission && (
@@ -1190,8 +1210,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         <textarea
           ref={textareaRef}
           className="claude-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
+          defaultValue=""
+          onInput={e => { inputValueRef.current = (e.target as HTMLTextAreaElement).value }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={isStreaming ? 'Press Escape to stop...' : 'Type a message... (Enter to send, Shift+Tab to switch mode)'}
@@ -1270,7 +1290,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
               <button
                 className="claude-send-btn"
                 onClick={handleSend}
-                disabled={!input.trim()}
+                disabled={false}
                 title="Send message"
               >
                 ▶
