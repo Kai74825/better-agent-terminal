@@ -91,6 +91,11 @@ const electronAPI = {
       ipcRenderer.on('claude:status', handler)
       return () => ipcRenderer.removeListener('claude:status', handler)
     },
+    onModeChange: (callback: (sessionId: string, mode: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, sessionId: string, mode: string) => callback(sessionId, mode)
+      ipcRenderer.on('claude:modeChange', handler)
+      return () => ipcRenderer.removeListener('claude:modeChange', handler)
+    },
     setPermissionMode: (sessionId: string, mode: string) =>
       ipcRenderer.invoke('claude:set-permission-mode', sessionId, mode),
     setModel: (sessionId: string, model: string) =>

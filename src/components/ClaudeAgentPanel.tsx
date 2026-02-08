@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
@@ -109,6 +109,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const permissionCardRef = useRef<HTMLDivElement>(null)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
   const isNearBottomRef = useRef(true)
+  const [aboveViewportUserMsgIds, setAboveViewportUserMsgIds] = useState<Set<string>>(new Set())
+  const userMsgRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
+  const observerRef = useRef<IntersectionObserver | null>(null)
 
   // Check if scrolled near bottom (within 80px)
   const checkIfNearBottom = useCallback(() => {
@@ -137,6 +140,65 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
     }
   }, [messages, streamingText, streamingThinking])
+
+  // Compute pinned user messages (last 3 user messages that scrolled above viewport)
+  // Show regardless of scroll position — the point is to always show context
+  const pinnedMessages = useMemo(() => {
+    if (aboveViewportUserMsgIds.size === 0) return []
+    const userMsgs = messages.filter(m => !isToolCall(m) && (m as ClaudeMessage).role === 'user') as ClaudeMessage[]
+    return userMsgs.filter(m => aboveViewportUserMsgIds.has(m.id)).slice(-3)
+  }, [messages, aboveViewportUserMsgIds])
+
+  // IntersectionObserver to detect user messages scrolled above viewport
+  useEffect(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+
+    observerRef.current?.disconnect()
+    const obs = new IntersectionObserver(
+      (entries) => {
+        setAboveViewportUserMsgIds(prev => {
+          const next = new Set(prev)
+          let changed = false
+          for (const entry of entries) {
+            const msgId = (entry.target as HTMLElement).dataset.userMsgId
+            if (!msgId) continue
+            if (!entry.isIntersecting && entry.boundingClientRect.bottom < (entry.rootBounds?.top ?? 0)) {
+              if (!next.has(msgId)) { next.add(msgId); changed = true }
+            } else if (entry.isIntersecting) {
+              if (next.has(msgId)) { next.delete(msgId); changed = true }
+            }
+          }
+          return changed ? next : prev
+        })
+      },
+      { root: container, threshold: 0 }
+    )
+    observerRef.current = obs
+
+    // Observe all user message elements
+    userMsgRefsMap.current.forEach((el) => obs.observe(el))
+
+    return () => obs.disconnect()
+  }, [messages])
+
+  // Callback ref to register user message elements for IntersectionObserver
+  const setUserMsgRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) {
+      userMsgRefsMap.current.set(id, el)
+      observerRef.current?.observe(el)
+    } else {
+      const prev = userMsgRefsMap.current.get(id)
+      if (prev) observerRef.current?.unobserve(prev)
+      userMsgRefsMap.current.delete(id)
+    }
+  }, [])
+
+  // Scroll to a specific user message when clicking a pinned item
+  const scrollToUserMsg = useCallback((msgId: string) => {
+    const el = userMsgRefsMap.current.get(msgId)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
 
   // Sync pending action state to workspace store for breathing light indicator
   useEffect(() => {
@@ -273,6 +335,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         setStreamingThinking('')
         // Reset the flag after a tick so future restarts work normally
         setTimeout(() => { historyLoadedRef.current = false }, 100)
+      }),
+
+      api.onModeChange((sid: string, mode: string) => {
+        if (sid !== sessionId) return
+        setPermissionMode(mode)
       }),
     ]
 
@@ -744,6 +811,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (input.pattern) return String(input.pattern)
     if (input.query) return String(input.query).slice(0, 80)
     if (input.url) return String(input.url).slice(0, 80)
+    if (input.prompt) return String(input.prompt).slice(0, 80)
     const keys = Object.keys(input)
     if (keys.length === 0) return ''
     return keys.slice(0, 2).map(k => `${k}: ${String(input[k]).slice(0, 40)}`).join(', ')
@@ -756,6 +824,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (input.pattern) return String(input.pattern)
     if (input.query) return String(input.query)
     if (input.url) return String(input.url)
+    if (input.prompt) return String(input.prompt)
     return JSON.stringify(input, null, 2)
   }
 
@@ -850,6 +919,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           <div className="tl-content">
             <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
               <span className="claude-tool-name">{item.toolName}</span>
+              {item.toolName === 'Task' && item.input.subagent_type && (
+                <span className="claude-tool-badge">{String(item.input.subagent_type)}</span>
+              )}
               {desc && <span className="claude-tool-desc">{desc}</span>}
               {!desc && <span className="claude-tool-summary">{toolInputSummary(item.toolName, item.input)}</span>}
               {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
@@ -938,7 +1010,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
     if (msg.role === 'user') {
       return (
-        <div key={msg.id || index} className="tl-item tl-item-user">
+        <div
+          key={msg.id || index}
+          className="tl-item tl-item-user"
+          data-user-msg-id={msg.id}
+          ref={(el) => setUserMsgRef(msg.id, el)}
+        >
           <div className="tl-dot dot-user" />
           <div className="tl-content claude-message-user">
             {msg.content}
@@ -994,6 +1071,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {pinnedMessages.length > 0 && (
+        <div className="claude-pinned-messages">
+          {pinnedMessages.map(msg => (
+            <div key={msg.id} className="claude-pinned-item" onClick={() => scrollToUserMsg(msg.id)}>
+              <span className="claude-pinned-dot" />
+              <span className="claude-pinned-text">{msg.content}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="claude-messages claude-timeline" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.map((item, i) => {
           const divider = shouldShowTimeDivider(item, messages[i - 1]) ? (

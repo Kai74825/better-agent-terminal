@@ -3,11 +3,11 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/vs2015.css'
 
 const TEXT_EXTS = new Set([
-  'ts', 'tsx', 'js', 'jsx', 'json', 'css', 'scss', 'less', 'html', 'htm',
+  'ts', 'tsx', 'js', 'jsx', 'json', 'jsonl', 'css', 'scss', 'less', 'html', 'htm',
   'md', 'txt', 'yml', 'yaml', 'toml', 'xml', 'svg', 'sh', 'bash', 'zsh',
   'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs',
   'env', 'gitignore', 'editorconfig', 'prettierrc', 'eslintrc',
-  'dockerfile', 'makefile', 'cfg', 'ini', 'conf', 'log',
+  'dockerfile', 'makefile', 'cfg', 'ini', 'conf', 'log', 'output',
 ])
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])

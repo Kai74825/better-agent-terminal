@@ -33,15 +33,21 @@ function getMediaType(filePath: string): 'image/png' | 'image/jpeg' | 'image/gif
   }
 }
 
-async function imageToContentBlock(filePath: string): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> {
-  const data = await fsPromises.readFile(filePath)
-  return {
-    type: 'image',
-    source: {
-      type: 'base64',
-      media_type: getMediaType(filePath),
-      data: data.toString('base64'),
-    },
+async function imageToContentBlock(filePath: string): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } } | null> {
+  try {
+    const data = await fsPromises.readFile(filePath)
+    // Skip images > 20MB base64 to avoid API rejection
+    if (data.length > 15 * 1024 * 1024) return null
+    return {
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: getMediaType(filePath),
+        data: data.toString('base64'),
+      },
+    }
+  } catch {
+    return null
   }
 }
 
@@ -316,9 +322,9 @@ export class ClaudeAgentManager {
       // Build prompt: if images are attached, construct a multi-content SDKUserMessage
       let promptArg: unknown = prompt
       if (images && images.length > 0) {
-        const imageBlocks = await Promise.all(
+        const imageBlocks = (await Promise.all(
           images.filter(p => fsSync.existsSync(p)).map(p => imageToContentBlock(p))
-        )
+        )).filter(Boolean) as Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
         if (imageBlocks.length > 0) {
           const contentBlocks = [
             ...imageBlocks,
@@ -400,6 +406,14 @@ export class ClaudeAgentManager {
                   status: 'running',
                   timestamp: Date.now(),
                 })
+                // Detect plan mode transitions and notify UI
+                if (toolBlock.name === 'EnterPlanMode') {
+                  session.permissionMode = 'plan'
+                  this.send('claude:modeChange', sessionId, 'plan')
+                } else if (toolBlock.name === 'ExitPlanMode') {
+                  session.permissionMode = 'default'
+                  this.send('claude:modeChange', sessionId, 'default')
+                }
               }
               if ('type' in block && block.type === 'tool_result') {
                 const resultBlock = block as { tool_use_id: string; content?: string; is_error?: boolean }
