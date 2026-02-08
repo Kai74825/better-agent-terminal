@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/vs2015.css'
 
 const TEXT_EXTS = new Set([
   'ts', 'tsx', 'js', 'jsx', 'json', 'css', 'scss', 'less', 'html', 'htm',
@@ -9,6 +11,18 @@ const TEXT_EXTS = new Set([
 ])
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])
+
+const EXT_TO_LANG: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+  json: 'json', css: 'css', scss: 'scss', less: 'less',
+  html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
+  md: 'markdown', yml: 'yaml', yaml: 'yaml', toml: 'ini',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+  java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp', cs: 'csharp',
+  dockerfile: 'dockerfile', makefile: 'makefile',
+  ini: 'ini', conf: 'ini', cfg: 'ini',
+}
 
 function getExt(p: string): string {
   return p.split('.').pop()?.toLowerCase() || ''
@@ -41,6 +55,30 @@ function splitByPaths(text: string): { text: string; isPath: boolean }[] {
     parts.push({ text: text.slice(lastIndex), isPath: false })
   }
   return parts
+}
+
+export function HighlightedCode({ code, ext, className }: { code: string; ext: string; className?: string }) {
+  const codeRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (codeRef.current) {
+      const lang = EXT_TO_LANG[ext]
+      if (lang) {
+        try {
+          codeRef.current.innerHTML = hljs.highlight(code, { language: lang }).value
+        } catch {
+          codeRef.current.textContent = code
+        }
+      } else {
+        // Auto-detect
+        try {
+          codeRef.current.innerHTML = hljs.highlightAuto(code).value
+        } catch {
+          codeRef.current.textContent = code
+        }
+      }
+    }
+  }, [code, ext])
+  return <pre className={className || "path-preview-text"}><code ref={codeRef}>{code}</code></pre>
 }
 
 interface FilePreviewModalProps {
@@ -100,7 +138,7 @@ function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
             </div>
           )}
           {content !== null && (
-            <pre className="path-preview-text">{content}</pre>
+            <HighlightedCode code={content} ext={getExt(filePath)} />
           )}
         </div>
       </div>

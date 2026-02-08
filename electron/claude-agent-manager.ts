@@ -233,7 +233,12 @@ export class ClaudeAgentManager {
     }
 
     if (session.state.isStreaming) {
-      // Queue the message instead of rejecting
+      // Abort current query and immediately send the new message
+      // The SDK session ID is preserved, so the next runQuery will resume with conversation context
+      session.abortController.abort()
+      session.pendingPermissions.clear()
+      session.pendingAskUser.clear()
+      session.messageQueue.length = 0
       session.messageQueue.push({ prompt, images })
       return true
     }

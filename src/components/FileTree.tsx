@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { HighlightedCode } from './PathLinker'
 
 interface FileEntry {
   name: string
@@ -177,7 +178,7 @@ function FilePreview({ filePath, fileName }: { filePath: string; fileName: strin
 
   if (content !== null) {
     return (
-      <pre className="file-preview-text">{content}</pre>
+      <HighlightedCode code={content} ext={getFileExt(fileName)} className="file-preview-text" />
     )
   }
 

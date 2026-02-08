@@ -101,17 +101,39 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const permissionCardRef = useRef<HTMLDivElement>(null)
+  const [userScrolledUp, setUserScrolledUp] = useState(false)
+  const isNearBottomRef = useRef(true)
+
+  // Check if scrolled near bottom (within 80px)
+  const checkIfNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80
+  }, [])
 
   // Auto-scroll to bottom — use instant scroll to avoid layout thrashing with rapid updates
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+    setUserScrolledUp(false)
+    isNearBottomRef.current = true
   }, [])
 
+  // Handle user scroll events on messages container
+  const handleMessagesScroll = useCallback(() => {
+    const nearBottom = checkIfNearBottom()
+    isNearBottomRef.current = nearBottom
+    setUserScrolledUp(!nearBottom)
+  }, [checkIfNearBottom])
+
+  // Only auto-scroll if user hasn't scrolled up
   useEffect(() => {
-    scrollToBottom()
-  }, [messages, streamingText, streamingThinking, scrollToBottom])
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+    }
+  }, [messages, streamingText, streamingThinking])
 
   // Sync pending action state to workspace store for breathing light indicator
   useEffect(() => {
@@ -729,8 +751,73 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     })
   }, [])
 
+  // Extract <system-reminder> blocks from text
+  const splitSystemReminders = (text: string): { content: string; reminders: string[] } => {
+    const reminders: string[] = []
+    const content = text.replace(/<system-reminder>\s*([\s\S]*?)\s*<\/system-reminder>/g, (_match, inner) => {
+      reminders.push(inner.trim())
+      return ''
+    }).trim()
+    return { content, reminders }
+  }
+
+  const renderTodoChecklist = (input: Record<string, unknown>) => {
+    const todos = input.todos as Array<{ content: string; status: string; activeForm?: string }> | undefined
+    if (!todos || !Array.isArray(todos)) return null
+    return (
+      <div className="claude-todo-checklist">
+        {todos.map((todo, i) => (
+          <div key={i} className={`claude-todo-item claude-todo-${todo.status}`}>
+            <span className="claude-todo-check">
+              {todo.status === 'completed' ? '\u2611' : todo.status === 'in_progress' ? '\u25B6' : '\u2610'}
+            </span>
+            <span className="claude-todo-text">{todo.content}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  const formatTimestamp = (ts: number): string => {
+    const d = new Date(ts)
+    const now = new Date()
+    const isToday = d.toDateString() === now.toDateString()
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    if (isToday) return time
+    // Not today — show full date + time
+    return d.toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  }
+
+  const formatFullTimestamp = (ts: number): string => {
+    return new Date(ts).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  }
+
+  const shouldShowTimeDivider = (current: MessageItem, prevItem: MessageItem | undefined): boolean => {
+    if (!prevItem) return false
+    const curTs = current.timestamp || 0
+    const prevTs = prevItem.timestamp || 0
+    if (!curTs || !prevTs) return false
+    // Show divider if gap > 30 minutes
+    return (curTs - prevTs) > 30 * 60 * 1000
+  }
+
   const renderMessage = (item: MessageItem, index: number) => {
     if (isToolCall(item)) {
+      // TodoWrite: render as a visual checklist
+      if (item.toolName === 'TodoWrite') {
+        return (
+          <div key={item.id || index} className="tl-item">
+            <div className={`tl-dot ${item.status === 'running' ? 'dot-running' : 'dot-success'}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">Checklist</span>
+              </div>
+              {renderTodoChecklist(item.input)}
+            </div>
+          </div>
+        )
+      }
+
       const dotClass = item.status === 'running' ? 'dot-running' : item.status === 'completed' ? 'dot-success' : 'dot-error'
       const desc = toolDescription(item.input)
       const inContent = toolInputContent(item.input)
@@ -744,6 +831,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
               <span className="claude-tool-name">{item.toolName}</span>
               {desc && <span className="claude-tool-desc">{desc}</span>}
               {!desc && <span className="claude-tool-summary">{toolInputSummary(item.toolName, item.input)}</span>}
+              {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
             </div>
             {item.denyReason && (
               <div className="claude-tool-reason">Reason: {item.denyReason}</div>
@@ -760,19 +848,42 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   {copiedId === inBlockId ? '✓' : '⧉'}
                 </span>
               </div>
-              {item.result && (
-                <div
-                  className="claude-tool-row"
-                  onClick={() => handleCopyBlock(item.result!, outBlockId)}
-                  title="Click to copy"
-                >
-                  <span className="claude-tool-row-label">OUT</span>
-                  <span className="claude-tool-row-content"><LinkedText text={typeof item.result === 'string' ? item.result : String(item.result)} /></span>
-                  <span className={`claude-tool-row-copy ${copiedId === outBlockId ? 'copied' : ''}`}>
-                    {copiedId === outBlockId ? '✓' : '⧉'}
-                  </span>
-                </div>
-              )}
+              {item.result && (() => {
+                const raw = typeof item.result === 'string' ? item.result : String(item.result)
+                const { content: outText, reminders } = splitSystemReminders(raw)
+                return (
+                  <>
+                    {outText && (
+                      <div
+                        className="claude-tool-row"
+                        onClick={() => handleCopyBlock(outText, outBlockId)}
+                        title="Click to copy"
+                      >
+                        <span className="claude-tool-row-label">OUT</span>
+                        <span className="claude-tool-row-content"><LinkedText text={outText} /></span>
+                        <span className={`claude-tool-row-copy ${copiedId === outBlockId ? 'copied' : ''}`}>
+                          {copiedId === outBlockId ? '✓' : '⧉'}
+                        </span>
+                      </div>
+                    )}
+                    {reminders.length > 0 && (
+                      <div
+                        className="claude-tool-row claude-system-reminder-row"
+                        onClick={() => toggleTool(`reminder-${item.id}`)}
+                      >
+                        <span className="claude-tool-row-label claude-reminder-label">SYS</span>
+                        <span className="claude-tool-row-content">
+                          {expandedTools.has(`reminder-${item.id}`)
+                            ? reminders.join('\n\n')
+                            : `system-reminder (${reminders.length})`
+                          }
+                        </span>
+                        <span className={`claude-tool-chevron ${expandedTools.has(`reminder-${item.id}`) ? 'expanded' : ''}`}>&#9654;</span>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </div>
             {item.denied && (
               <div className="claude-tool-interrupted">Tool interrupted</div>
@@ -795,7 +906,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       return (
         <div key={msg.id || index} className="tl-item tl-item-system">
           <div className="tl-dot dot-system" />
-          <div className="tl-content claude-message-system">{msg.content}</div>
+          <div className="tl-content claude-message-system">
+            {msg.content}
+            {msg.timestamp > 0 && (
+              <span className="claude-msg-time" title={formatFullTimestamp(msg.timestamp)}>{formatTimestamp(msg.timestamp)}</span>
+            )}
+          </div>
         </div>
       )
     }
@@ -803,7 +919,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       return (
         <div key={msg.id || index} className="tl-item tl-item-user">
           <div className="tl-dot dot-user" />
-          <div className="tl-content claude-message-user">{msg.content}</div>
+          <div className="tl-content claude-message-user">
+            {msg.content}
+            {msg.timestamp > 0 && (
+              <span className="claude-msg-time" title={formatFullTimestamp(msg.timestamp)}>{formatTimestamp(msg.timestamp)}</span>
+            )}
+          </div>
         </div>
       )
     }
@@ -837,6 +958,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
             )
           })()}
           {msg.content && <div className="claude-markdown">{msg.content}</div>}
+          {msg.timestamp > 0 && (
+            <span className="claude-msg-time" title={formatFullTimestamp(msg.timestamp)}>{formatTimestamp(msg.timestamp)}</span>
+          )}
         </div>
       </div>
     )
@@ -849,8 +973,15 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="claude-messages claude-timeline">
-        {messages.map((item, i) => renderMessage(item, i))}
+      <div className="claude-messages claude-timeline" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+        {messages.map((item, i) => {
+          const divider = shouldShowTimeDivider(item, messages[i - 1]) ? (
+            <div key={`divider-${i}`} className="claude-time-divider">
+              <span>{formatTimestamp(item.timestamp || 0)}</span>
+            </div>
+          ) : null
+          return <>{divider}{renderMessage(item, i)}</>
+        })}
         {isStreaming && !streamingText && !streamingThinking && (
           <div className="tl-item">
             <div className="tl-dot dot-thinking" />
@@ -887,6 +1018,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         )}
         <div ref={messagesEndRef} />
       </div>
+
+      {userScrolledUp && (
+        <button className="scroll-to-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom">
+          &#x2193;
+        </button>
+      )}
 
       {/* Permission Request Card — VS Code style vertical list */}
       {pendingPermission && (
