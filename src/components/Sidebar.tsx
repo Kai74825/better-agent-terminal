@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type { Workspace } from '../types'
+import { workspaceStore } from '../stores/workspace-store'
 import { ActivityIndicator } from './ActivityIndicator'
 
 interface SidebarProps {
@@ -82,12 +83,19 @@ export function Sidebar({
     }
   }, [contextMenu])
 
-  // Fetch GitHub URL when context menu opens
+  const [agentResting, setAgentResting] = useState(false)
+
+  // Fetch GitHub URL and agent resting state when context menu opens
   useEffect(() => {
-    if (!contextMenu) { setGithubUrl(null); return }
+    if (!contextMenu) { setGithubUrl(null); setAgentResting(false); return }
     const ws = workspaces.find(w => w.id === contextMenu.workspaceId)
     if (!ws) return
     window.electronAPI.git.getGithubUrl(ws.folderPath).then(url => setGithubUrl(url))
+    // Check if agent session is resting
+    const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)
+    if (agent) {
+      window.electronAPI.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
+    }
   }, [contextMenu, workspaces])
 
   // Context menu handler
@@ -378,6 +386,37 @@ export function Sidebar({
             </svg>
             Environment Variables
           </div>
+          {(() => {
+            const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)
+            if (!agent) return null
+            return (
+              <div
+                className="context-menu-item"
+                onClick={async () => {
+                  if (agentResting) {
+                    await window.electronAPI.claude.wakeSession(agent.id)
+                  } else {
+                    await window.electronAPI.claude.restSession(agent.id)
+                  }
+                  setContextMenu(null)
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  {agentResting ? (
+                    <>
+                      <circle cx="12" cy="12" r="10" />
+                      <polygon points="10 8 16 12 10 16 10 8" />
+                    </>
+                  ) : (
+                    <>
+                      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                    </>
+                  )}
+                </svg>
+                {agentResting ? 'Wake Agent' : 'Rest Agent'}
+              </div>
+            )
+          })()}
           <div className="context-menu-divider" />
           <div
             className="context-menu-item danger"

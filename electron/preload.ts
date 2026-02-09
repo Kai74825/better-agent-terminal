@@ -41,9 +41,6 @@ const electronAPI = {
     openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
     openPath: (folderPath: string) => ipcRenderer.invoke('shell:open-path', folderPath),
   },
-  git: {
-    getGithubUrl: (folderPath: string) => ipcRenderer.invoke('git:get-github-url', folderPath) as Promise<string | null>,
-  },
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     getVersion: () => ipcRenderer.invoke('update:get-version')
@@ -115,6 +112,18 @@ const electronAPI = {
       ipcRenderer.invoke('claude:list-sessions', cwd),
     resumeSession: (sessionId: string, sdkSessionId: string, cwd: string) =>
       ipcRenderer.invoke('claude:resume-session', sessionId, sdkSessionId, cwd),
+    restSession: (sessionId: string) =>
+      ipcRenderer.invoke('claude:rest-session', sessionId) as Promise<boolean>,
+    wakeSession: (sessionId: string) =>
+      ipcRenderer.invoke('claude:wake-session', sessionId) as Promise<boolean>,
+    isResting: (sessionId: string) =>
+      ipcRenderer.invoke('claude:is-resting', sessionId) as Promise<boolean>,
+    archiveMessages: (sessionId: string, messages: unknown[]) =>
+      ipcRenderer.invoke('claude:archive-messages', sessionId, messages) as Promise<boolean>,
+    loadArchived: (sessionId: string, offset: number, limit: number) =>
+      ipcRenderer.invoke('claude:load-archived', sessionId, offset, limit) as Promise<{ messages: unknown[]; total: number; hasMore: boolean }>,
+    clearArchive: (sessionId: string) =>
+      ipcRenderer.invoke('claude:clear-archive', sessionId) as Promise<boolean>,
     onHistory: (callback: (sessionId: string, items: unknown[]) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, sessionId: string, items: unknown[]) => callback(sessionId, items)
       ipcRenderer.on('claude:history', handler)
@@ -132,6 +141,7 @@ const electronAPI = {
     },
   },
   git: {
+    getGithubUrl: (folderPath: string) => ipcRenderer.invoke('git:get-github-url', folderPath) as Promise<string | null>,
     getBranch: (cwd: string) => ipcRenderer.invoke('git:branch', cwd) as Promise<string | null>,
     getLog: (cwd: string, count?: number) => ipcRenderer.invoke('git:log', cwd, count) as Promise<{ hash: string; author: string; date: string; message: string }[]>,
     getDiff: (cwd: string, commitHash?: string, filePath?: string) => ipcRenderer.invoke('git:diff', cwd, commitHash, filePath) as Promise<string>,

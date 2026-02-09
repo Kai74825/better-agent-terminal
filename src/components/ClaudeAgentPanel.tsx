@@ -97,6 +97,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [resumeSessions, setResumeSessions] = useState<SessionSummary[]>([])
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
+  // Message archiving — keep renderer memory bounded
+  const [loadedArchive, setLoadedArchive] = useState<MessageItem[]>([])
+  const [hasMoreArchived, setHasMoreArchived] = useState(false)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const archivedCountRef = useRef(0)
+  const loadedFromArchiveRef = useRef(0)
+  const archivingRef = useRef(false)
+  const VISIBLE_LIMIT = 200
+  const ARCHIVE_TRIGGER = 300 // archive when exceeding this
+  const LOAD_BATCH = 50
   const historyLoadedRef = useRef(false)
   const sessionStartedRef = useRef(false)
   const inputHistoryRef = useRef<string[]>([])
@@ -141,13 +151,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
   }, [messages, streamingText, streamingThinking])
 
+  // Combine archived + live messages for rendering and scanning
+  const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
+
   // Compute pinned user messages (last 3 user messages that scrolled above viewport)
   // Show regardless of scroll position — the point is to always show context
   const pinnedMessages = useMemo(() => {
     if (aboveViewportUserMsgIds.size === 0) return []
-    const userMsgs = messages.filter(m => !isToolCall(m) && (m as ClaudeMessage).role === 'user') as ClaudeMessage[]
+    const userMsgs = allMessages.filter(m => !isToolCall(m) && (m as ClaudeMessage).role === 'user') as ClaudeMessage[]
     return userMsgs.filter(m => aboveViewportUserMsgIds.has(m.id)).slice(-3)
-  }, [messages, aboveViewportUserMsgIds])
+  }, [allMessages, aboveViewportUserMsgIds])
 
   // IntersectionObserver to detect user messages scrolled above viewport
   useEffect(() => {
@@ -180,7 +193,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     userMsgRefsMap.current.forEach((el) => obs.observe(el))
 
     return () => obs.disconnect()
-  }, [messages])
+  }, [allMessages])
 
   // Callback ref to register user message elements for IntersectionObserver
   const setUserMsgRef = useCallback((id: string, el: HTMLDivElement | null) => {
@@ -199,6 +212,48 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     const el = userMsgRefsMap.current.get(msgId)
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
+
+  // Archive excess messages to disk when threshold is exceeded
+  useEffect(() => {
+    if (archivingRef.current || messages.length <= ARCHIVE_TRIGGER) return
+    archivingRef.current = true
+    const excess = messages.length - VISIBLE_LIMIT
+    const toArchive = messages.slice(0, excess)
+    window.electronAPI.claude.archiveMessages(sessionId, toArchive).then(() => {
+      archivedCountRef.current += excess
+      setHasMoreArchived(true)
+      setMessages(prev => prev.slice(excess))
+      archivingRef.current = false
+    }).catch(() => { archivingRef.current = false })
+  }, [messages.length, sessionId])
+
+  // Load more archived messages when scrolling to top
+  const loadMoreArchived = useCallback(async () => {
+    if (isLoadingMore || !hasMoreArchived) return
+    setIsLoadingMore(true)
+    const container = messagesContainerRef.current
+    const prevScrollHeight = container?.scrollHeight ?? 0
+    try {
+      const result = await window.electronAPI.claude.loadArchived(sessionId, loadedFromArchiveRef.current, LOAD_BATCH)
+      if (result.messages.length > 0) {
+        loadedFromArchiveRef.current += result.messages.length
+        setLoadedArchive(prev => [...(result.messages as MessageItem[]), ...prev])
+        setHasMoreArchived(result.hasMore)
+        // Preserve scroll position after prepending
+        requestAnimationFrame(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight
+            container.scrollTop += newScrollHeight - prevScrollHeight
+          }
+        })
+      } else {
+        setHasMoreArchived(false)
+      }
+    } catch {
+      setHasMoreArchived(false)
+    }
+    setIsLoadingMore(false)
+  }, [sessionId, isLoadingMore, hasMoreArchived])
 
   // Sync pending action state to workspace store for breathing light indicator
   useEffect(() => {
@@ -220,6 +275,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         if (message.id === `sys-init-${sessionId}`) {
           if (!historyLoadedRef.current) {
             setMessages([message])
+            // Clear archive on fresh session start
+            setLoadedArchive([])
+            archivedCountRef.current = 0
+            loadedFromArchiveRef.current = 0
+            setHasMoreArchived(false)
+            window.electronAPI.claude.clearArchive(sessionId).catch(() => {})
           }
           setStreamingText('')
           setStreamingThinking('')
@@ -329,8 +390,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) return
         historyLoadedRef.current = true
-        // Replace messages with the full history batch
+        // Replace messages with the full history batch and clear archive state
         setMessages(items as MessageItem[])
+        setLoadedArchive([])
+        archivedCountRef.current = 0
+        loadedFromArchiveRef.current = 0
+        setHasMoreArchived(false)
+        window.electronAPI.claude.clearArchive(sessionId).catch(() => {})
         setStreamingText('')
         setStreamingThinking('')
         // Reset the flag after a tick so future restarts work normally
@@ -857,14 +923,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     })
   }, [])
 
-  // Extract <system-reminder> blocks from text
-  const splitSystemReminders = (text: string): { content: string; reminders: string[] } => {
+  // Extract <system-reminder> and <tool_use_error> blocks from text
+  const splitSystemReminders = (text: string): { content: string; reminders: string[]; errors: string[] } => {
     const reminders: string[] = []
-    const content = text.replace(/<system-reminder>\s*([\s\S]*?)\s*<\/system-reminder>/g, (_match, inner) => {
+    const errors: string[] = []
+    let content = text.replace(/<system-reminder>\s*([\s\S]*?)\s*<\/system-reminder>/g, (_match, inner) => {
       reminders.push(inner.trim())
       return ''
+    })
+    content = content.replace(/<tool_use_error>\s*([\s\S]*?)\s*<\/tool_use_error>/g, (_match, inner) => {
+      errors.push(inner.trim())
+      return ''
     }).trim()
-    return { content, reminders }
+    return { content, reminders, errors }
   }
 
   const renderTodoChecklist = (input: Record<string, unknown>) => {
@@ -941,7 +1012,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         const maxTurns = item.input.max_turns ? String(item.input.max_turns) : null
         const runBg = item.input.run_in_background ? true : false
         const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
-        const { content: resultText, reminders: resultReminders } = splitSystemReminders(resultRaw)
+        const { content: resultText, reminders: resultReminders, errors: resultErrors } = splitSystemReminders(resultRaw)
         return (
           <div key={item.id || index} className="tl-item">
             <div className={`tl-dot ${dotClass}`} />
@@ -966,6 +1037,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                 </div>
                 <pre className="claude-task-prompt-text">{isPromptExpanded || !isLongPrompt ? prompt : truncatedPrompt}</pre>
               </div>
+              {resultErrors.length > 0 && resultErrors.map((err, i) => (
+                <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
+                  <span className="claude-tool-row-label claude-error-label">ERR</span>
+                  <span className="claude-tool-row-content">{err}</span>
+                </div></div>
+              ))}
               {resultText && (
                 <div className="claude-task-result">
                   <div className="claude-task-section-header" onClick={() => toggleTool(`task-result-${item.id}`)}>
@@ -1012,7 +1089,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         const totalLines = oldLines.length + newLines.length
         const isLongDiff = totalLines > 12
         const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
-        const { content: resultText } = splitSystemReminders(resultRaw)
+        const { content: resultText, errors: resultErrors } = splitSystemReminders(resultRaw)
         return (
           <div key={item.id || index} className="tl-item">
             <div className={`tl-dot ${dotClass}`} />
@@ -1041,6 +1118,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   </div>
                 )}
               </div>
+              {resultErrors.length > 0 && resultErrors.map((err, i) => (
+                <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
+                  <span className="claude-tool-row-label claude-error-label">ERR</span>
+                  <span className="claude-tool-row-content">{err}</span>
+                </div></div>
+              ))}
               {resultText && (
                 <div className="claude-tool-blocks">
                   <div className="claude-tool-row">
@@ -1070,7 +1153,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         const contentLines = content.split('\n')
         const isLong = contentLines.length > 8
         const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
-        const { content: resultText } = splitSystemReminders(resultRaw)
+        const { content: resultText, errors: resultErrors } = splitSystemReminders(resultRaw)
         return (
           <div key={item.id || index} className="tl-item">
             <div className={`tl-dot ${dotClass}`} />
@@ -1093,6 +1176,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   </div>
                 )}
               </div>
+              {resultErrors.length > 0 && resultErrors.map((err, i) => (
+                <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
+                  <span className="claude-tool-row-label claude-error-label">ERR</span>
+                  <span className="claude-tool-row-content">{err}</span>
+                </div></div>
+              ))}
               {resultText && (
                 <div className="claude-tool-blocks">
                   <div className="claude-tool-row">
@@ -1117,6 +1206,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       const inContent = toolInputContent(item.input)
       const inBlockId = `in-${item.id}`
       const outBlockId = `out-${item.id}`
+      const inLines = inContent.split('\n')
+      const isInLong = inLines.length > 3
+      const isInExpanded = expandedTools.has(`in-expand-${item.id}`)
       return (
         <div key={item.id || index} className="tl-item">
           <div className={`tl-dot ${dotClass}`} />
@@ -1137,16 +1229,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                 title="Click to copy"
               >
                 <span className="claude-tool-row-label">IN</span>
-                <span className="claude-tool-row-content"><LinkedText text={inContent} /></span>
+                <span className="claude-tool-row-content">
+                  <LinkedText text={isInLong && !isInExpanded ? inLines.slice(0, 3).join('\n') : inContent} />
+                  {isInLong && (
+                    <span
+                      className="claude-in-toggle"
+                      onClick={(e) => { e.stopPropagation(); toggleTool(`in-expand-${item.id}`) }}
+                    >
+                      {isInExpanded ? ' [collapse]' : ` ... [+${inLines.length - 3} lines]`}
+                    </span>
+                  )}
+                </span>
                 <span className={`claude-tool-row-copy ${copiedId === inBlockId ? 'copied' : ''}`}>
                   {copiedId === inBlockId ? '✓' : '⧉'}
                 </span>
               </div>
               {item.result && (() => {
                 const raw = typeof item.result === 'string' ? item.result : String(item.result)
-                const { content: outText, reminders } = splitSystemReminders(raw)
+                const { content: outText, reminders, errors } = splitSystemReminders(raw)
                 return (
                   <>
+                    {errors.length > 0 && errors.map((err, i) => (
+                      <div key={`err${i}`} className="claude-tool-row claude-tool-error-row">
+                        <span className="claude-tool-row-label claude-error-label">ERR</span>
+                        <span className="claude-tool-row-content">{err}</span>
+                      </div>
+                    ))}
                     {outText && (
                       <div
                         className="claude-tool-row"
@@ -1283,8 +1391,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         </div>
       )}
       <div className="claude-messages claude-timeline" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
-        {messages.map((item, i) => {
-          const divider = shouldShowTimeDivider(item, messages[i - 1]) ? (
+        {(hasMoreArchived || isLoadingMore) && (
+          <div className="claude-load-more">
+            <button
+              className="claude-load-more-btn"
+              onClick={loadMoreArchived}
+              disabled={isLoadingMore}
+            >
+              {isLoadingMore ? 'Loading...' : `Load older messages (${archivedCountRef.current - loadedFromArchiveRef.current} archived)`}
+            </button>
+          </div>
+        )}
+        {allMessages.map((item, i) => {
+          const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
             <div key={`divider-${i}`} className="claude-time-divider">
               <span>{formatTimestamp(item.timestamp || 0)}</span>
             </div>

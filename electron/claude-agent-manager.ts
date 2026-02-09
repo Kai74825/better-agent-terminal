@@ -114,6 +114,7 @@ interface SessionInstance {
   pendingAskUser: Map<string, PendingRequest>
   permissionMode: PermissionMode
   messageQueue: QueuedMessage[]
+  isResting?: boolean
 }
 
 // Persists SDK session IDs across stop/restart so we can resume conversations
@@ -133,10 +134,15 @@ export class ClaudeAgentManager {
     }
   }
 
+  private static readonly MSG_BUFFER_CAP = 300
+
   private addMessage(sessionId: string, msg: ClaudeMessage) {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.state.messages.push(msg)
+      if (session.state.messages.length > ClaudeAgentManager.MSG_BUFFER_CAP) {
+        session.state.messages = session.state.messages.slice(-ClaudeAgentManager.MSG_BUFFER_CAP)
+      }
     }
     this.send('claude:message', sessionId, msg)
   }
@@ -145,6 +151,9 @@ export class ClaudeAgentManager {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.state.messages.push(tool)
+      if (session.state.messages.length > ClaudeAgentManager.MSG_BUFFER_CAP) {
+        session.state.messages = session.state.messages.slice(-ClaudeAgentManager.MSG_BUFFER_CAP)
+      }
     }
     this.send('claude:tool-use', sessionId, tool)
   }
@@ -236,6 +245,11 @@ export class ClaudeAgentManager {
     if (!session) {
       this.send('claude:error', sessionId, 'Session not found')
       return false
+    }
+
+    // Auto-wake resting sessions
+    if (session.isResting) {
+      session.isResting = false
     }
 
     if (session.state.isStreaming) {
@@ -903,6 +917,38 @@ export class ClaudeAgentManager {
     }
 
     return result
+  }
+
+  /** Put a session to rest — kill subprocess but preserve sdkSessionId for resume */
+  restSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    session.abortController.abort()
+    session.messageQueue.length = 0
+    session.state.isStreaming = false
+    try { session.queryInstance?.close() } catch { /* ignore */ }
+    session.queryInstance = undefined
+    session.isResting = true
+    this.send('claude:message', sessionId, {
+      id: `sys-rest-${Date.now()}`,
+      sessionId,
+      role: 'system',
+      content: 'Session is resting. Send a message to wake it up.',
+      timestamp: Date.now(),
+    } satisfies ClaudeMessage)
+    return true
+  }
+
+  /** Wake a resting session — will auto-resume on next sendMessage */
+  wakeSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    session.isResting = false
+    return true
+  }
+
+  isResting(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.isResting ?? false
   }
 
   dispose() {

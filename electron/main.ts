@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, powerMonitor, clipboard, nativeImage } from 'electron'
 import path from 'path'
+import * as fs from 'fs/promises'
 import { PtyManager } from './pty-manager'
 import { ClaudeAgentManager } from './claude-agent-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
@@ -436,6 +437,56 @@ ipcMain.handle('claude:list-sessions', async (_event, cwd: string) => {
 
 ipcMain.handle('claude:resume-session', async (_event, sessionId: string, sdkSessionId: string, cwd: string) => {
   return claudeManager?.resumeSession(sessionId, sdkSessionId, cwd)
+})
+
+ipcMain.handle('claude:rest-session', async (_event, sessionId: string) => {
+  return claudeManager?.restSession(sessionId)
+})
+
+ipcMain.handle('claude:wake-session', async (_event, sessionId: string) => {
+  return claudeManager?.wakeSession(sessionId)
+})
+
+ipcMain.handle('claude:is-resting', async (_event, sessionId: string) => {
+  return claudeManager?.isResting(sessionId) ?? false
+})
+
+// Message archiving — serialize old messages to disk to free renderer memory
+const MESSAGE_ARCHIVE_DIR = path.join(app.getPath('userData'), 'message-archives')
+
+ipcMain.handle('claude:archive-messages', async (_event, sessionId: string, messages: unknown[]) => {
+  await fs.mkdir(MESSAGE_ARCHIVE_DIR, { recursive: true })
+  const filePath = path.join(MESSAGE_ARCHIVE_DIR, `${sessionId}.jsonl`)
+  const lines = messages.map(m => JSON.stringify(m)).join('\n') + '\n'
+  await fs.appendFile(filePath, lines, 'utf-8')
+  return true
+})
+
+ipcMain.handle('claude:load-archived', async (_event, sessionId: string, offset: number, limit: number) => {
+  const filePath = path.join(MESSAGE_ARCHIVE_DIR, `${sessionId}.jsonl`)
+  try {
+    const content = await fs.readFile(filePath, 'utf-8')
+    const lines = content.trim().split('\n').filter(Boolean)
+    const total = lines.length
+    // Load from the end: offset = how many we've already loaded back
+    const end = total - offset
+    const start = Math.max(0, end - limit)
+    if (end <= 0) return { messages: [], total, hasMore: false }
+    const slice = lines.slice(start, end)
+    return {
+      messages: slice.map(l => JSON.parse(l)),
+      total,
+      hasMore: start > 0,
+    }
+  } catch {
+    return { messages: [], total: 0, hasMore: false }
+  }
+})
+
+ipcMain.handle('claude:clear-archive', async (_event, sessionId: string) => {
+  const filePath = path.join(MESSAGE_ARCHIVE_DIR, `${sessionId}.jsonl`)
+  try { await fs.unlink(filePath) } catch { /* ignore */ }
+  return true
 })
 
 // Git branch detection

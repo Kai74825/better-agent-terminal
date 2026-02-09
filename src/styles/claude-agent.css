@@ -198,6 +198,31 @@
   opacity: 0.7;
 }
 
+/* Load more archived messages button */
+.claude-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+.claude-load-more-btn {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 4px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.claude-load-more-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.claude-load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .claude-message-assistant {
   font-size: 13px;
   line-height: 1.5;
@@ -487,6 +512,30 @@
   font-style: italic;
   margin: 4px 0 8px;
   padding-bottom: 4px;
+}
+
+/* Tool error row */
+.claude-tool-error-row {
+  background: rgba(239, 68, 68, 0.08);
+}
+.claude-error-label {
+  color: var(--danger-color) !important;
+  font-weight: 600;
+}
+.claude-tool-error-row .claude-tool-row-content {
+  color: var(--danger-color);
+}
+
+/* IN block collapse toggle */
+.claude-in-toggle {
+  color: var(--accent-color);
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.claude-in-toggle:hover {
+  opacity: 1;
+  text-decoration: underline;
 }
 
 /* Diff View (Edit/Write tools) */
