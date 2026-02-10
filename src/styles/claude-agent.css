@@ -50,6 +50,50 @@
   opacity: 0.8;
 }
 
+/* Active Tasks indicator bar */
+.claude-active-tasks {
+  flex-shrink: 0;
+  background: linear-gradient(180deg, rgba(224, 153, 86, 0.06) 0%, var(--bg-primary) 100%);
+  border-bottom: 1px solid var(--border-color);
+  padding: 4px 8px 4px 40px;
+  z-index: 5;
+}
+.claude-active-task-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+.claude-active-task-item:hover {
+  background: var(--bg-hover);
+}
+.claude-active-task-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--claude-accent);
+  flex-shrink: 0;
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.claude-active-task-label {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+}
+.claude-active-task-time {
+  font-size: 11px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  color: var(--claude-accent);
+  opacity: 0.8;
+  margin-left: auto;
+}
+
 .claude-messages {
   flex: 1;
   overflow-y: auto;
@@ -497,6 +541,24 @@
   overflow-y: auto;
 }
 
+/* TaskOutput back-link to parent Task */
+.claude-taskout-link {
+  font-size: 11px;
+  color: var(--accent-color);
+  cursor: pointer;
+  opacity: 0.7;
+}
+.claude-taskout-link:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* Elapsed time on running tasks */
+.claude-task-elapsed {
+  color: var(--claude-accent) !important;
+  animation: claude-blink 2s step-end infinite;
+}
+
 /* Deny reason */
 .claude-tool-reason {
   font-size: 12px;
@@ -536,6 +598,98 @@
 .claude-in-toggle:hover {
   opacity: 1;
   text-decoration: underline;
+}
+
+/* Plan View (ExitPlanMode / EnterPlanMode) */
+.claude-plan-block {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border-left: 3px solid #5b9bd5;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.claude-plan-content {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  max-height: 80px;
+  overflow: hidden;
+}
+.claude-plan-open-btn {
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  color: #5b9bd5;
+  cursor: pointer;
+  user-select: none;
+}
+.claude-plan-open-btn:hover {
+  text-decoration: underline;
+}
+
+/* Plan Modal (overlay) */
+.claude-plan-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.claude-plan-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  width: 72vw;
+  max-width: 920px;
+  height: 72vh;
+  max-height: 720px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.claude-plan-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.claude-plan-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.claude-plan-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.claude-plan-modal-close:hover {
+  color: var(--text-primary);
+}
+.claude-plan-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
 }
 
 /* Diff View (Edit/Write tools) */

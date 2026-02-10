@@ -97,6 +97,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [resumeSessions, setResumeSessions] = useState<SessionSummary[]>([])
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
+  const [contentModal, setContentModal] = useState<{ title: string; content: string } | null>(null)
   // Message archiving — keep renderer memory bounded
   const [loadedArchive, setLoadedArchive] = useState<MessageItem[]>([])
   const [hasMoreArchived, setHasMoreArchived] = useState(false)
@@ -114,6 +115,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const inputDraftRef = useRef('')
   const initialModeAppliedRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const streamingThinkingRef = useRef<HTMLPreElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const permissionCardRef = useRef<HTMLDivElement>(null)
@@ -151,8 +153,29 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
   }, [messages, streamingText, streamingThinking])
 
+  // Auto-scroll streaming thinking <pre> to bottom so latest content is visible
+  useEffect(() => {
+    const el = streamingThinkingRef.current
+    if (el && showThinking) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [streamingThinking, showThinking])
+
   // Combine archived + live messages for rendering and scanning
   const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
+
+  // Active tasks (running Task tool calls) for the indicator bar
+  const activeTasks = useMemo(() =>
+    allMessages.filter(m => isToolCall(m) && m.toolName === 'Task' && m.status === 'running') as ClaudeToolCall[]
+  , [allMessages])
+
+  // Tick counter to force re-render for elapsed time display
+  const [, setElapsedTick] = useState(0)
+  useEffect(() => {
+    if (activeTasks.length === 0) return
+    const interval = setInterval(() => setElapsedTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [activeTasks.length])
 
   // Compute pinned user messages (last 3 user messages that scrolled above viewport)
   // Show regardless of scroll position — the point is to always show context
@@ -721,6 +744,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (!isActive) return
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (contentModal) {
+          e.preventDefault()
+          setContentModal(null)
+          return
+        }
         if (showModelList) {
           e.preventDefault()
           setShowModelList(false)
@@ -785,7 +813,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, contentModal])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -969,6 +997,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     return new Date(ts).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
   }
 
+  const formatElapsed = (ts: number): string => {
+    const secs = Math.floor((Date.now() - ts) / 1000)
+    const m = Math.floor(secs / 60)
+    const s = secs % 60
+    return `${m}:${String(s).padStart(2, '0')}`
+  }
+
   const shouldShowTimeDivider = (current: MessageItem, prevItem: MessageItem | undefined): boolean => {
     if (!prevItem) return false
     const curTs = current.timestamp || 0
@@ -998,6 +1033,55 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       const dotClass = item.denied ? 'dot-denied' : item.status === 'running' ? 'dot-running' : item.status === 'completed' ? 'dot-success' : 'dot-error'
       const desc = toolDescription(item.input)
 
+      // ExitPlanMode / EnterPlanMode: show plan content in readable view
+      if (item.toolName === 'ExitPlanMode' || item.toolName === 'EnterPlanMode') {
+        const planText = item.input.plan ? String(item.input.plan) : ''
+        const planLines = planText.split('\n')
+        const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
+        const { content: resultText, errors: resultErrors } = splitSystemReminders(resultRaw)
+        return (
+          <div key={item.id || index} className="tl-item">
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">{item.toolName === 'ExitPlanMode' ? 'Exit Plan' : 'Enter Plan'}</span>
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              {planText && (
+                <div className="claude-plan-block">
+                  <pre className="claude-plan-content">{planLines.slice(0, 3).join('\n')}{planLines.length > 3 ? '\n...' : ''}</pre>
+                  <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: 'Plan', content: planText })}>
+                    View full plan ({planLines.length} lines)
+                  </div>
+                </div>
+              )}
+              {resultErrors.length > 0 && resultErrors.map((err, i) => (
+                <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
+                  <span className="claude-tool-row-label claude-error-label">ERR</span>
+                  <span className="claude-tool-row-content">{err}</span>
+                </div></div>
+              ))}
+              {resultText && (
+                <div className="claude-tool-blocks">
+                  <div className="claude-tool-row">
+                    <span className="claude-tool-row-label">OUT</span>
+                    <span className="claude-tool-row-content"><LinkedText text={resultText} /></span>
+                  </div>
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">Full Input</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
       // Task tool: custom structured renderer
       if (item.toolName === 'Task') {
         const prompt = String(item.input.prompt || '')
@@ -1013,14 +1097,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         const runBg = item.input.run_in_background ? true : false
         const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
         const { content: resultText, reminders: resultReminders, errors: resultErrors } = splitSystemReminders(resultRaw)
+        const resultLines = resultText.split('\n')
+        const isLongResult = resultLines.length > 6 || resultText.length > 400
         return (
-          <div key={item.id || index} className="tl-item">
+          <div key={item.id || index} className="tl-item" data-tool-id={item.id}>
             <div className={`tl-dot ${dotClass}`} />
             <div className="tl-content">
               <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
                 <span className="claude-tool-name">Task</span>
                 {item.input.subagent_type && <span className="claude-tool-badge">{String(item.input.subagent_type)}</span>}
                 {desc && <span className="claude-tool-desc">{desc}</span>}
+                {item.status === 'running' && item.timestamp > 0 && (
+                  <span className="claude-task-tag claude-task-elapsed">{formatElapsed(item.timestamp)}</span>
+                )}
                 {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
               </div>
               {(model || maxTurns || runBg) && (
@@ -1036,6 +1125,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   <span className={`claude-tool-chevron ${isPromptExpanded ? 'expanded' : ''}`}>&#9654;</span>
                 </div>
                 <pre className="claude-task-prompt-text">{isPromptExpanded || !isLongPrompt ? prompt : truncatedPrompt}</pre>
+                {isLongPrompt && !isPromptExpanded && (
+                  <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: 'Task Prompt', content: prompt })}>
+                    View prompt ({promptLines.length} lines)
+                  </div>
+                )}
               </div>
               {resultErrors.length > 0 && resultErrors.map((err, i) => (
                 <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
@@ -1051,6 +1145,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                   </div>
                   {isResultExpanded && (
                     <div className="claude-task-result-text"><LinkedText text={resultText} /></div>
+                  )}
+                  {!isResultExpanded && isLongResult && (
+                    <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: 'Task Result', content: resultText })}>
+                      View result ({resultLines.length} lines)
+                    </div>
                   )}
                 </div>
               )}
@@ -1203,6 +1302,75 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         )
       }
 
+      // TaskOutput: link back to parent Task
+      if (item.toolName === 'TaskOutput') {
+        const taskId = item.input.task_id ? String(item.input.task_id) : null
+        const parentTask = taskId
+          ? allMessages.find(m => isToolCall(m) && m.toolName === 'Task' && m.id === taskId) as ClaudeToolCall | undefined
+          : null
+        const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
+        const { content: resultText, errors: resultErrors } = splitSystemReminders(resultRaw)
+        const resultLines = resultText.split('\n')
+        const isLongResult = resultLines.length > 6 || resultText.length > 400
+        const isResultExpanded = expandedTools.has(`taskout-result-${item.id}`)
+        return (
+          <div key={item.id || index} className="tl-item" data-tool-id={item.id}>
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">TaskOutput</span>
+                {parentTask?.input.subagent_type && (
+                  <span className="claude-tool-badge">{String(parentTask.input.subagent_type)}</span>
+                )}
+                {parentTask && (
+                  <span
+                    className="claude-taskout-link"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const el = document.querySelector(`[data-tool-id="${parentTask.id}"]`)
+                      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }}
+                  >
+                    from Task
+                  </span>
+                )}
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              {resultErrors.length > 0 && resultErrors.map((err, i) => (
+                <div key={`err${i}`} className="claude-tool-blocks"><div className="claude-tool-row claude-tool-error-row">
+                  <span className="claude-tool-row-label claude-error-label">ERR</span>
+                  <span className="claude-tool-row-content">{err}</span>
+                </div></div>
+              ))}
+              {resultText && (
+                <div className="claude-task-result">
+                  <div className="claude-task-section-header" onClick={() => toggleTool(`taskout-result-${item.id}`)}>
+                    <span className="claude-task-section-label">RESULT</span>
+                    <span className={`claude-tool-chevron ${isResultExpanded ? 'expanded' : ''}`}>&#9654;</span>
+                  </div>
+                  {(isResultExpanded || !isLongResult) && (
+                    <div className="claude-task-result-text"><LinkedText text={resultText} /></div>
+                  )}
+                  {!isResultExpanded && isLongResult && (
+                    <div className="claude-plan-open-btn" onClick={() => setContentModal({ title: 'TaskOutput Result', content: resultText })}>
+                      View result ({resultLines.length} lines)
+                    </div>
+                  )}
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">Full Input</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
       const inContent = toolInputContent(item.input)
       const inBlockId = `in-${item.id}`
       const outBlockId = `out-${item.id}`
@@ -1210,7 +1378,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       const isInLong = inLines.length > 3
       const isInExpanded = expandedTools.has(`in-expand-${item.id}`)
       return (
-        <div key={item.id || index} className="tl-item">
+        <div key={item.id || index} className="tl-item" data-tool-id={item.id}>
           <div className={`tl-dot ${dotClass}`} />
           <div className="tl-content">
             <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
@@ -1390,6 +1558,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           ))}
         </div>
       )}
+      {activeTasks.length > 0 && (
+        <div className="claude-active-tasks">
+          {activeTasks.map(task => {
+            const label = task.input.description
+              ? String(task.input.description).slice(0, 60)
+              : task.input.subagent_type
+                ? String(task.input.subagent_type)
+                : 'Task'
+            return (
+              <div
+                key={task.id}
+                className="claude-active-task-item"
+                onClick={() => {
+                  const el = document.querySelector(`[data-tool-id="${task.id}"]`)
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                }}
+              >
+                <span className="claude-active-task-dot" />
+                <span className="claude-active-task-label">{label}</span>
+                <span className="claude-active-task-time">{formatElapsed(task.timestamp)}</span>
+                {task.input.run_in_background && <span className="claude-task-tag">bg</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
       <div className="claude-messages claude-timeline" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {(hasMoreArchived || isLoadingMore) && (
           <div className="claude-load-more">
@@ -1431,7 +1625,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                 <span className="claude-thinking-label">Thinking{isStreaming && streamingThinking && !streamingText ? '...' : ''}</span>
               </div>
               {showThinking && (
-                <pre className="claude-thinking-content">{streamingThinking}</pre>
+                <pre ref={streamingThinkingRef} className="claude-thinking-content">{streamingThinking}</pre>
               )}
             </div>
           </div>
@@ -1700,6 +1894,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           </div>
         </div>
       </div>
+      )}
+
+      {/* Plan Modal */}
+      {contentModal && (
+        <div className="claude-plan-overlay" onClick={() => setContentModal(null)}>
+          <div className="claude-plan-modal" onClick={e => e.stopPropagation()}>
+            <div className="claude-plan-modal-header">
+              <span className="claude-plan-modal-title">{contentModal.title}</span>
+              <button className="claude-plan-modal-close" onClick={() => setContentModal(null)}>&times;</button>
+            </div>
+            <pre className="claude-plan-modal-body">{contentModal.content}</pre>
+          </div>
+        </div>
       )}
 
       {/* Status lines */}

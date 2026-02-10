@@ -481,6 +481,20 @@ export class ClaudeAgentManager {
           }
         }
 
+        if (message.type === 'compact') {
+          const compactMsg = message as { displayText?: string }
+          // Strip ANSI escape codes from SDK display text
+          const rawText = compactMsg.displayText || 'Context compacted'
+          const cleanText = rawText.replace(/\x1b\[[0-9;]*m/g, '')
+          this.addMessage(sessionId, {
+            id: `sys-compact-${Date.now()}`,
+            sessionId,
+            role: 'system',
+            content: cleanText,
+            timestamp: Date.now(),
+          })
+        }
+
         if (message.type === 'result') {
           const resultMsg = message as {
             subtype: string
