@@ -3,7 +3,7 @@ import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isToolCall } from '../types/claude-agent'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
-import { LinkedText } from './PathLinker'
+import { LinkedText, FilePreviewModal } from './PathLinker'
 
 interface SessionMeta {
   model?: string
@@ -98,6 +98,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
   const [contentModal, setContentModal] = useState<{ title: string; content: string } | null>(null)
+  // Ctrl+P file picker
+  const [showFilePicker, setShowFilePicker] = useState(false)
+  const [filePickerQuery, setFilePickerQuery] = useState('')
+  const [filePickerResults, setFilePickerResults] = useState<{ name: string; path: string; isDirectory: boolean }[]>([])
+  const [filePickerIndex, setFilePickerIndex] = useState(0)
+  const [filePickerPreview, setFilePickerPreview] = useState<string | null>(null)
+  const filePickerInputRef = useRef<HTMLInputElement>(null)
   // Message archiving — keep renderer memory bounded
   const [loadedArchive, setLoadedArchive] = useState<MessageItem[]>([])
   const [hasMoreArchived, setHasMoreArchived] = useState(false)
@@ -476,6 +483,25 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     window.electronAPI.git.getBranch(cwd).then(branch => setGitBranch(branch)).catch(() => setGitBranch(null))
   }, [cwd])
 
+  // File picker: debounced search
+  useEffect(() => {
+    if (!showFilePicker) return
+    if (!filePickerQuery.trim()) {
+      setFilePickerResults([])
+      setFilePickerIndex(0)
+      return
+    }
+    const timer = setTimeout(() => {
+      window.electronAPI.fs.search(cwd, filePickerQuery.trim()).then((results: { name: string; path: string; isDirectory: boolean }[]) => {
+        setFilePickerResults(results || [])
+        setFilePickerIndex(0)
+      }).catch(() => {
+        setFilePickerResults([])
+      })
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [filePickerQuery, showFilePicker, cwd])
+
   // Focus textarea when active
   useEffect(() => {
     if (isActive) {
@@ -743,7 +769,27 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   useEffect(() => {
     if (!isActive) return
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+P: open file picker
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+        e.preventDefault()
+        setShowFilePicker(true)
+        setFilePickerQuery('')
+        setFilePickerResults([])
+        setFilePickerIndex(0)
+        setTimeout(() => filePickerInputRef.current?.focus(), 50)
+        return
+      }
       if (e.key === 'Escape') {
+        if (filePickerPreview) {
+          e.preventDefault()
+          setFilePickerPreview(null)
+          return
+        }
+        if (showFilePicker) {
+          e.preventDefault()
+          setShowFilePicker(false)
+          return
+        }
         if (contentModal) {
           e.preventDefault()
           setContentModal(null)
@@ -813,7 +859,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
     window.addEventListener('keydown', handleGlobalKeyDown)
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, contentModal])
+  }, [isActive, isStreaming, handleStop, pendingPermission, permissionFocus, handlePermissionSelect, showResumeList, showModelList, contentModal, showFilePicker, filePickerPreview])
 
   const handleAskUserSubmit = useCallback(() => {
     if (!pendingQuestion) return
@@ -1803,6 +1849,78 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           )}
           <div className="claude-permission-hint">Esc to cancel</div>
         </div>
+      )}
+
+      {/* Ctrl+P File Picker */}
+      {showFilePicker && (
+        <div className="claude-file-picker" onClick={() => setShowFilePicker(false)}>
+          <div className="claude-file-picker-box" onClick={e => e.stopPropagation()}>
+            <input
+              ref={filePickerInputRef}
+              className="claude-file-picker-input"
+              type="text"
+              placeholder="Search files by name..."
+              value={filePickerQuery}
+              onChange={e => setFilePickerQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setFilePickerIndex(prev => Math.min(prev + 1, filePickerResults.length - 1))
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setFilePickerIndex(prev => Math.max(prev - 1, 0))
+                } else if (e.key === 'Enter' && filePickerResults.length > 0) {
+                  e.preventDefault()
+                  const selected = filePickerResults[filePickerIndex]
+                  if (selected && !selected.isDirectory) {
+                    setShowFilePicker(false)
+                    setFilePickerPreview(selected.path)
+                  }
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setShowFilePicker(false)
+                }
+              }}
+            />
+            <div className="claude-file-picker-list">
+              {!filePickerQuery.trim() && (
+                <div className="claude-file-picker-empty">Type to search files...</div>
+              )}
+              {filePickerQuery.trim() && filePickerResults.length === 0 && (
+                <div className="claude-file-picker-empty">No files found</div>
+              )}
+              {filePickerResults.slice(0, 20).map((item, i) => {
+                const relPath = item.path.startsWith(cwd)
+                  ? item.path.slice(cwd.length).replace(/^[\\/]/, '')
+                  : item.path
+                return (
+                  <div
+                    key={item.path}
+                    className={`claude-file-picker-item${i === filePickerIndex ? ' selected' : ''}${item.isDirectory ? ' is-dir' : ''}`}
+                    onClick={() => {
+                      if (!item.isDirectory) {
+                        setShowFilePicker(false)
+                        setFilePickerPreview(item.path)
+                      }
+                    }}
+                    onMouseEnter={() => setFilePickerIndex(i)}
+                  >
+                    <span className="claude-file-picker-name">{item.isDirectory ? '\uD83D\uDCC1' : '\uD83D\uDCC4'} {item.name}</span>
+                    <span className="claude-file-picker-path">{relPath}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Preview from Picker */}
+      {filePickerPreview && (
+        <FilePreviewModal
+          filePath={filePickerPreview}
+          onClose={() => setFilePickerPreview(null)}
+        />
       )}
 
       {/* Input area — hidden when permission card, ask-user card, or resume/model list is visible */}

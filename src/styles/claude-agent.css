@@ -1445,3 +1445,88 @@
   color: var(--accent-color);
   font-weight: 500;
 }
+
+/* ============================================
+   Ctrl+P File Picker
+   ============================================ */
+.claude-file-picker {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  z-index: 999;
+}
+.claude-file-picker-box {
+  width: 60vw;
+  max-width: 600px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.claude-file-picker-input {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  outline: none;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.claude-file-picker-input::placeholder {
+  color: var(--text-secondary);
+}
+.claude-file-picker-list {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.claude-file-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.claude-file-picker-item:hover,
+.claude-file-picker-item.selected {
+  background: var(--bg-hover);
+}
+.claude-file-picker-item.selected {
+  background: rgba(100, 149, 237, 0.15);
+}
+.claude-file-picker-item.is-dir {
+  opacity: 0.5;
+  cursor: default;
+}
+.claude-file-picker-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.claude-file-picker-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.claude-file-picker-empty {
+  padding: 16px 14px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}

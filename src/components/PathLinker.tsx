@@ -96,11 +96,18 @@ interface FilePreviewModalProps {
   onClose: () => void
 }
 
-function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
   const [content, setContent] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [matchCount, setMatchCount] = useState(0)
+  const [currentMatch, setCurrentMatch] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -129,6 +136,96 @@ function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
     return () => { cancelled = true }
   }, [filePath])
 
+  const handleCopyPath = useCallback(() => {
+    navigator.clipboard.writeText(filePath).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [filePath])
+
+  // Search: highlight matches and navigate
+  useEffect(() => {
+    if (!searchQuery || !bodyRef.current) { setMatchCount(0); setCurrentMatch(0); return }
+    // Remove previous highlights
+    const body = bodyRef.current
+    const marks = body.querySelectorAll('mark.search-highlight')
+    marks.forEach(m => {
+      const parent = m.parentNode
+      if (parent) { parent.replaceChild(document.createTextNode(m.textContent || ''), m); parent.normalize() }
+    })
+    if (!searchQuery.trim()) { setMatchCount(0); setCurrentMatch(0); return }
+    // Walk text nodes and wrap matches
+    const query = searchQuery.toLowerCase()
+    const textNodes: Text[] = []
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null)
+    let node: Text | null
+    while ((node = walker.nextNode() as Text | null)) {
+      if (node.nodeValue && node.nodeValue.toLowerCase().includes(query)) textNodes.push(node)
+    }
+    let total = 0
+    for (const tn of textNodes) {
+      const text = tn.nodeValue || ''
+      const frag = document.createDocumentFragment()
+      let lastIdx = 0
+      const lowerText = text.toLowerCase()
+      let idx = lowerText.indexOf(query, lastIdx)
+      while (idx !== -1) {
+        if (idx > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, idx)))
+        const mark = document.createElement('mark')
+        mark.className = 'search-highlight'
+        mark.dataset.matchIndex = String(total)
+        mark.textContent = text.slice(idx, idx + query.length)
+        frag.appendChild(mark)
+        total++
+        lastIdx = idx + query.length
+        idx = lowerText.indexOf(query, lastIdx)
+      }
+      if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)))
+      tn.parentNode?.replaceChild(frag, tn)
+    }
+    setMatchCount(total)
+    setCurrentMatch(total > 0 ? 1 : 0)
+    // Scroll to first match
+    if (total > 0) {
+      const first = body.querySelector('mark.search-highlight[data-match-index="0"]')
+      first?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      body.querySelectorAll('mark.search-highlight').forEach(m => m.classList.remove('current'))
+      first?.classList.add('current')
+    }
+  }, [searchQuery])
+
+  const navigateMatch = useCallback((direction: 1 | -1) => {
+    if (matchCount === 0 || !bodyRef.current) return
+    const next = direction === 1
+      ? (currentMatch % matchCount) + 1
+      : ((currentMatch - 2 + matchCount) % matchCount) + 1
+    setCurrentMatch(next)
+    const marks = bodyRef.current.querySelectorAll('mark.search-highlight')
+    marks.forEach(m => m.classList.remove('current'))
+    const target = bodyRef.current.querySelector(`mark.search-highlight[data-match-index="${next - 1}"]`)
+    target?.classList.add('current')
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [currentMatch, matchCount])
+
+  // Ctrl+F to open search, Escape to close
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        setSearchOpen(true)
+        setTimeout(() => searchInputRef.current?.focus(), 50)
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        e.stopPropagation()
+        setSearchOpen(false)
+        setSearchQuery('')
+      }
+    }
+    const modal = bodyRef.current?.closest('.path-preview-modal')
+    modal?.addEventListener('keydown', handleKeyDown as EventListener)
+    return () => modal?.removeEventListener('keydown', handleKeyDown as EventListener)
+  }, [searchOpen])
+
   const fileName = filePath.split(/[\\\/]/).pop() || filePath
 
   return (
@@ -136,10 +233,45 @@ function FilePreviewModal({ filePath, onClose }: FilePreviewModalProps) {
       <div className="path-preview-modal" onClick={e => e.stopPropagation()}>
         <div className="path-preview-header">
           <span className="path-preview-title" title={filePath}>{fileName}</span>
-          <span className="path-preview-path">{filePath}</span>
+          <span className="path-preview-path" onClick={handleCopyPath} title="Click to copy path">
+            {copied ? 'Copied!' : filePath}
+          </span>
+          <button
+            className="path-preview-btn"
+            onClick={handleCopyPath}
+            title="Copy file path"
+          >
+            {copied ? '\u2713' : '\u2398'}
+          </button>
+          <button
+            className="path-preview-btn"
+            onClick={() => { setSearchOpen(o => !o); setTimeout(() => searchInputRef.current?.focus(), 50) }}
+            title="Search (Ctrl+F)"
+          >
+            &#128269;
+          </button>
           <button className="path-preview-close" onClick={onClose}>×</button>
         </div>
-        <div className="path-preview-body">
+        {searchOpen && (
+          <div className="path-preview-search">
+            <input
+              ref={searchInputRef}
+              className="path-preview-search-input"
+              type="text"
+              placeholder="Search..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); navigateMatch(e.shiftKey ? -1 : 1) }
+                if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); setSearchQuery('') }
+              }}
+            />
+            {searchQuery && <span className="path-preview-search-count">{matchCount > 0 ? `${currentMatch}/${matchCount}` : 'No results'}</span>}
+            <button className="path-preview-search-nav" onClick={() => navigateMatch(-1)} disabled={matchCount === 0} title="Previous (Shift+Enter)">&uarr;</button>
+            <button className="path-preview-search-nav" onClick={() => navigateMatch(1)} disabled={matchCount === 0} title="Next (Enter)">&darr;</button>
+          </div>
+        )}
+        <div className="path-preview-body" ref={bodyRef}>
           {loading && <div className="path-preview-status">Loading...</div>}
           {error && <div className="path-preview-status">{error}</div>}
           {imageUrl && (

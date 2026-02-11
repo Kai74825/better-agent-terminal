@@ -557,7 +557,7 @@ ipcMain.handle('git:diff-files', async (_event, cwd: string, commitHash?: string
 ipcMain.handle('git:status', async (_event, cwd: string) => {
   try {
     const { execSync } = await import('child_process')
-    const raw = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 })
+    const raw = execSync('git status --porcelain -uall', { cwd, encoding: 'utf-8', timeout: 5000 })
     if (!raw.trim()) return []
     return raw.trim().split('\n').map(line => ({
       status: line.substring(0, 2).trim(),
