@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import type { Workspace } from '../types'
 import { workspaceStore } from '../stores/workspace-store'
 import { ActivityIndicator } from './ActivityIndicator'
@@ -17,6 +17,7 @@ interface SidebarProps {
   onRenameWorkspace: (id: string, alias: string) => void
   onReorderWorkspaces: (workspaceIds: string[]) => void
   onOpenEnvVars: (workspaceId: string) => void
+  onDetachWorkspace: (workspaceId: string) => void
   onOpenSettings: () => void
   onOpenAbout: () => void
 }
@@ -35,6 +36,7 @@ export function Sidebar({
   onRenameWorkspace,
   onReorderWorkspaces,
   onOpenEnvVars,
+  onDetachWorkspace,
   onOpenSettings,
   onOpenAbout
 }: Readonly<SidebarProps>) {
@@ -97,6 +99,19 @@ export function Sidebar({
       window.electronAPI.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
     }
   }, [contextMenu, workspaces])
+
+  // Adjust context menu position to stay within viewport
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) { setMenuPos(null); return }
+    const rect = contextMenuRef.current.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    let { x, y } = contextMenu
+    if (y + rect.height > vh) y = Math.max(0, vh - rect.height - 4)
+    if (x + rect.width > vw) x = Math.max(0, vw - rect.width - 4)
+    setMenuPos({ x, y })
+  }, [contextMenu])
 
   // Context menu handler
   const handleContextMenu = useCallback((e: React.MouseEvent, workspaceId: string) => {
@@ -334,7 +349,10 @@ export function Sidebar({
         <div
           ref={contextMenuRef}
           className="workspace-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={menuPos
+            ? { left: menuPos.x, top: menuPos.y }
+            : { left: contextMenu.x, top: contextMenu.y, visibility: 'hidden' as const }
+          }
         >
           <div
             className="context-menu-item"
@@ -385,6 +403,20 @@ export function Sidebar({
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
             Environment Variables
+          </div>
+          <div
+            className="context-menu-item"
+            onClick={() => {
+              onDetachWorkspace(contextMenu.workspaceId)
+              setContextMenu(null)
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            Detach to Window
           </div>
           {(() => {
             const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)

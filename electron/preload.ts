@@ -23,7 +23,20 @@ const electronAPI = {
   },
   workspace: {
     save: (data: string) => ipcRenderer.invoke('workspace:save', data),
-    load: () => ipcRenderer.invoke('workspace:load')
+    load: () => ipcRenderer.invoke('workspace:load'),
+    detach: (workspaceId: string) => ipcRenderer.invoke('workspace:detach', workspaceId),
+    reattach: (workspaceId: string) => ipcRenderer.invoke('workspace:reattach', workspaceId),
+    getDetachedId: () => new URLSearchParams(window.location.search).get('detached'),
+    onDetached: (callback: (workspaceId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => callback(workspaceId)
+      ipcRenderer.on('workspace:detached', handler)
+      return () => ipcRenderer.removeListener('workspace:detached', handler)
+    },
+    onReattached: (callback: (workspaceId: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => callback(workspaceId)
+      ipcRenderer.on('workspace:reattached', handler)
+      return () => ipcRenderer.removeListener('workspace:reattached', handler)
+    },
   },
   settings: {
     save: (data: string) => ipcRenderer.invoke('settings:save', data),

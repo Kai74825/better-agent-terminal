@@ -15,6 +15,16 @@ let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
 let claudeManager: ClaudeAgentManager | null = null
 let updateCheckResult: UpdateCheckResult | null = null
+const detachedWindows = new Map<string, BrowserWindow>() // workspaceId → BrowserWindow
+
+function getAllWindows(): BrowserWindow[] {
+  const wins: BrowserWindow[] = []
+  if (mainWindow && !mainWindow.isDestroyed()) wins.push(mainWindow)
+  for (const win of detachedWindows.values()) {
+    if (!win.isDestroyed()) wins.push(win)
+  }
+  return wins
+}
 
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 const GITHUB_REPO_URL = 'https://github.com/tony1223/better-agent-terminal'
@@ -125,8 +135,8 @@ function createWindow() {
     icon: path.join(__dirname, '../assets/icon.ico')
   })
 
-  ptyManager = new PtyManager(mainWindow)
-  claudeManager = new ClaudeAgentManager(mainWindow)
+  ptyManager = new PtyManager(getAllWindows)
+  claudeManager = new ClaudeAgentManager(getAllWindows)
 
   if (VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(VITE_DEV_SERVER_URL)
@@ -136,6 +146,11 @@ function createWindow() {
   }
 
   mainWindow.on('closed', () => {
+    // Close all detached windows when main window closes
+    for (const [, win] of detachedWindows) {
+      if (!win.isDestroyed()) win.close()
+    }
+    detachedWindows.clear()
     mainWindow = null
   })
 }
@@ -155,8 +170,8 @@ app.whenReady().then(async () => {
   // Listen for system resume from sleep/hibernate
   powerMonitor.on('resume', () => {
     console.log('System resumed from sleep')
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('system:resume')
+    for (const win of getAllWindows()) {
+      win.webContents.send('system:resume')
     }
   })
 
@@ -241,6 +256,64 @@ ipcMain.handle('workspace:load', async () => {
   } catch {
     return null
   }
+})
+
+// Workspace detach/reattach handlers
+ipcMain.handle('workspace:detach', async (_event, workspaceId: string) => {
+  if (detachedWindows.has(workspaceId)) {
+    // Already detached — focus existing window
+    const existing = detachedWindows.get(workspaceId)!
+    if (!existing.isDestroyed()) existing.focus()
+    return true
+  }
+
+  const detachedWin = new BrowserWindow({
+    width: 900,
+    height: 700,
+    minWidth: 600,
+    minHeight: 400,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
+    },
+    frame: true,
+    titleBarStyle: 'default',
+    icon: path.join(__dirname, '../assets/icon.ico')
+  })
+
+  detachedWindows.set(workspaceId, detachedWin)
+
+  const urlParam = `?detached=${encodeURIComponent(workspaceId)}`
+  if (VITE_DEV_SERVER_URL) {
+    detachedWin.loadURL(VITE_DEV_SERVER_URL + urlParam)
+  } else {
+    detachedWin.loadFile(path.join(__dirname, '../dist/index.html'), { search: urlParam })
+  }
+
+  detachedWin.on('closed', () => {
+    detachedWindows.delete(workspaceId)
+    // Notify main window to reattach workspace
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('workspace:reattached', workspaceId)
+    }
+  })
+
+  // Notify main window that workspace is detached
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('workspace:detached', workspaceId)
+  }
+
+  return true
+})
+
+ipcMain.handle('workspace:reattach', async (_event, workspaceId: string) => {
+  const win = detachedWindows.get(workspaceId)
+  if (win && !win.isDestroyed()) {
+    win.close()
+  }
+  detachedWindows.delete(workspaceId)
+  return true
 })
 
 // Settings handlers

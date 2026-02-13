@@ -27,10 +27,18 @@ interface PtyInstance {
 
 export class PtyManager {
   private instances: Map<string, PtyInstance> = new Map()
-  private window: BrowserWindow
+  private getWindows: () => BrowserWindow[]
 
-  constructor(window: BrowserWindow) {
-    this.window = window
+  constructor(getWindows: () => BrowserWindow[]) {
+    this.getWindows = getWindows
+  }
+
+  private broadcast(channel: string, ...args: unknown[]) {
+    for (const win of this.getWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, ...args)
+      }
+    }
   }
 
   private getDefaultShell(): string {
@@ -113,15 +121,11 @@ export class PtyManager {
         })
 
         ptyProcess.onData((data: string) => {
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:output', id, data)
-          }
+          this.broadcast('pty:output', id, data)
         })
 
         ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:exit', id, exitCode)
-          }
+          this.broadcast('pty:exit', id, exitCode)
           this.instances.delete(id)
         })
 
@@ -173,35 +177,25 @@ export class PtyManager {
         })
 
         childProcess.stdout?.on('data', (data: Buffer) => {
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:output', id, data.toString())
-          }
+          this.broadcast('pty:output', id, data.toString())
         })
 
         childProcess.stderr?.on('data', (data: Buffer) => {
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:output', id, data.toString())
-          }
+          this.broadcast('pty:output', id, data.toString())
         })
 
         childProcess.on('exit', (exitCode: number | null) => {
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:exit', id, exitCode ?? 0)
-          }
+          this.broadcast('pty:exit', id, exitCode ?? 0)
           this.instances.delete(id)
         })
 
         childProcess.on('error', (error) => {
           console.error('Child process error:', error)
-          if (!this.window.isDestroyed()) {
-            this.window.webContents.send('pty:output', id, `\r\n[Error: ${error.message}]\r\n`)
-          }
+          this.broadcast('pty:output', id, `\r\n[Error: ${error.message}]\r\n`)
         })
 
         // Send initial message
-        if (!this.window.isDestroyed()) {
-          this.window.webContents.send('pty:output', id, `[Terminal - child_process mode]\r\n`)
-        }
+        this.broadcast('pty:output', id, `[Terminal - child_process mode]\r\n`)
 
         this.instances.set(id, { process: childProcess, type, cwd, usePty: false })
         console.log('Created terminal using child_process fallback')

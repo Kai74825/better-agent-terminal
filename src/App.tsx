@@ -66,6 +66,9 @@ export default function App() {
   const [showSnippetSidebar] = useState(true)
   // Panel settings for resizable panels
   const [panelSettings, setPanelSettings] = useState<PanelSettings>(loadPanelSettings)
+  // Detached workspace support
+  const [detachedWorkspaceId] = useState(() => window.electronAPI.workspace.getDetachedId())
+  const [detachedIds, setDetachedIds] = useState<Set<string>>(new Set())
 
   // Handle sidebar resize
   const handleSidebarResize = useCallback((delta: number) => {
@@ -131,9 +134,23 @@ export default function App() {
     workspaceStore.load()
     settingsStore.load()
 
+    // Listen for workspace detach/reattach events (main window only)
+    const unsubDetach = window.electronAPI.workspace.onDetached((wsId) => {
+      setDetachedIds(prev => new Set(prev).add(wsId))
+    })
+    const unsubReattach = window.electronAPI.workspace.onReattached((wsId) => {
+      setDetachedIds(prev => {
+        const next = new Set(prev)
+        next.delete(wsId)
+        return next
+      })
+    })
+
     return () => {
       unsubscribe()
       unsubscribeOutput()
+      unsubDetach()
+      unsubReattach()
     }
   }, [])
 
@@ -144,6 +161,10 @@ export default function App() {
       workspaceStore.addWorkspace(name, folderPath)
       workspaceStore.save()
     }
+  }, [])
+
+  const handleDetachWorkspace = useCallback(async (workspaceId: string) => {
+    await window.electronAPI.workspace.detach(workspaceId)
   }, [])
 
   // Paste content to focused terminal
@@ -171,11 +192,45 @@ export default function App() {
     ? state.workspaces.find(w => w.id === envDialogWorkspaceId)
     : null
 
+  // Detached window mode — render only that workspace, no sidebar
+  if (detachedWorkspaceId) {
+    const ws = state.workspaces.find(w => w.id === detachedWorkspaceId)
+    if (!ws) {
+      return (
+        <div className="app">
+          <main className="main-content">
+            <div className="empty-state">
+              <h2>Workspace not found</h2>
+              <p>This detached workspace may have been removed.</p>
+            </div>
+          </main>
+        </div>
+      )
+    }
+    return (
+      <div className="app">
+        <main className="main-content" style={{ width: '100%' }}>
+          <div className="workspace-container active">
+            <WorkspaceView
+              workspace={ws}
+              terminals={workspaceStore.getWorkspaceTerminals(ws.id)}
+              focusedTerminalId={state.focusedTerminalId}
+              isActive={true}
+            />
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // Filter out detached workspaces from main window
+  const visibleWorkspaces = state.workspaces.filter(w => !detachedIds.has(w.id))
+
   return (
     <div className="app">
       <Sidebar
         width={panelSettings.sidebar.width}
-        workspaces={state.workspaces}
+        workspaces={visibleWorkspaces}
         activeWorkspaceId={state.activeWorkspaceId}
         groups={workspaceStore.getGroups()}
         activeGroup={workspaceStore.getActiveGroup()}
@@ -195,6 +250,7 @@ export default function App() {
           workspaceStore.reorderWorkspaces(workspaceIds)
         }}
         onOpenEnvVars={(workspaceId) => setEnvDialogWorkspaceId(workspaceId)}
+        onDetachWorkspace={handleDetachWorkspace}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
       />
@@ -204,9 +260,9 @@ export default function App() {
         onDoubleClick={handleSidebarResetWidth}
       />
       <main className="main-content">
-        {state.workspaces.length > 0 ? (
-          // Render ALL workspaces, hide inactive ones with CSS to preserve terminal state
-          state.workspaces.map(workspace => (
+        {visibleWorkspaces.length > 0 ? (
+          // Render visible workspaces (excluding detached ones), hide inactive with CSS
+          visibleWorkspaces.map(workspace => (
             <div
               key={workspace.id}
               className={`workspace-container ${workspace.id === state.activeWorkspaceId ? 'active' : 'hidden'}`}

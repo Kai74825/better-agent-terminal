@@ -98,6 +98,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
   const [contentModal, setContentModal] = useState<{ title: string; content: string } | null>(null)
+  const [showPromptHistory, setShowPromptHistory] = useState(false)
   // Ctrl+P file picker
   const [showFilePicker, setShowFilePicker] = useState(false)
   const [filePickerQuery, setFilePickerQuery] = useState('')
@@ -788,6 +789,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         if (showFilePicker) {
           e.preventDefault()
           setShowFilePicker(false)
+          return
+        }
+        if (showPromptHistory) {
+          e.preventDefault()
+          setShowPromptHistory(false)
           return
         }
         if (contentModal) {
@@ -2027,6 +2033,48 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         </div>
       )}
 
+      {/* Prompt History Modal */}
+      {showPromptHistory && (() => {
+        const userPrompts = allMessages
+          .filter(m => !isToolCall(m) && (m as ClaudeMessage).role === 'user') as ClaudeMessage[]
+        return (
+          <div className="claude-plan-overlay" onClick={() => setShowPromptHistory(false)}>
+            <div className="claude-plan-modal claude-prompt-history-modal" onClick={e => e.stopPropagation()}>
+              <div className="claude-plan-modal-header">
+                <span className="claude-plan-modal-title">Prompt History ({userPrompts.length})</span>
+                <button
+                  className="claude-prompt-history-copy"
+                  onClick={() => {
+                    const text = userPrompts.map((m, i) => `--- Prompt ${i + 1} ---\n${m.content}`).join('\n\n')
+                    navigator.clipboard.writeText(text)
+                  }}
+                  title="Copy all prompts"
+                >copy all</button>
+                <button className="claude-plan-modal-close" onClick={() => setShowPromptHistory(false)}>&times;</button>
+              </div>
+              <div className="claude-prompt-history-list">
+                {userPrompts.length === 0 ? (
+                  <div className="claude-prompt-history-empty">No prompts yet</div>
+                ) : userPrompts.map((m, i) => (
+                  <div key={m.id} className="claude-prompt-history-item">
+                    <div className="claude-prompt-history-header">
+                      <span className="claude-prompt-history-index">#{i + 1}</span>
+                      {m.timestamp > 0 && <span className="claude-prompt-history-time">{formatFullTimestamp(m.timestamp)}</span>}
+                      <button
+                        className="claude-prompt-history-copy-one"
+                        onClick={() => navigator.clipboard.writeText(m.content)}
+                        title="Copy this prompt"
+                      >copy</button>
+                    </div>
+                    <pre className="claude-prompt-history-content">{m.content}</pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Status lines */}
       <div className="claude-statuslines">
         <div className="claude-statusline">
@@ -2053,6 +2101,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           {sessionMeta && sessionMeta.durationMs > 0 && (
             <span className="claude-statusline-item">{(sessionMeta.durationMs / 1000).toFixed(1)}s</span>
           )}
+          <span
+            className="claude-statusline-item claude-statusline-clickable"
+            onClick={() => setShowPromptHistory(true)}
+            title="View prompt history"
+          >prompts</span>
         </div>
       </div>
     </div>

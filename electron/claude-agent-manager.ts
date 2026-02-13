@@ -122,15 +122,17 @@ const sdkSessionIds = new Map<string, string>()
 
 export class ClaudeAgentManager {
   private sessions: Map<string, SessionInstance> = new Map()
-  private window: BrowserWindow
+  private getWindows: () => BrowserWindow[]
 
-  constructor(window: BrowserWindow) {
-    this.window = window
+  constructor(getWindows: () => BrowserWindow[]) {
+    this.getWindows = getWindows
   }
 
   private send(channel: string, ...args: unknown[]) {
-    if (!this.window.isDestroyed()) {
-      this.window.webContents.send(channel, ...args)
+    for (const win of this.getWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, ...args)
+      }
     }
   }
 
@@ -511,19 +513,28 @@ export class ClaudeAgentManager {
           session.state.totalTokens =
             (resultMsg.usage?.input_tokens || 0) + (resultMsg.usage?.output_tokens || 0)
 
-          // Accumulate metadata
+          // Update metadata — most fields from result are session-cumulative
           session.metadata.totalCost = resultMsg.total_cost_usd ?? session.metadata.totalCost
-          session.metadata.inputTokens += resultMsg.usage?.input_tokens || 0
-          session.metadata.outputTokens += resultMsg.usage?.output_tokens || 0
           session.metadata.durationMs += resultMsg.duration_ms || 0
           session.metadata.numTurns += resultMsg.num_turns || 0
 
-          // Extract contextWindow from modelUsage
+          // Token counts: use modelUsage (cumulative per-model) as primary source
           if (resultMsg.modelUsage) {
-            const firstModel = Object.values(resultMsg.modelUsage)[0]
-            if (firstModel?.contextWindow) {
-              session.metadata.contextWindow = firstModel.contextWindow
+            let totalInput = 0
+            let totalOutput = 0
+            for (const modelStats of Object.values(resultMsg.modelUsage)) {
+              totalInput += modelStats.inputTokens || 0
+              totalOutput += modelStats.outputTokens || 0
+              if (modelStats.contextWindow) {
+                session.metadata.contextWindow = modelStats.contextWindow
+              }
             }
+            session.metadata.inputTokens = totalInput
+            session.metadata.outputTokens = totalOutput
+          } else if (resultMsg.usage) {
+            // Fallback: usage is session-cumulative (like total_cost_usd), assign directly
+            session.metadata.inputTokens = resultMsg.usage.input_tokens || 0
+            session.metadata.outputTokens = resultMsg.usage.output_tokens || 0
           }
 
           this.send('claude:status', sessionId, { ...session.metadata })
