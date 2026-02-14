@@ -36,25 +36,53 @@ function canPreview(p: string): boolean {
 // Regex: Windows absolute path with file extension
 const PATH_RE = /[A-Za-z]:[\\\/][\w\-. \\\/]+\.\w{1,10}/g
 
-function splitByPaths(text: string): { text: string; isPath: boolean }[] {
-  const parts: { text: string; isPath: boolean }[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
+type TokenType = 'text' | 'path' | 'url' | 'mdlink'
+interface Token { type: TokenType; text: string; href?: string }
+
+// Markdown link: [text](url)  |  Bare URL: https://... or http://...
+const MD_LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g
+const URL_RE = /https?:\/\/[^\s<>)\]]+/g
+
+function tokenize(text: string): Token[] {
+  // Pass 1: extract markdown links and bare URLs
+  const specials: { start: number; end: number; token: Token }[] = []
+
+  MD_LINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = MD_LINK_RE.exec(text)) !== null) {
+    specials.push({ start: m.index, end: m.index + m[0].length, token: { type: 'mdlink', text: m[1], href: m[2] } })
+  }
+
+  URL_RE.lastIndex = 0
+  while ((m = URL_RE.exec(text)) !== null) {
+    // Skip if overlapping with an already-found markdown link
+    const overlaps = specials.some(s => m!.index >= s.start && m!.index < s.end)
+    if (overlaps) continue
+    specials.push({ start: m.index, end: m.index + m[0].length, token: { type: 'url', text: m[0], href: m[0] } })
+  }
 
   PATH_RE.lastIndex = 0
-  while ((match = PATH_RE.exec(text)) !== null) {
-    const path = match[0]
-    if (!canPreview(path)) continue
-    if (match.index > lastIndex) {
-      parts.push({ text: text.slice(lastIndex, match.index), isPath: false })
-    }
-    parts.push({ text: path, isPath: true })
-    lastIndex = match.index + path.length
+  while ((m = PATH_RE.exec(text)) !== null) {
+    if (!canPreview(m[0])) continue
+    const overlaps = specials.some(s => m!.index >= s.start && m!.index < s.end)
+    if (overlaps) continue
+    specials.push({ start: m.index, end: m.index + m[0].length, token: { type: 'path', text: m[0] } })
   }
-  if (lastIndex < text.length) {
-    parts.push({ text: text.slice(lastIndex), isPath: false })
+
+  if (specials.length === 0) return [{ type: 'text', text }]
+
+  // Sort by start position
+  specials.sort((a, b) => a.start - b.start)
+
+  const tokens: Token[] = []
+  let lastIndex = 0
+  for (const s of specials) {
+    if (s.start > lastIndex) tokens.push({ type: 'text', text: text.slice(lastIndex, s.start) })
+    tokens.push(s.token)
+    lastIndex = s.end
   }
-  return parts
+  if (lastIndex < text.length) tokens.push({ type: 'text', text: text.slice(lastIndex) })
+  return tokens
 }
 
 export function HighlightedCode({ code, ext, className }: { code: string; ext: string; className?: string }) {
@@ -299,27 +327,48 @@ export function LinkedText({ text }: LinkedTextProps) {
     setPreviewPath(path)
   }, [])
 
+  const handleUrl = useCallback((url: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    window.electronAPI.shell.openExternal(url)
+  }, [])
+
   if (typeof text !== 'string') return <>{text}</>
 
-  const parts = splitByPaths(text)
-  if (parts.length === 1 && !parts[0].isPath) return <>{text}</>
+  const tokens = tokenize(text)
+  if (tokens.length === 1 && tokens[0].type === 'text') return <>{text}</>
 
   return (
     <>
-      {parts.map((part, i) =>
-        part.isPath ? (
-          <span
-            key={i}
-            className="path-link"
-            onClick={(e) => { e.stopPropagation(); handleClick(part.text) }}
-            title={`Click to preview: ${part.text}`}
-          >
-            {part.text}
-          </span>
-        ) : (
-          <Fragment key={i}>{part.text}</Fragment>
-        )
-      )}
+      {tokens.map((token, i) => {
+        if (token.type === 'path') {
+          return (
+            <span
+              key={i}
+              className="path-link"
+              onClick={(e) => { e.stopPropagation(); handleClick(token.text) }}
+              title={`Click to preview: ${token.text}`}
+            >
+              {token.text}
+            </span>
+          )
+        }
+        if (token.type === 'url') {
+          return (
+            <a key={i} className="path-link url-link" href={token.href} onClick={(e) => handleUrl(token.href!, e)} title={token.href}>
+              {token.text}
+            </a>
+          )
+        }
+        if (token.type === 'mdlink') {
+          return (
+            <a key={i} className="path-link url-link" href={token.href} onClick={(e) => handleUrl(token.href!, e)} title={token.href}>
+              {token.text}
+            </a>
+          )
+        }
+        return <Fragment key={i}>{token.text}</Fragment>
+      })}
       {previewPath && (
         <FilePreviewModal
           filePath={previewPath}

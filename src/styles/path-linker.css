@@ -12,6 +12,13 @@
   text-decoration-style: solid;
 }
 
+.url-link {
+  color: #6cb6ff;
+}
+.url-link:hover {
+  color: #8ecaff;
+}
+
 /* File Preview Modal (opened from path links) */
 .path-preview-overlay {
   position: fixed;

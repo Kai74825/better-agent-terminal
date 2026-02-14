@@ -297,7 +297,12 @@ class WorkspaceStore {
           activeWorkspaceId: visibleWorkspaces[0].id,
           focusedTerminalId: null
         }
+      } else {
+        // Force new reference so React re-renders the sidebar filter
+        this.state = { ...this.state }
       }
+    } else {
+      this.state = { ...this.state }
     }
 
     this.notify()

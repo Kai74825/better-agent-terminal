@@ -1584,7 +1584,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
               </div>
             )
           })()}
-          {msg.content && <div className="claude-markdown">{msg.content}</div>}
+          {msg.content && <div className="claude-markdown"><LinkedText text={msg.content} /></div>}
           {msg.timestamp > 0 && (
             <span className="claude-msg-time" title={formatFullTimestamp(msg.timestamp)}>{formatTimestamp(msg.timestamp)}</span>
           )}
@@ -1686,7 +1686,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
           <div className="tl-item">
             <div className="tl-dot dot-assistant" />
             <div className="tl-content claude-message-assistant">
-              <div className="claude-markdown">{streamingText}<span className="claude-cursor">|</span></div>
+              <div className="claude-markdown"><LinkedText text={streamingText} /><span className="claude-cursor">|</span></div>
             </div>
           </div>
         )}
