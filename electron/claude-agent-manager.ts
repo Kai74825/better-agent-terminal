@@ -346,7 +346,7 @@ export class ClaudeAgentManager {
         if (imageBlocks.length > 0) {
           const contentBlocks = [
             ...imageBlocks,
-            { type: 'text' as const, text: prompt },
+            ...(prompt ? [{ type: 'text' as const, text: prompt }] : []),
           ]
           const userMessage = {
             type: 'user' as const,
