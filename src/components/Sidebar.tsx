@@ -9,6 +9,7 @@ interface SidebarProps {
   activeWorkspaceId: string | null
   groups: string[]
   activeGroup: string | null
+  activeProfileName?: string
   onSetActiveGroup: (group: string | null) => void
   onSetWorkspaceGroup: (id: string, group: string | undefined) => void
   onSelectWorkspace: (id: string) => void
@@ -18,6 +19,7 @@ interface SidebarProps {
   onReorderWorkspaces: (workspaceIds: string[]) => void
   onOpenEnvVars: (workspaceId: string) => void
   onDetachWorkspace: (workspaceId: string) => void
+  onOpenProfiles: () => void
   onOpenSettings: () => void
   onOpenAbout: () => void
 }
@@ -28,6 +30,7 @@ export function Sidebar({
   activeWorkspaceId,
   groups,
   activeGroup,
+  activeProfileName,
   onSetActiveGroup,
   onSetWorkspaceGroup,
   onSelectWorkspace,
@@ -37,6 +40,7 @@ export function Sidebar({
   onReorderWorkspaces,
   onOpenEnvVars,
   onDetachWorkspace,
+  onOpenProfiles,
   onOpenSettings,
   onOpenAbout
 }: Readonly<SidebarProps>) {
@@ -240,7 +244,18 @@ export function Sidebar({
 
   return (
     <aside className="sidebar" style={{ width }}>
-      <div className="sidebar-header">Workspaces</div>
+      <div className="sidebar-header">
+        <span>Workspaces</span>
+        {activeProfileName && (
+          <span
+            className="sidebar-profile-badge"
+            onClick={onOpenProfiles}
+            title="Click to manage profiles"
+          >
+            {activeProfileName}
+          </span>
+        )}
+      </div>
       {/* Group Filter */}
       {groups.length > 0 && (
         <div className="sidebar-group-filter">
@@ -335,6 +350,9 @@ export function Sidebar({
           + Add Workspace
         </button>
         <div className="sidebar-footer-buttons">
+          <button className="settings-btn" onClick={onOpenProfiles}>
+            Profiles
+          </button>
           <button className="settings-btn" onClick={onOpenSettings}>
             Settings
           </button>

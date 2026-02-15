@@ -8,6 +8,7 @@ import { AboutPanel } from './components/AboutPanel'
 import { SnippetSidebar } from './components/SnippetPanel'
 import { WorkspaceEnvDialog } from './components/WorkspaceEnvDialog'
 import { ResizeHandle } from './components/ResizeHandle'
+import { ProfilePanel } from './components/ProfilePanel'
 import type { AppState, EnvVariable } from './types'
 
 // Panel settings interface
@@ -61,6 +62,8 @@ export default function App() {
   const [state, setState] = useState<AppState>(workspaceStore.getState())
   const [showSettings, setShowSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showProfiles, setShowProfiles] = useState(false)
+  const [activeProfileName, setActiveProfileName] = useState<string>('Default')
   const [envDialogWorkspaceId, setEnvDialogWorkspaceId] = useState<string | null>(null)
   // Snippet sidebar is always visible by default
   const [showSnippetSidebar] = useState(true)
@@ -134,6 +137,12 @@ export default function App() {
     workspaceStore.load()
     settingsStore.load()
 
+    // Load active profile name
+    window.electronAPI.profile.list().then(result => {
+      const active = result.profiles.find(p => p.id === result.activeProfileId)
+      if (active) setActiveProfileName(active.name)
+    })
+
     // Listen for workspace detach/reattach events (main window only)
     const unsubDetach = window.electronAPI.workspace.onDetached((wsId) => {
       setDetachedIds(prev => new Set(prev).add(wsId))
@@ -185,6 +194,29 @@ export default function App() {
     } else {
       console.warn('No terminal available to paste to')
     }
+  }, [])
+
+  // Handle profile switch: kill all terminals, load profile, reload store
+  const handleProfileSwitch = useCallback(async (profileId: string) => {
+    // Kill all running terminals and claude sessions
+    const currentState = workspaceStore.getState()
+    for (const terminal of currentState.terminals) {
+      try { await window.electronAPI.pty.kill(terminal.id) } catch { /* ignore */ }
+    }
+
+    // Load the profile (writes to workspaces.json)
+    const result = await window.electronAPI.profile.load(profileId)
+    if (!result) return
+
+    // Reload workspace store from the updated workspaces.json
+    await workspaceStore.load()
+
+    // Update active profile name
+    const listResult = await window.electronAPI.profile.list()
+    const active = listResult.profiles.find(p => p.id === listResult.activeProfileId)
+    if (active) setActiveProfileName(active.name)
+
+    setShowProfiles(false)
   }, [])
 
   // Get the workspace for env dialog
@@ -251,6 +283,8 @@ export default function App() {
         }}
         onOpenEnvVars={(workspaceId) => setEnvDialogWorkspaceId(workspaceId)}
         onDetachWorkspace={handleDetachWorkspace}
+        activeProfileName={activeProfileName}
+        onOpenProfiles={() => setShowProfiles(true)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}
       />
@@ -302,6 +336,9 @@ export default function App() {
       )}
       {showAbout && (
         <AboutPanel onClose={() => setShowAbout(false)} />
+      )}
+      {showProfiles && (
+        <ProfilePanel onClose={() => setShowProfiles(false)} onSwitch={handleProfileSwitch} />
       )}
       {envDialogWorkspace && (
         <WorkspaceEnvDialog

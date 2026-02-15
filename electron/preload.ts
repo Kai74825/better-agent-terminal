@@ -166,6 +166,16 @@ const electronAPI = {
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath) as Promise<{ content?: string; error?: string; size?: number }>,
     search: (dirPath: string, query: string) => ipcRenderer.invoke('fs:search', dirPath, query) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
   },
+  profile: {
+    list: () => ipcRenderer.invoke('profile:list') as Promise<{ profiles: { id: string; name: string; createdAt: number; updatedAt: number }[]; activeProfileId: string }>,
+    create: (name: string) => ipcRenderer.invoke('profile:create', name) as Promise<{ id: string; name: string; createdAt: number; updatedAt: number }>,
+    save: (profileId: string) => ipcRenderer.invoke('profile:save', profileId) as Promise<boolean>,
+    load: (profileId: string) => ipcRenderer.invoke('profile:load', profileId) as Promise<unknown>,
+    delete: (profileId: string) => ipcRenderer.invoke('profile:delete', profileId) as Promise<boolean>,
+    rename: (profileId: string, newName: string) => ipcRenderer.invoke('profile:rename', profileId, newName) as Promise<boolean>,
+    duplicate: (profileId: string, newName: string) => ipcRenderer.invoke('profile:duplicate', profileId, newName) as Promise<{ id: string; name: string; createdAt: number; updatedAt: number } | null>,
+    getActiveId: () => ipcRenderer.invoke('profile:get-active-id') as Promise<string>,
+  },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),
     getById: (id: number) => ipcRenderer.invoke('snippet:getById', id),

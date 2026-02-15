@@ -5,6 +5,7 @@ import { PtyManager } from './pty-manager'
 import { ClaudeAgentManager } from './claude-agent-manager'
 import { checkForUpdates, UpdateCheckResult } from './update-checker'
 import { snippetDb, CreateSnippetInput } from './snippet-db'
+import { ProfileManager } from './profile-manager'
 
 // Set AppUserModelId for Windows taskbar pinning (must be before app.whenReady)
 if (process.platform === 'win32') {
@@ -15,6 +16,7 @@ let mainWindow: BrowserWindow | null = null
 let ptyManager: PtyManager | null = null
 let claudeManager: ClaudeAgentManager | null = null
 let updateCheckResult: UpdateCheckResult | null = null
+const profileManager = new ProfileManager()
 const detachedWindows = new Map<string, BrowserWindow>() // workspaceId → BrowserWindow
 
 function getAllWindows(): BrowserWindow[] {
@@ -465,6 +467,39 @@ ipcMain.handle('snippet:getCategories', () => {
 
 ipcMain.handle('snippet:getFavorites', () => {
   return snippetDb.getFavorites()
+})
+
+// Profile handlers
+ipcMain.handle('profile:list', async () => {
+  return profileManager.list()
+})
+
+ipcMain.handle('profile:create', async (_event, name: string) => {
+  return profileManager.create(name)
+})
+
+ipcMain.handle('profile:save', async (_event, profileId: string) => {
+  return profileManager.save(profileId)
+})
+
+ipcMain.handle('profile:load', async (_event, profileId: string) => {
+  return profileManager.load(profileId)
+})
+
+ipcMain.handle('profile:delete', async (_event, profileId: string) => {
+  return profileManager.delete(profileId)
+})
+
+ipcMain.handle('profile:rename', async (_event, profileId: string, newName: string) => {
+  return profileManager.rename(profileId, newName)
+})
+
+ipcMain.handle('profile:duplicate', async (_event, profileId: string, newName: string) => {
+  return profileManager.duplicate(profileId, newName)
+})
+
+ipcMain.handle('profile:get-active-id', async () => {
+  return profileManager.getActiveProfileId()
 })
 
 // Claude Agent SDK handlers
