@@ -22,9 +22,26 @@ const checkFontAvailable = (fontFamily: string): boolean => {
   }
 }
 
+interface RemoteServerStatus {
+  running: boolean
+  port: number | null
+  clients: { label: string; connectedAt: number }[]
+}
+
+interface RemoteClientStatus {
+  connected: boolean
+  info: { host: string; port: number } | null
+}
+
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [settings, setSettings] = useState<AppSettings>(settingsStore.getSettings())
   const [availableFonts, setAvailableFonts] = useState<Set<FontType>>(new Set())
+
+  // Remote server state
+  const [serverStatus, setServerStatus] = useState<RemoteServerStatus>({ running: false, port: null, clients: [] })
+  const [serverPort, setServerPort] = useState('9876')
+  const [serverToken, setServerToken] = useState<string | null>(null)
+  const [clientStatus, setClientStatus] = useState<RemoteClientStatus>({ connected: false, info: null })
 
   // Get current platform for filtering shell options
   const platform = window.electronAPI?.platform || 'darwin'
@@ -87,6 +104,38 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   const handleCustomCursorColorChange = (color: string) => {
     settingsStore.setCustomCursorColor(color)
+  }
+
+  // Load remote status on mount and poll
+  useEffect(() => {
+    const refresh = async () => {
+      const ss = await window.electronAPI.remote.serverStatus()
+      setServerStatus(ss)
+      const cs = await window.electronAPI.remote.clientStatus()
+      setClientStatus(cs)
+    }
+    refresh()
+    const interval = setInterval(refresh, 3000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleStartServer = async () => {
+    const result = await window.electronAPI.remote.startServer(parseInt(serverPort) || 9876)
+    if ('error' in result) {
+      alert(`Failed to start server: ${result.error}`)
+    } else {
+      setServerToken(result.token)
+      setServerPort(String(result.port))
+    }
+    const ss = await window.electronAPI.remote.serverStatus()
+    setServerStatus(ss)
+  }
+
+  const handleStopServer = async () => {
+    await window.electronAPI.remote.stopServer()
+    setServerToken(null)
+    const ss = await window.electronAPI.remote.serverStatus()
+    setServerStatus(ss)
   }
 
   const terminalColors = settingsStore.getTerminalColors()
@@ -327,6 +376,75 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               onRemove={(key) => settingsStore.removeGlobalEnvVar(key)}
               onUpdate={(key, updates) => settingsStore.updateGlobalEnvVar(key, updates)}
             />
+          </div>
+          <div className="settings-section">
+            <h3>Remote Access</h3>
+            <p className="settings-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              Allow other Better Agent Terminal instances on your LAN to connect and control this instance.
+            </p>
+
+            {serverStatus.running ? (
+              <>
+                <div className="settings-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#3fb950', fontSize: 12 }}>Server running on port {serverStatus.port}</span>
+                  <button className="profile-action-btn danger" onClick={handleStopServer} style={{ marginLeft: 'auto' }}>
+                    Stop Server
+                  </button>
+                </div>
+                {serverToken && (
+                  <div className="settings-group">
+                    <label>Connection Token</label>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        readOnly
+                        value={serverToken}
+                        style={{ fontFamily: 'monospace', fontSize: 12, flex: 1 }}
+                        onClick={e => (e.target as HTMLInputElement).select()}
+                      />
+                      <button
+                        className="profile-action-btn"
+                        onClick={() => navigator.clipboard.writeText(serverToken)}
+                        title="Copy token"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {serverStatus.clients.length > 0 && (
+                  <div className="settings-group">
+                    <label>Connected Clients ({serverStatus.clients.length})</label>
+                    {serverStatus.clients.map((c, i) => (
+                      <div key={i} style={{ fontSize: 12, color: '#aaa', padding: '2px 0' }}>
+                        {c.label} — connected {new Date(c.connectedAt).toLocaleTimeString()}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="settings-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  value={serverPort}
+                  onChange={e => setServerPort(e.target.value)}
+                  placeholder="Port"
+                  style={{ width: 80 }}
+                />
+                <button className="profile-action-btn primary" onClick={handleStartServer}>
+                  Start Server
+                </button>
+              </div>
+            )}
+
+            {clientStatus.connected && clientStatus.info && (
+              <div className="settings-group" style={{ marginTop: 8 }}>
+                <span style={{ color: '#58a6ff', fontSize: 12 }}>
+                  Connected to remote: {clientStatus.info.host}:{clientStatus.info.port}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

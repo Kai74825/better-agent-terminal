@@ -5,6 +5,7 @@ import * as fsPromises from 'fs/promises'
 import * as pathModule from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
 import type { Query, PermissionMode, CanUseTool } from '@anthropic-ai/claude-agent-sdk'
+import { broadcastHub } from './remote/broadcast-hub'
 
 // Lazy import the SDK (it's an ES module)
 let queryFn: typeof import('@anthropic-ai/claude-agent-sdk').query | null = null
@@ -134,6 +135,7 @@ export class ClaudeAgentManager {
         win.webContents.send(channel, ...args)
       }
     }
+    broadcastHub.broadcast(channel, ...args)
   }
 
   private static readonly MSG_BUFFER_CAP = 300

@@ -167,14 +167,31 @@ const electronAPI = {
     search: (dirPath: string, query: string) => ipcRenderer.invoke('fs:search', dirPath, query) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
   },
   profile: {
-    list: () => ipcRenderer.invoke('profile:list') as Promise<{ profiles: { id: string; name: string; createdAt: number; updatedAt: number }[]; activeProfileId: string }>,
-    create: (name: string) => ipcRenderer.invoke('profile:create', name) as Promise<{ id: string; name: string; createdAt: number; updatedAt: number }>,
+    list: () => ipcRenderer.invoke('profile:list') as Promise<{ profiles: { id: string; name: string; type: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string; createdAt: number; updatedAt: number }[]; activeProfileId: string }>,
+    create: (name: string, options?: { type?: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string }) =>
+      ipcRenderer.invoke('profile:create', name, options) as Promise<{ id: string; name: string; type: 'local' | 'remote'; createdAt: number; updatedAt: number }>,
     save: (profileId: string) => ipcRenderer.invoke('profile:save', profileId) as Promise<boolean>,
     load: (profileId: string) => ipcRenderer.invoke('profile:load', profileId) as Promise<unknown>,
     delete: (profileId: string) => ipcRenderer.invoke('profile:delete', profileId) as Promise<boolean>,
     rename: (profileId: string, newName: string) => ipcRenderer.invoke('profile:rename', profileId, newName) as Promise<boolean>,
     duplicate: (profileId: string, newName: string) => ipcRenderer.invoke('profile:duplicate', profileId, newName) as Promise<{ id: string; name: string; createdAt: number; updatedAt: number } | null>,
+    get: (profileId: string) => ipcRenderer.invoke('profile:get', profileId) as Promise<{ id: string; name: string; type: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string; createdAt: number; updatedAt: number } | null>,
     getActiveId: () => ipcRenderer.invoke('profile:get-active-id') as Promise<string>,
+    setActiveId: (profileId: string) => ipcRenderer.invoke('profile:set-active', profileId) as Promise<void>,
+  },
+  remote: {
+    startServer: (port?: number, token?: string) =>
+      ipcRenderer.invoke('remote:start-server', port, token) as Promise<{ port: number; token: string } | { error: string }>,
+    stopServer: () =>
+      ipcRenderer.invoke('remote:stop-server') as Promise<boolean>,
+    serverStatus: () =>
+      ipcRenderer.invoke('remote:server-status') as Promise<{ running: boolean; port: number | null; clients: { label: string; connectedAt: number }[] }>,
+    connect: (host: string, port: number, token: string, label?: string) =>
+      ipcRenderer.invoke('remote:connect', host, port, token, label) as Promise<{ connected: boolean } | { error: string }>,
+    disconnect: () =>
+      ipcRenderer.invoke('remote:disconnect') as Promise<boolean>,
+    clientStatus: () =>
+      ipcRenderer.invoke('remote:client-status') as Promise<{ connected: boolean; info: { host: string; port: number } | null }>,
   },
   snippet: {
     getAll: () => ipcRenderer.invoke('snippet:getAll'),

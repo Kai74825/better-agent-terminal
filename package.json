@@ -1,6 +1,6 @@
 {
   "name": "better-agent-terminal",
-  "version": "1.37.0",
+  "version": "1.38.0",
   "description": "Windows terminal aggregator with multi-workspace support and Claude Code integration",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -27,7 +27,8 @@
     "highlight.js": "^11.11.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "ws": "^8.19.0"
   },
   "optionalDependencies": {
     "@lydell/node-pty": "^1.1.0"
@@ -39,6 +40,7 @@
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@types/uuid": "^9.0.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.2.0",
     "concurrently": "^8.2.0",
     "electron": "^28.3.3",

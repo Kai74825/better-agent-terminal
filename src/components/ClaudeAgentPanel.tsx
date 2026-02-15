@@ -545,10 +545,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
   const handleSend = useCallback(async () => {
     const trimmed = inputValueRef.current.trim()
-    if (!trimmed) return
+    if (!trimmed && attachedImages.length === 0) return
 
     // Save to input history
-    inputHistoryRef.current.push(trimmed)
+    if (trimmed) {
+      inputHistoryRef.current.push(trimmed)
+    }
     inputHistoryIndexRef.current = -1
     inputDraftRef.current = ''
 

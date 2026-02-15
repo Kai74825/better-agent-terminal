@@ -10,6 +10,7 @@ interface SidebarProps {
   groups: string[]
   activeGroup: string | null
   activeProfileName?: string
+  isRemoteConnected?: boolean
   onSetActiveGroup: (group: string | null) => void
   onSetWorkspaceGroup: (id: string, group: string | undefined) => void
   onSelectWorkspace: (id: string) => void
@@ -31,6 +32,7 @@ export function Sidebar({
   groups,
   activeGroup,
   activeProfileName,
+  isRemoteConnected,
   onSetActiveGroup,
   onSetWorkspaceGroup,
   onSelectWorkspace,
@@ -246,15 +248,27 @@ export function Sidebar({
     <aside className="sidebar" style={{ width }}>
       <div className="sidebar-header">
         <span>Workspaces</span>
-        {activeProfileName && (
-          <span
-            className="sidebar-profile-badge"
-            onClick={onOpenProfiles}
-            title="Click to manage profiles"
-          >
-            {activeProfileName}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {isRemoteConnected && (
+            <span
+              title="Connected to remote host"
+              style={{ color: '#58a6ff', fontSize: 12, lineHeight: 1 }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M1 1l4 4m14 14l4 4M8.5 2.5a13 13 0 0 1 7 0M2.5 8.5a13 13 0 0 0 0 7M15.5 21.5a13 13 0 0 1-7 0M21.5 15.5a13 13 0 0 0 0-7" />
+              </svg>
+            </span>
+          )}
+          {activeProfileName && (
+            <span
+              className="sidebar-profile-badge"
+              onClick={onOpenProfiles}
+              title="Click to manage profiles"
+            >
+              {activeProfileName}
+            </span>
+          )}
+        </div>
       </div>
       {/* Group Filter */}
       {groups.length > 0 && (

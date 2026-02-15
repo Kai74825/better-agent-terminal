@@ -3,6 +3,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 interface ProfileEntry {
   id: string
   name: string
+  type: 'local' | 'remote'
+  remoteHost?: string
+  remotePort?: number
+  remoteToken?: string
   createdAt: number
   updatedAt: number
 }
@@ -15,8 +19,11 @@ interface ProfilePanelProps {
 export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
   const [profiles, setProfiles] = useState<ProfileEntry[]>([])
   const [activeProfileId, setActiveProfileId] = useState<string>('default')
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState<'local' | 'remote' | false>(false)
   const [newName, setNewName] = useState('')
+  const [remoteHost, setRemoteHost] = useState('')
+  const [remotePort, setRemotePort] = useState('9876')
+  const [remoteToken, setRemoteToken] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -65,9 +72,22 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
   const handleCreate = async () => {
     const trimmed = newName.trim()
     if (!trimmed) return
-    await window.electronAPI.profile.create(trimmed)
+    if (creating === 'remote') {
+      if (!remoteHost.trim() || !remoteToken.trim()) return
+      await window.electronAPI.profile.create(trimmed, {
+        type: 'remote',
+        remoteHost: remoteHost.trim(),
+        remotePort: parseInt(remotePort) || 9876,
+        remoteToken: remoteToken.trim(),
+      })
+    } else {
+      await window.electronAPI.profile.create(trimmed)
+    }
     setCreating(false)
     setNewName('')
+    setRemoteHost('')
+    setRemotePort('9876')
+    setRemoteToken('')
     loadProfiles()
   }
 
@@ -128,13 +148,16 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
             <button className="profile-action-btn" onClick={handleSaveCurrent} title="Save current workspaces to active profile">
               Save Current
             </button>
-            <button className="profile-action-btn" onClick={() => { setCreating(true); setNewName('') }}>
-              + New Profile
+            <button className="profile-action-btn" onClick={() => { setCreating('local'); setNewName('') }}>
+              + Local
+            </button>
+            <button className="profile-action-btn" onClick={() => { setCreating('remote'); setNewName('') }}>
+              + Remote
             </button>
           </div>
 
           {creating && (
-            <div className="profile-create-row">
+            <div className="profile-create-row" style={{ flexDirection: 'column', gap: 8 }}>
               <input
                 ref={createInputRef}
                 type="text"
@@ -143,12 +166,43 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 onKeyDown={e => {
-                  if (e.key === 'Enter') handleCreate()
+                  if (e.key === 'Enter' && creating === 'local') handleCreate()
                   if (e.key === 'Escape') { setCreating(false); setNewName('') }
                 }}
               />
-              <button className="profile-action-btn" onClick={handleCreate}>Create</button>
-              <button className="profile-action-btn" onClick={() => { setCreating(false); setNewName('') }}>Cancel</button>
+              {creating === 'remote' && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <input
+                    type="text"
+                    className="profile-name-input"
+                    placeholder="Host (e.g. 192.168.1.100)"
+                    value={remoteHost}
+                    onChange={e => setRemoteHost(e.target.value)}
+                    style={{ flex: '1 1 120px' }}
+                  />
+                  <input
+                    type="number"
+                    className="profile-name-input"
+                    placeholder="Port"
+                    value={remotePort}
+                    onChange={e => setRemotePort(e.target.value)}
+                    style={{ width: 70 }}
+                  />
+                  <input
+                    type="text"
+                    className="profile-name-input"
+                    placeholder="Token"
+                    value={remoteToken}
+                    onChange={e => setRemoteToken(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleCreate() }}
+                    style={{ flex: '1 1 160px' }}
+                  />
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="profile-action-btn" onClick={handleCreate}>Create</button>
+                <button className="profile-action-btn" onClick={() => { setCreating(false); setNewName('') }}>Cancel</button>
+              </div>
             </div>
           )}
 
@@ -179,9 +233,14 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
                       <span className="profile-item-name">
                         {profile.id === activeProfileId && <span className="profile-active-dot" />}
                         {profile.name}
+                        {(profile.type === 'remote') && (
+                          <span style={{ fontSize: 10, color: '#58a6ff', marginLeft: 6, opacity: 0.8 }}>REMOTE</span>
+                        )}
                       </span>
                       <span className="profile-item-meta">
-                        Updated {formatDate(profile.updatedAt)}
+                        {profile.type === 'remote'
+                          ? `${profile.remoteHost}:${profile.remotePort}`
+                          : `Updated ${formatDate(profile.updatedAt)}`}
                       </span>
                     </>
                   )}

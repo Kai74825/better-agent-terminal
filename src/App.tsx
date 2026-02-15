@@ -64,6 +64,7 @@ export default function App() {
   const [showAbout, setShowAbout] = useState(false)
   const [showProfiles, setShowProfiles] = useState(false)
   const [activeProfileName, setActiveProfileName] = useState<string>('Default')
+  const [isRemoteConnected, setIsRemoteConnected] = useState(false)
   const [envDialogWorkspaceId, setEnvDialogWorkspaceId] = useState<string | null>(null)
   // Snippet sidebar is always visible by default
   const [showSnippetSidebar] = useState(true)
@@ -163,6 +164,16 @@ export default function App() {
     }
   }, [])
 
+  // Poll remote client connection status
+  useEffect(() => {
+    const check = () => {
+      window.electronAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+    }
+    check()
+    const interval = setInterval(check, 3000)
+    return () => clearInterval(interval)
+  }, [])
+
   const handleAddWorkspace = useCallback(async () => {
     const folderPath = await window.electronAPI.dialog.selectFolder()
     if (folderPath) {
@@ -204,17 +215,40 @@ export default function App() {
       try { await window.electronAPI.pty.kill(terminal.id) } catch { /* ignore */ }
     }
 
-    // Load the profile (writes to workspaces.json)
-    const result = await window.electronAPI.profile.load(profileId)
-    if (!result) return
+    // Disconnect existing remote connection if any
+    await window.electronAPI.remote.disconnect()
 
-    // Reload workspace store from the updated workspaces.json
+    // Check if this is a remote profile
+    const profile = await window.electronAPI.profile.get(profileId)
+    if (!profile) return
+
+    if (profile.type === 'remote' && profile.remoteHost && profile.remoteToken) {
+      // Connect to remote host
+      const connectResult = await window.electronAPI.remote.connect(
+        profile.remoteHost,
+        profile.remotePort || 9876,
+        profile.remoteToken
+      )
+      if ('error' in connectResult) {
+        alert(`Failed to connect to remote: ${connectResult.error}`)
+        return
+      }
+      // Set as active profile (no local workspace load for remote)
+      await window.electronAPI.profile.setActiveId(profileId)
+    } else {
+      // Load the local profile (writes to workspaces.json)
+      const result = await window.electronAPI.profile.load(profileId)
+      if (!result) return
+    }
+
+    // Reload workspace store from the (possibly remote) workspaces.json
     await workspaceStore.load()
 
-    // Update active profile name
+    // Update active profile name and remote status
     const listResult = await window.electronAPI.profile.list()
     const active = listResult.profiles.find(p => p.id === listResult.activeProfileId)
     if (active) setActiveProfileName(active.name)
+    setIsRemoteConnected(profile.type === 'remote')
 
     setShowProfiles(false)
   }, [])
@@ -284,6 +318,7 @@ export default function App() {
         onOpenEnvVars={(workspaceId) => setEnvDialogWorkspaceId(workspaceId)}
         onDetachWorkspace={handleDetachWorkspace}
         activeProfileName={activeProfileName}
+        isRemoteConnected={isRemoteConnected}
         onOpenProfiles={() => setShowProfiles(true)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenAbout={() => setShowAbout(true)}

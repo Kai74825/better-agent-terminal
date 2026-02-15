@@ -5,6 +5,10 @@ import * as fs from 'fs/promises'
 export interface ProfileEntry {
   id: string
   name: string
+  type: 'local' | 'remote'
+  remoteHost?: string
+  remotePort?: number
+  remoteToken?: string
   createdAt: number
   updatedAt: number
 }
@@ -84,6 +88,7 @@ async function ensureInitialized(): Promise<ProfileIndex> {
   const defaultEntry: ProfileEntry = {
     id: 'default',
     name: 'Default',
+    type: 'local',
     createdAt: now,
     updatedAt: now,
   }
@@ -129,7 +134,7 @@ export class ProfileManager {
     return { profiles: index.profiles, activeProfileId: index.activeProfileId }
   }
 
-  async create(name: string): Promise<ProfileEntry> {
+  async create(name: string, options?: { type?: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string }): Promise<ProfileEntry> {
     const index = await ensureInitialized()
     let id = toSlug(name)
     // Ensure unique ID
@@ -138,19 +143,30 @@ export class ProfileManager {
     }
 
     const now = Date.now()
-    const entry: ProfileEntry = { id, name, createdAt: now, updatedAt: now }
-
-    // Create empty snapshot
-    const snapshot: ProfileSnapshot = {
+    const entry: ProfileEntry = {
       id,
       name,
-      version: 1,
-      workspaces: [],
-      activeWorkspaceId: null,
-      activeGroup: null,
+      type: options?.type || 'local',
+      remoteHost: options?.remoteHost,
+      remotePort: options?.remotePort,
+      remoteToken: options?.remoteToken,
+      createdAt: now,
+      updatedAt: now,
     }
 
-    await writeSnapshot(snapshot)
+    // Only create snapshot for local profiles
+    if (entry.type === 'local') {
+      const snapshot: ProfileSnapshot = {
+        id,
+        name,
+        version: 1,
+        workspaces: [],
+        activeWorkspaceId: null,
+        activeGroup: null,
+      }
+      await writeSnapshot(snapshot)
+    }
+
     index.profiles.push(entry)
     await writeIndex(index)
     return entry
@@ -272,8 +288,19 @@ export class ProfileManager {
     return entry
   }
 
+  async getProfile(profileId: string): Promise<ProfileEntry | null> {
+    const index = await ensureInitialized()
+    return index.profiles.find(p => p.id === profileId) || null
+  }
+
   async getActiveProfileId(): Promise<string> {
     const index = await ensureInitialized()
     return index.activeProfileId
+  }
+
+  async setActiveProfileId(profileId: string): Promise<void> {
+    const index = await ensureInitialized()
+    index.activeProfileId = profileId
+    await writeIndex(index)
   }
 }

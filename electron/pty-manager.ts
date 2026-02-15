@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import type { CreatePtyOptions } from '../src/types'
+import { broadcastHub } from './remote/broadcast-hub'
 
 // Try to import @lydell/node-pty, fall back to child_process if not available
 let pty: typeof import('@lydell/node-pty') | null = null
@@ -39,6 +40,7 @@ export class PtyManager {
         win.webContents.send(channel, ...args)
       }
     }
+    broadcastHub.broadcast(channel, ...args)
   }
 
   private getDefaultShell(): string {

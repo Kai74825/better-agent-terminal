@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['@lydell/node-pty']
+              external: ['@lydell/node-pty', 'ws', 'bufferutil', 'utf-8-validate']
             }
           }
         }
