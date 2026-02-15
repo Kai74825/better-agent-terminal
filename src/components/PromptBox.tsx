@@ -62,7 +62,7 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && e.ctrlKey) {
+    if (e.key === 'Enter' && e.ctrlKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
       return

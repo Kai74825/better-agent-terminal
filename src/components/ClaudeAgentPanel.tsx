@@ -457,10 +457,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
       startedSessions.add(sessionId)
+      const initialMode = settingsStore.getSettings().allowBypassPermissions ? 'bypassPermissions' : 'default'
       if (savedSdkSessionId) {
-        window.electronAPI.claude.startSession(sessionId, { cwd, sdkSessionId: savedSdkSessionId })
+        window.electronAPI.claude.startSession(sessionId, { cwd, sdkSessionId: savedSdkSessionId, permissionMode: initialMode })
       } else {
-        window.electronAPI.claude.startSession(sessionId, { cwd })
+        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: initialMode })
       }
     }
     return () => {
@@ -680,7 +681,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       }
       return
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
     }

@@ -283,7 +283,7 @@ function registerProxiedHandlers() {
   })
 
   // Claude Agent SDK
-  registerHandler('claude:start-session', (sessionId: string, options: { cwd: string; prompt?: string }) => claudeManager?.startSession(sessionId, options))
+  registerHandler('claude:start-session', (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string }) => claudeManager?.startSession(sessionId, options))
   registerHandler('claude:send-message', (sessionId: string, prompt: string, images?: string[]) => claudeManager?.sendMessage(sessionId, prompt, images))
   registerHandler('claude:stop-session', (sessionId: string) => claudeManager?.stopSession(sessionId))
   registerHandler('claude:set-permission-mode', (sessionId: string, mode: string) => claudeManager?.setPermissionMode(sessionId, mode as import('@anthropic-ai/claude-agent-sdk').PermissionMode))

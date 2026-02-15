@@ -93,7 +93,12 @@ export class RemoteServer {
         // Invoke
         if (frame.type === 'invoke' && frame.channel) {
           try {
-            const result = await invokeHandler(frame.channel, frame.args || [])
+            // Strip trailing nulls — JSON serializes undefined → null, breaking default params
+            let args = frame.args || []
+            while (args.length > 0 && args[args.length - 1] == null) {
+              args = args.slice(0, -1)
+            }
+            const result = await invokeHandler(frame.channel, args)
             this.sendFrame(ws, { type: 'invoke-result', id: frame.id, result })
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err)

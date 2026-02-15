@@ -1,6 +1,6 @@
 {
   "name": "better-agent-terminal",
-  "version": "1.38.0",
+  "version": "1.39.0",
   "description": "Windows terminal aggregator with multi-workspace support and Claude Code integration",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -17,8 +17,8 @@
     "diagnose:ctrl-o:verbose": "npx electron tests/diagnose-ctrl-o.js --verbose"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.34",
-    "@anthropic-ai/claude-code": "^2.1.34",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.42",
+    "@anthropic-ai/claude-code": "^2.1.42",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode11": "^0.8.0",
     "@xterm/addon-web-links": "^0.11.0",
