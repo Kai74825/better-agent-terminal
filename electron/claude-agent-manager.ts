@@ -338,7 +338,8 @@ export class ClaudeAgentManager {
       }
 
       // Build prompt: if images are attached, construct a multi-content SDKUserMessage
-      let promptArg: unknown = prompt
+      // Use a single space as fallback to prevent empty text block errors from the API
+      let promptArg: unknown = prompt || ' '
       if (images && images.length > 0) {
         const imageBlocks = (await Promise.all(
           images.filter(p => fsSync.existsSync(p)).map(p => imageToContentBlock(p))
