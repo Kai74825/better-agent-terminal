@@ -31,6 +31,7 @@ export interface TerminalInstance {
   scrollbackBuffer: string[];
   lastActivityTime?: number;
   hasPendingAction?: boolean;
+  sdkSessionId?: string;         // Claude SDK session ID for auto-resume
 }
 
 export interface AppState {

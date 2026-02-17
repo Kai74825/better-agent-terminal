@@ -134,28 +134,52 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const focusedTerminal = terminals.find(t => t.id === focusedTerminalId)
   const isAgentFocused = focusedTerminal?.agentPreset && focusedTerminal.agentPreset !== 'none'
 
-  // Initialize terminals when workspace becomes active (if no terminals exist)
+  // Initialize terminals when workspace becomes active
+  // If terminals were restored from a saved profile, start their PTY/agent processes
+  // If no terminals exist, create default ones from settings
   useEffect(() => {
-    if (isActive && terminals.length === 0 && !initializedWorkspaces.has(workspace.id)) {
-      initializedWorkspaces.add(workspace.id)
-      const createInitialTerminals = async () => {
-        const settings = settingsStore.getSettings()
+    if (!isActive || initializedWorkspaces.has(workspace.id)) return
+    initializedWorkspaces.add(workspace.id)
+
+    const initTerminals = async () => {
+      const settings = settingsStore.getSettings()
+      const shell = await getShellFromSettings()
+      const customEnv = mergeEnvVars(settings.globalEnvVars, workspace.envVars)
+
+      if (terminals.length > 0) {
+        // Restored terminals: start PTY processes for non-Claude terminals
+        // Claude agent terminals will be started by ClaudeAgentPanel on mount
+        for (const terminal of terminals) {
+          if (terminal.agentPreset === 'claude-code') continue
+          window.electronAPI.pty.create({
+            id: terminal.id,
+            cwd: terminal.cwd || workspace.folderPath,
+            type: 'terminal',
+            agentPreset: terminal.agentPreset,
+            shell,
+            customEnv
+          })
+          // Auto-run agent command for non-Claude agents
+          if (terminal.agentPreset && terminal.agentPreset !== 'none' && settings.agentAutoCommand) {
+            const preset = getAgentPreset(terminal.agentPreset)
+            if (preset?.command) {
+              setTimeout(() => {
+                window.electronAPI.pty.write(terminal.id, preset.command + '\r')
+              }, 500)
+            }
+          }
+        }
+      } else {
+        // No terminals: create defaults from settings
         const terminalCount = settings.defaultTerminalCount || 1
         const createAgentTerminal = settings.createDefaultAgentTerminal === true
-        // Use 'claude' as default agent when createDefaultAgentTerminal is enabled
         const defaultAgent = createAgentTerminal
           ? (workspace.defaultAgent || settings.defaultAgent || 'claude')
           : 'none'
-        const shell = await getShellFromSettings()
-        const customEnv = mergeEnvVars(settings.globalEnvVars, workspace.envVars)
 
-        // Create agent terminal first (if enabled)
         if (createAgentTerminal) {
           const agentTerminal = workspaceStore.addTerminal(workspace.id, defaultAgent as AgentPresetId)
-
-          if (defaultAgent === 'claude-code') {
-            // Claude Agent SDK session will be started by ClaudeAgentPanel on mount
-          } else {
+          if (defaultAgent !== 'claude-code') {
             window.electronAPI.pty.create({
               id: agentTerminal.id,
               cwd: workspace.folderPath,
@@ -164,21 +188,17 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
               shell,
               customEnv
             })
-
-            // Auto-run agent command if enabled
             if (settings.agentAutoCommand) {
-              const agentPreset = getAgentPreset(defaultAgent)
-              if (agentPreset?.command) {
-                // Small delay to ensure terminal is ready
+              const preset = getAgentPreset(defaultAgent)
+              if (preset?.command) {
                 setTimeout(() => {
-                  window.electronAPI.pty.write(agentTerminal.id, agentPreset.command + '\r')
+                  window.electronAPI.pty.write(agentTerminal.id, preset.command + '\r')
                 }, 500)
               }
             }
           }
         }
 
-        // Create regular terminals based on settings
         for (let i = 0; i < terminalCount; i++) {
           const terminal = workspaceStore.addTerminal(workspace.id)
           window.electronAPI.pty.create({
@@ -190,8 +210,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           })
         }
       }
-      createInitialTerminals()
     }
+    initTerminals()
   }, [isActive, workspace.id, terminals.length, workspace.defaultAgent, workspace.folderPath, workspace.envVars])
 
   // Set default focus - only for active workspace
@@ -316,7 +336,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
               onClose={handleCloseTerminal}
               onRestart={handleRestart}
               workspaceId={workspace.id}
-              lastSdkSessionId={terminal.id === agentTerminal?.id ? workspace.lastSdkSessionId : undefined}
+              lastSdkSessionId={terminal.sdkSessionId || (terminal.id === agentTerminal?.id ? workspace.lastSdkSessionId : undefined)}
             />
           </div>
         ))}

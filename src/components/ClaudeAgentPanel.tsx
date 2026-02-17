@@ -392,9 +392,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         } else if (m.permissionMode) {
           setPermissionMode(m.permissionMode)
         }
-        // Persist SDK session ID for auto-resume
-        if (m.sdkSessionId && workspaceId) {
-          workspaceStore.setLastSdkSessionId(workspaceId, m.sdkSessionId)
+        // Persist SDK session ID for auto-resume (per-terminal + legacy per-workspace)
+        if (m.sdkSessionId) {
+          workspaceStore.setTerminalSdkSessionId(sessionId, m.sdkSessionId)
+          if (workspaceId) {
+            workspaceStore.setLastSdkSessionId(workspaceId, m.sdkSessionId)
+          }
         }
       }),
 
@@ -522,6 +525,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     // Mark that history will be loaded — prevents sys-init from wiping messages
     historyLoadedRef.current = true
     await window.electronAPI.claude.resumeSession(sessionId, sdkSessionId, cwd)
+    workspaceStore.setTerminalSdkSessionId(sessionId, sdkSessionId)
     if (workspaceId) {
       workspaceStore.setLastSdkSessionId(workspaceId, sdkSessionId)
     }

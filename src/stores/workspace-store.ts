@@ -137,7 +137,19 @@ class WorkspaceStore {
     this.setWorkspaceEnvVars(id, envVars)
   }
 
-  // SDK session persistence
+  // SDK session persistence — per terminal
+  setTerminalSdkSessionId(terminalId: string, sdkSessionId: string): void {
+    this.state = {
+      ...this.state,
+      terminals: this.state.terminals.map(t =>
+        t.id === terminalId ? { ...t, sdkSessionId } : t
+      )
+    }
+    this.notify()
+    this.save()
+  }
+
+  // Legacy: also store on workspace for backwards compatibility
   setLastSdkSessionId(workspaceId: string, sdkSessionId: string): void {
     this.state = {
       ...this.state,
@@ -367,10 +379,23 @@ class WorkspaceStore {
 
   // Persistence
   async save(): Promise<void> {
+    // Strip runtime-only fields from terminals before saving
+    const savedTerminals = this.state.terminals.map(t => ({
+      id: t.id,
+      workspaceId: t.workspaceId,
+      type: t.type,
+      agentPreset: t.agentPreset,
+      title: t.title,
+      alias: t.alias,
+      cwd: t.cwd,
+      sdkSessionId: t.sdkSessionId,
+    }))
     const data = JSON.stringify({
       workspaces: this.state.workspaces,
       activeWorkspaceId: this.state.activeWorkspaceId,
-      activeGroup: this.activeGroup
+      activeGroup: this.activeGroup,
+      terminals: savedTerminals,
+      activeTerminalId: this.state.activeTerminalId,
     })
     await window.electronAPI.workspace.save(data)
   }
@@ -380,10 +405,25 @@ class WorkspaceStore {
     if (data) {
       try {
         const parsed = JSON.parse(data)
+        // Restore terminals with empty runtime fields
+        const terminals: TerminalInstance[] = (parsed.terminals || []).map((t: Partial<TerminalInstance>) => ({
+          id: t.id || '',
+          workspaceId: t.workspaceId || '',
+          type: 'terminal' as const,
+          agentPreset: t.agentPreset,
+          title: t.title || 'Terminal',
+          alias: t.alias,
+          cwd: t.cwd || '',
+          sdkSessionId: t.sdkSessionId,
+          scrollbackBuffer: [],
+          pid: undefined,
+        }))
         this.state = {
           ...this.state,
           workspaces: parsed.workspaces || [],
-          activeWorkspaceId: parsed.activeWorkspaceId || null
+          activeWorkspaceId: parsed.activeWorkspaceId || null,
+          terminals,
+          activeTerminalId: parsed.activeTerminalId || null,
         }
         this.activeGroup = parsed.activeGroup || null
         this.notify()
