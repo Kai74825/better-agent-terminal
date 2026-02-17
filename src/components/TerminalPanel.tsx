@@ -362,14 +362,17 @@ export function TerminalPanel({ terminalId, isActive = true, terminalType }: Ter
       }
     })
 
-    // Handle resize
+    // Handle resize — debounce via rAF to avoid excessive reflows during drag
+    let resizeRafId = 0
     const resizeObserver = new ResizeObserver(() => {
-      // Only resize if terminal is currently active
-      if (isActive) {
+      if (resizeRafId) cancelAnimationFrame(resizeRafId)
+      resizeRafId = requestAnimationFrame(() => {
+        resizeRafId = 0
+        if (!isActive) return
         fitAddon.fit()
         const { cols, rows } = terminal
         window.electronAPI.pty.resize(terminalId, cols, rows)
-      }
+      })
     })
     resizeObserver.observe(containerRef.current)
 
@@ -402,6 +405,7 @@ export function TerminalPanel({ terminalId, isActive = true, terminalType }: Ter
       unsubscribeOutput()
       unsubscribeExit()
       unsubscribeSettings()
+      if (resizeRafId) cancelAnimationFrame(resizeRafId)
       resizeObserver.disconnect()
       observer.disconnect()
       terminal.dispose()
