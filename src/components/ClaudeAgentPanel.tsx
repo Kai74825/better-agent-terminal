@@ -78,9 +78,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [autoExpandThinking, setAutoExpandThinking] = useState(false)
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
-  const [permissionMode, setPermissionMode] = useState<string>(() =>
-    settingsStore.getSettings().allowBypassPermissions ? 'bypassPermissions' : 'default'
-  )
+  const [permissionMode, setPermissionMode] = useState<string>('bypassPermissions')
   const [currentModel, setCurrentModel] = useState<string>('')
   // const [effortLevel, setEffortLevel] = useState<string>('medium') // hidden until SDK supports per-model effort
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
@@ -387,14 +385,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         const m = meta as SessionMeta
         setSessionMeta(m)
         if (m.model) setCurrentModel(m.model)
-        // On first status, apply preferred permission mode if bypass is enabled in settings
+        // On first status, ensure bypass mode is applied
         if (!initialModeAppliedRef.current) {
           initialModeAppliedRef.current = true
-          if (settingsStore.getSettings().allowBypassPermissions) {
-            window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
-          } else if (m.permissionMode) {
-            setPermissionMode(m.permissionMode)
-          }
+          window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
         } else if (m.permissionMode) {
           setPermissionMode(m.permissionMode)
         }
@@ -436,8 +430,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
 
       api.onModeChange((sid: string, mode: string) => {
         if (sid !== sessionId) return
-        // When exiting plan mode, restore to bypass if setting is enabled
-        if (mode === 'default' && settingsStore.getSettings().allowBypassPermissions) {
+        // When exiting plan mode, restore to bypass
+        if (mode === 'default') {
           setPermissionMode('bypassPermissions')
           window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
         } else {
@@ -457,11 +451,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
       startedSessions.add(sessionId)
-      const initialMode = settingsStore.getSettings().allowBypassPermissions ? 'bypassPermissions' : 'default'
       if (savedSdkSessionId) {
-        window.electronAPI.claude.startSession(sessionId, { cwd, sdkSessionId: savedSdkSessionId, permissionMode: initialMode })
+        window.electronAPI.claude.startSession(sessionId, { cwd, sdkSessionId: savedSdkSessionId, permissionMode: 'bypassPermissions' })
       } else {
-        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: initialMode })
+        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: 'bypassPermissions' })
       }
     }
     return () => {

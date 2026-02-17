@@ -24,7 +24,7 @@ const defaultSettings: AppSettings = {
   agentCustomCommand: '',
   defaultTerminalCount: 1,
   createDefaultAgentTerminal: false,
-  allowBypassPermissions: false
+  allowBypassPermissions: true
 }
 
 class SettingsStore {
