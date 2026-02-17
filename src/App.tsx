@@ -253,6 +253,12 @@ export default function App() {
     setShowProfiles(false)
   }, [])
 
+  // Open profile in a new app instance
+  const handleProfileNewWindow = useCallback(async (profileId: string) => {
+    await window.electronAPI.app.openNewInstance(profileId)
+    setShowProfiles(false)
+  }, [])
+
   // Get the workspace for env dialog
   const envDialogWorkspace = envDialogWorkspaceId
     ? state.workspaces.find(w => w.id === envDialogWorkspaceId)
@@ -373,7 +379,7 @@ export default function App() {
         <AboutPanel onClose={() => setShowAbout(false)} />
       )}
       {showProfiles && (
-        <ProfilePanel onClose={() => setShowProfiles(false)} onSwitch={handleProfileSwitch} />
+        <ProfilePanel onClose={() => setShowProfiles(false)} onSwitch={handleProfileSwitch} onSwitchNewWindow={handleProfileNewWindow} />
       )}
       {envDialogWorkspace && (
         <WorkspaceEnvDialog

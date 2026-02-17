@@ -179,6 +179,15 @@ app.whenReady().then(async () => {
   buildMenu()
   createWindow()
 
+  // Handle --profile launch argument: set active profile so frontend loads it
+  const profileArg = process.argv.find(a => a.startsWith('--profile='))
+  if (profileArg) {
+    const profileId = profileArg.split('=')[1]
+    if (profileId) {
+      await profileManager.setActiveProfileId(profileId)
+    }
+  }
+
   // Listen for system resume from sleep/hibernate
   powerMonitor.on('resume', () => {
     console.log('System resumed from sleep')
@@ -549,6 +558,13 @@ function registerLocalHandlers() {
   ipcMain.handle('profile:get', async (_event, profileId: string) => profileManager.getProfile(profileId))
   ipcMain.handle('profile:set-active', async (_event, profileId: string) => profileManager.setActiveProfileId(profileId))
   ipcMain.handle('profile:get-active-id', async () => profileManager.getActiveProfileId())
+
+  // Open new instance with a specific profile
+  ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
+    const { spawn } = await import('child_process')
+    const args = [app.getAppPath(), `--profile=${profileId}`]
+    spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref()
+  })
 
   // Workspace detach/reattach (local window management)
   ipcMain.handle('workspace:detach', async (_event, workspaceId: string) => {

@@ -14,9 +14,10 @@ interface ProfileEntry {
 interface ProfilePanelProps {
   onClose: () => void
   onSwitch: (profileId: string) => void
+  onSwitchNewWindow: (profileId: string) => void
 }
 
-export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
+export function ProfilePanel({ onClose, onSwitch, onSwitchNewWindow }: ProfilePanelProps) {
   const [profiles, setProfiles] = useState<ProfileEntry[]>([])
   const [activeProfileId, setActiveProfileId] = useState<string>('default')
   const [creating, setCreating] = useState<'local' | 'remote' | false>(false)
@@ -148,13 +149,17 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
     setConfirmSwitch(profileId)
   }
 
-  const handleSwitchConfirm = async (saveFirst: boolean) => {
+  const handleSwitchConfirm = async (saveFirst: boolean, newWindow = false) => {
     if (!confirmSwitch) return
     if (saveFirst) {
       await window.electronAPI.profile.save(activeProfileId)
     }
     setConfirmSwitch(null)
-    onSwitch(confirmSwitch)
+    if (newWindow) {
+      onSwitchNewWindow(confirmSwitch)
+    } else {
+      onSwitch(confirmSwitch)
+    }
   }
 
   const formatDate = (ts: number) => {
@@ -376,15 +381,16 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
       {/* Confirm switch dialog */}
       {confirmSwitch && (
         <div className="settings-overlay" style={{ zIndex: 1001 }} onClick={() => setConfirmSwitch(null)}>
-          <div className="settings-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 400, padding: 20 }}>
+          <div className="settings-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, padding: 20 }}>
             <h3 style={{ margin: '0 0 12px' }}>Switch Profile</h3>
             <p style={{ margin: '0 0 16px', color: '#aaa' }}>
-              Switching profiles will close all terminals and reload workspaces. Save current state first?
+              Switch in this window (closes all terminals) or open in a new window?
             </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button className="profile-action-btn" onClick={() => setConfirmSwitch(null)}>Cancel</button>
-              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(false)}>Switch Without Saving</button>
-              <button className="profile-action-btn primary" onClick={() => handleSwitchConfirm(true)}>Save &amp; Switch</button>
+              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(false)}>Switch Here</button>
+              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(true)}>Save &amp; Switch Here</button>
+              <button className="profile-action-btn primary" onClick={() => handleSwitchConfirm(false, true)}>New Window</button>
             </div>
           </div>
         </div>

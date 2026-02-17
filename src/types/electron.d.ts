@@ -28,6 +28,9 @@ interface ElectronAPI {
     saveImage: () => Promise<string | null>
     writeImage: (filePath: string) => Promise<boolean>
   }
+  app: {
+    openNewInstance: (profileId: string) => Promise<void>
+  }
 }
 
 declare global {

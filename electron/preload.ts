@@ -54,6 +54,9 @@ const electronAPI = {
     openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
     openPath: (folderPath: string) => ipcRenderer.invoke('shell:open-path', folderPath),
   },
+  app: {
+    openNewInstance: (profileId: string) => ipcRenderer.invoke('app:open-new-instance', profileId),
+  },
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     getVersion: () => ipcRenderer.invoke('update:get-version')
