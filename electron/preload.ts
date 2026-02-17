@@ -174,6 +174,7 @@ const electronAPI = {
     load: (profileId: string) => ipcRenderer.invoke('profile:load', profileId) as Promise<unknown>,
     delete: (profileId: string) => ipcRenderer.invoke('profile:delete', profileId) as Promise<boolean>,
     rename: (profileId: string, newName: string) => ipcRenderer.invoke('profile:rename', profileId, newName) as Promise<boolean>,
+    update: (profileId: string, updates: { remoteHost?: string; remotePort?: number; remoteToken?: string }) => ipcRenderer.invoke('profile:update', profileId, updates) as Promise<boolean>,
     duplicate: (profileId: string, newName: string) => ipcRenderer.invoke('profile:duplicate', profileId, newName) as Promise<{ id: string; name: string; createdAt: number; updatedAt: number } | null>,
     get: (profileId: string) => ipcRenderer.invoke('profile:get', profileId) as Promise<{ id: string; name: string; type: 'local' | 'remote'; remoteHost?: string; remotePort?: number; remoteToken?: string; createdAt: number; updatedAt: number } | null>,
     getActiveId: () => ipcRenderer.invoke('profile:get-active-id') as Promise<string>,

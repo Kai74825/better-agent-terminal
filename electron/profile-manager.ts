@@ -288,6 +288,19 @@ export class ProfileManager {
     return entry
   }
 
+  async update(profileId: string, updates: { remoteHost?: string; remotePort?: number; remoteToken?: string }): Promise<boolean> {
+    const index = await ensureInitialized()
+    const entry = index.profiles.find(p => p.id === profileId)
+    if (!entry) return false
+
+    if (updates.remoteHost !== undefined) entry.remoteHost = updates.remoteHost
+    if (updates.remotePort !== undefined) entry.remotePort = updates.remotePort
+    if (updates.remoteToken !== undefined) entry.remoteToken = updates.remoteToken
+    entry.updatedAt = Date.now()
+    await writeIndex(index)
+    return true
+  }
+
   async getProfile(profileId: string): Promise<ProfileEntry | null> {
     const index = await ensureInitialized()
     return index.profiles.find(p => p.id === profileId) || null

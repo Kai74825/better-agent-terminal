@@ -545,6 +545,7 @@ function registerLocalHandlers() {
   ipcMain.handle('profile:delete', async (_event, profileId: string) => profileManager.delete(profileId))
   ipcMain.handle('profile:rename', async (_event, profileId: string, newName: string) => profileManager.rename(profileId, newName))
   ipcMain.handle('profile:duplicate', async (_event, profileId: string, newName: string) => profileManager.duplicate(profileId, newName))
+  ipcMain.handle('profile:update', async (_event, profileId: string, updates: { remoteHost?: string; remotePort?: number; remoteToken?: string }) => profileManager.update(profileId, updates))
   ipcMain.handle('profile:get', async (_event, profileId: string) => profileManager.getProfile(profileId))
   ipcMain.handle('profile:set-active', async (_event, profileId: string) => profileManager.setActiveProfileId(profileId))
   ipcMain.handle('profile:get-active-id', async () => profileManager.getActiveProfileId())

@@ -26,6 +26,10 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
   const [remoteToken, setRemoteToken] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [editingRemoteId, setEditingRemoteId] = useState<string | null>(null)
+  const [editRemoteHost, setEditRemoteHost] = useState('')
+  const [editRemotePort, setEditRemotePort] = useState('')
+  const [editRemoteToken, setEditRemoteToken] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [confirmSwitch, setConfirmSwitch] = useState<string | null>(null)
   const createInputRef = useRef<HTMLInputElement>(null)
@@ -60,6 +64,7 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
       if (e.key === 'Escape') {
         if (creating) { setCreating(false); setNewName('') }
         else if (editingId) { setEditingId(null); setEditValue('') }
+        else if (editingRemoteId) { setEditingRemoteId(null) }
         else if (confirmDelete) { setConfirmDelete(null) }
         else if (confirmSwitch) { setConfirmSwitch(null) }
         else onClose()
@@ -97,6 +102,26 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
     await window.electronAPI.profile.rename(profileId, trimmed)
     setEditingId(null)
     setEditValue('')
+    loadProfiles()
+  }
+
+  const handleStartEditRemote = (profile: ProfileEntry) => {
+    setEditingRemoteId(profile.id)
+    setEditRemoteHost(profile.remoteHost || '')
+    setEditRemotePort(String(profile.remotePort || 9876))
+    setEditRemoteToken(profile.remoteToken || '')
+  }
+
+  const handleSaveRemote = async (profileId: string) => {
+    const host = editRemoteHost.trim()
+    const token = editRemoteToken.trim()
+    if (!host || !token) return
+    await window.electronAPI.profile.update(profileId, {
+      remoteHost: host,
+      remotePort: parseInt(editRemotePort) || 9876,
+      remoteToken: token,
+    })
+    setEditingRemoteId(null)
     loadProfiles()
   }
 
@@ -245,7 +270,53 @@ export function ProfilePanel({ onClose, onSwitch }: ProfilePanelProps) {
                     </>
                   )}
                 </div>
+                {/* Remote connection edit form */}
+                {editingRemoteId === profile.id && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, width: '100%' }} onClick={e => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      className="profile-name-input"
+                      placeholder="Host"
+                      value={editRemoteHost}
+                      onChange={e => setEditRemoteHost(e.target.value)}
+                      style={{ flex: '1 1 120px' }}
+                    />
+                    <input
+                      type="number"
+                      className="profile-name-input"
+                      placeholder="Port"
+                      value={editRemotePort}
+                      onChange={e => setEditRemotePort(e.target.value)}
+                      style={{ width: 70 }}
+                    />
+                    <input
+                      type="text"
+                      className="profile-name-input"
+                      placeholder="Token"
+                      value={editRemoteToken}
+                      onChange={e => setEditRemoteToken(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleSaveRemote(profile.id) }}
+                      style={{ flex: '1 1 160px' }}
+                    />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="profile-action-btn" onClick={() => handleSaveRemote(profile.id)}>Save</button>
+                      <button className="profile-action-btn" onClick={() => setEditingRemoteId(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
                 <div className="profile-item-actions" onClick={e => e.stopPropagation()}>
+                  {profile.type === 'remote' && (
+                    <button
+                      className="profile-icon-btn"
+                      title="Edit connection"
+                      onClick={() => handleStartEditRemote(profile)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                      </svg>
+                    </button>
+                  )}
                   <button
                     className="profile-icon-btn"
                     title="Rename"
