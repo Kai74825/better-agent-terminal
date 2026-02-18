@@ -33,8 +33,8 @@ function canPreview(p: string): boolean {
   return TEXT_EXTS.has(ext) || IMAGE_EXTS.has(ext)
 }
 
-// Regex: Windows absolute path with file extension
-const PATH_RE = /[A-Za-z]:[\\\/][\w\-. \\\/]+\.\w{1,10}/g
+// Regex: absolute file paths — Windows (C:\...) and Unix (/Users/..., /home/..., /tmp/...)
+const PATH_RE = /(?:[A-Za-z]:[\\\/]|\/(?:Users|home|tmp|var|opt|etc|usr|mnt|srv|root)\/)[\w\-. \\\/]+\.\w{1,10}/g
 
 type TokenType = 'text' | 'path' | 'url' | 'mdlink'
 interface Token { type: TokenType; text: string; href?: string }
