@@ -575,7 +575,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       return
     }
 
-    const imagePaths = attachedImages.map(i => i.path)
+    const imageDataUrls = attachedImages.map(i => i.dataUrl)
     clearInput()
     setAttachedImages([])
     if (!isStreaming) {
@@ -585,8 +585,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     }
 
     // Add user message locally
-    const imageNote = imagePaths.length > 0
-      ? `\n[${imagePaths.length} image${imagePaths.length > 1 ? 's' : ''} attached]`
+    const imageNote = imageDataUrls.length > 0
+      ? `\n[${imageDataUrls.length} image${imageDataUrls.length > 1 ? 's' : ''} attached]`
       : ''
     setMessages(prev => [...prev, {
       id: `user-${Date.now()}`,
@@ -596,7 +596,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       timestamp: Date.now(),
     }])
 
-    await window.electronAPI.claude.sendMessage(sessionId, trimmed, imagePaths.length > 0 ? imagePaths : undefined)
+    await window.electronAPI.claude.sendMessage(sessionId, trimmed, imageDataUrls.length > 0 ? imageDataUrls : undefined)
   }, [isStreaming, sessionId, attachedImages, clearInput])
 
   const handleStop = useCallback(() => {

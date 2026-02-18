@@ -18,37 +18,20 @@ async function getQuery() {
   return queryFn
 }
 
-// Map file extension to media type for image content blocks
-function getMediaType(filePath: string): 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp' {
-  const ext = pathModule.extname(filePath).toLowerCase()
-  switch (ext) {
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg'
-    case '.gif':
-      return 'image/gif'
-    case '.webp':
-      return 'image/webp'
-    default:
-      return 'image/png'
-  }
-}
-
-async function imageToContentBlock(filePath: string): Promise<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } } | null> {
-  try {
-    const data = await fsPromises.readFile(filePath)
-    // Skip images > 20MB base64 to avoid API rejection
-    if (data.length > 15 * 1024 * 1024) return null
-    return {
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: getMediaType(filePath),
-        data: data.toString('base64'),
-      },
-    }
-  } catch {
-    return null
+// Parse a data URL (data:image/png;base64,...) into a content block
+function dataUrlToContentBlock(dataUrl: string): { type: 'image'; source: { type: 'base64'; media_type: string; data: string } } | null {
+  const match = dataUrl.match(/^data:(image\/[a-z+]+);base64,(.+)$/i)
+  if (!match) return null
+  const base64 = match[2]
+  // Skip images > 20MB base64 to avoid API rejection
+  if (base64.length > 20 * 1024 * 1024) return null
+  return {
+    type: 'image',
+    source: {
+      type: 'base64',
+      media_type: match[1],
+      data: base64,
+    },
   }
 }
 
@@ -341,9 +324,10 @@ export class ClaudeAgentManager {
       // Use a single space as fallback to prevent empty text block errors from the API
       let promptArg: unknown = prompt || ' '
       if (images && images.length > 0) {
-        const imageBlocks = (await Promise.all(
-          images.filter(p => fsSync.existsSync(p)).map(p => imageToContentBlock(p))
-        )).filter(Boolean) as Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
+        // Images are now passed as data URLs (data:image/...;base64,...) from the frontend
+        const imageBlocks = images
+          .map(dataUrl => dataUrlToContentBlock(dataUrl))
+          .filter(Boolean) as Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
         if (imageBlocks.length > 0) {
           const contentBlocks = [
             ...imageBlocks,
