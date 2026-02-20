@@ -116,8 +116,10 @@ const electronAPI = {
       ipcRenderer.invoke('claude:set-permission-mode', sessionId, mode),
     setModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke('claude:set-model', sessionId, model),
-    setMaxThinkingTokens: (sessionId: string, tokens: number | null) =>
-      ipcRenderer.invoke('claude:set-max-thinking-tokens', sessionId, tokens),
+    setEffort: (sessionId: string, effort: string) =>
+      ipcRenderer.invoke('claude:set-effort', sessionId, effort),
+    set1MContext: (sessionId: string, enable: boolean) =>
+      ipcRenderer.invoke('claude:set-1m-context', sessionId, enable),
     getSupportedModels: (sessionId: string) =>
       ipcRenderer.invoke('claude:get-supported-models', sessionId),
     resolvePermission: (sessionId: string, toolUseId: string, result: { behavior: string; updatedInput?: Record<string, unknown>; message?: string }) =>

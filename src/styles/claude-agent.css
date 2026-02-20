@@ -1020,6 +1020,42 @@
   background: rgba(255, 255, 255, 0.12);
 }
 
+.claude-effort-select {
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 0 4px;
+  height: 22px;
+  font-size: 11px;
+  cursor: pointer;
+  outline: none;
+}
+.claude-effort-select:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.claude-effort-select option {
+  background: #1e1e1e;
+  color: #ccc;
+}
+
+.claude-1m-toggle {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0.4;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  padding: 0 5px;
+}
+.claude-1m-toggle:hover {
+  opacity: 0.7;
+}
+.claude-1m-toggle.active {
+  opacity: 1;
+  color: #6cf;
+  border-color: #6cf;
+}
+
 .claude-status-spacer {
   flex: 1;
 }

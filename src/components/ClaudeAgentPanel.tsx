@@ -80,7 +80,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
   const [sessionMeta, setSessionMeta] = useState<SessionMeta | null>(null)
   const [permissionMode, setPermissionMode] = useState<string>('bypassPermissions')
   const [currentModel, setCurrentModel] = useState<string>('')
-  // const [effortLevel, setEffortLevel] = useState<string>('medium') // hidden until SDK supports per-model effort
+  const [effortLevel, setEffortLevel] = useState<string>('high')
+  const [enable1MContext, setEnable1MContext] = useState(() => settingsStore.getSettings().enable1MContext)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null)
   const [permissionFocus, setPermissionFocus] = useState(0) // 0=Yes, 1=Yes always, 2=No, 3=custom text
@@ -389,6 +390,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
         if (!initialModeAppliedRef.current) {
           initialModeAppliedRef.current = true
           window.electronAPI.claude.setPermissionMode(sessionId, 'bypassPermissions')
+          // Sync settings to session on first status
+          if (settingsStore.getSettings().enable1MContext) {
+            window.electronAPI.claude.set1MContext(sessionId, true)
+          }
         } else if (m.permissionMode) {
           setPermissionMode(m.permissionMode)
         }
@@ -692,9 +697,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
     await window.electronAPI.claude.setModel(sessionId, next.value)
   }, [sessionId, currentModel, availableModels])
 
-  // Effort control hidden until SDK supports per-model effort metadata
-  // const effortLevels = ['low', 'medium', 'high'] as const
-  // const handleEffortCycle = useCallback(async () => { ... }, [sessionId, effortLevel])
+  const handleEffortChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const next = e.target.value
+    setEffortLevel(next)
+    await window.electronAPI.claude.setEffort(sessionId, next)
+  }, [sessionId])
+
+  const handle1MContextToggle = useCallback(async () => {
+    const next = !enable1MContext
+    setEnable1MContext(next)
+    settingsStore.setEnable1MContext(next)
+    await window.electronAPI.claude.set1MContext(sessionId, next)
+  }, [sessionId, enable1MContext])
 
   const PERMISSION_OPTION_COUNT = 4 // 0=Yes, 1=Yes always, 2=No, 3=custom text
 
@@ -1987,6 +2001,24 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
                 {'</>'} {currentModel}
               </span>
             )}
+            <select
+              className="claude-effort-select"
+              value={effortLevel}
+              onChange={handleEffortChange}
+              title="Effort level"
+            >
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="max">max</option>
+            </select>
+            <span
+              className={`claude-status-btn claude-1m-toggle${enable1MContext ? ' active' : ''}`}
+              onClick={handle1MContextToggle}
+              title="1M context window (Sonnet only)"
+            >
+              1M
+            </span>
           </div>
 
           <div className="claude-input-actions">

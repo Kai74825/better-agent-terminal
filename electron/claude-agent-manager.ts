@@ -97,6 +97,8 @@ interface SessionInstance {
   pendingPermissions: Map<string, PendingRequest>
   pendingAskUser: Map<string, PendingRequest>
   permissionMode: PermissionMode
+  effort: 'low' | 'medium' | 'high' | 'max'
+  enable1MContext: boolean
   messageQueue: QueuedMessage[]
   isResting?: boolean
 }
@@ -196,6 +198,8 @@ export class ClaudeAgentManager {
         pendingPermissions: new Map(),
         pendingAskUser: new Map(),
         permissionMode: options.permissionMode || 'default',
+        effort: 'high',
+        enable1MContext: false,
         messageQueue: [],
       })
 
@@ -306,7 +310,9 @@ export class ClaudeAgentManager {
         ...(currentMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
         includePartialMessages: true,
         settingSources: ['user', 'project', 'local'],
-        maxThinkingTokens: 31999,
+        thinking: { type: 'adaptive' },
+        effort: session.effort,
+        ...(session.enable1MContext ? { betas: ['context-1m-2025-08-07'] } : {}),
         canUseTool,
         ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
         stderr: (data: string) => {
@@ -634,16 +640,18 @@ export class ClaudeAgentManager {
     }
   }
 
-  async setMaxThinkingTokens(sessionId: string, tokens: number | null): Promise<boolean> {
+  setEffort(sessionId: string, effort: 'low' | 'medium' | 'high' | 'max'): boolean {
     const session = this.sessions.get(sessionId)
-    if (!session?.queryInstance) return false
-    try {
-      await session.queryInstance.setMaxThinkingTokens(tokens)
-      return true
-    } catch (e) {
-      console.warn('setMaxThinkingTokens failed:', e)
-      return false
-    }
+    if (!session) return false
+    session.effort = effort
+    return true
+  }
+
+  set1MContext(sessionId: string, enable: boolean): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    session.enable1MContext = enable
+    return true
   }
 
   async getSupportedModels(sessionId: string): Promise<Array<{ value: string; displayName: string; description: string }>> {
