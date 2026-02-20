@@ -580,6 +580,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, savedS
       return
     }
 
+    // Intercept /new command — reset session (clear conversation, fresh start)
+    if (!isStreaming && trimmed === '/new') {
+      clearInput()
+      setMessages([])
+      setStreamingText('')
+      setStreamingThinking('')
+      await window.electronAPI.claude.resetSession(sessionId)
+      return
+    }
+
     const imageDataUrls = attachedImages.map(i => i.dataUrl)
     clearInput()
     setAttachedImages([])

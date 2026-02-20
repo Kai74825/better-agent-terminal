@@ -16,7 +16,7 @@ export const PROXIED_CHANNELS = new Set([
   'pty:create', 'pty:write', 'pty:resize', 'pty:kill', 'pty:restart', 'pty:get-cwd',
   // Claude
   'claude:start-session', 'claude:send-message', 'claude:stop-session',
-  'claude:set-permission-mode', 'claude:set-model', 'claude:set-effort', 'claude:set-1m-context',
+  'claude:set-permission-mode', 'claude:set-model', 'claude:set-effort', 'claude:set-1m-context', 'claude:reset-session',
   'claude:get-supported-models', 'claude:resolve-permission', 'claude:resolve-ask-user',
   'claude:list-sessions', 'claude:resume-session', 'claude:rest-session',
   'claude:wake-session', 'claude:is-resting',

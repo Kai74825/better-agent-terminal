@@ -959,6 +959,34 @@ export class ClaudeAgentManager {
     return true
   }
 
+  /** Reset session — clear conversation and start fresh (like /new) */
+  async resetSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    const cwd = session.cwd
+    const permissionMode = session.permissionMode
+    const effort = session.effort
+    const enable1MContext = session.enable1MContext
+
+    // Tear down old session completely
+    session.abortController.abort()
+    session.messageQueue.length = 0
+    try { session.queryInstance?.close() } catch { /* ignore */ }
+    this.sessions.delete(sessionId)
+    sdkSessionIds.delete(sessionId)
+
+    // Start a fresh session preserving settings
+    const ok = await this.startSession(sessionId, { cwd, permissionMode })
+    if (ok) {
+      const newSession = this.sessions.get(sessionId)
+      if (newSession) {
+        newSession.effort = effort
+        newSession.enable1MContext = enable1MContext
+      }
+    }
+    return ok
+  }
+
   /** Wake a resting session — will auto-resume on next sendMessage */
   wakeSession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId)
