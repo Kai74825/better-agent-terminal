@@ -269,11 +269,11 @@ export class ClaudeAgentManager {
     // Collect stderr output for better error diagnostics
     let stderrOutput = ''
 
+    // Declare resumeId outside try so it's accessible in catch for retry logic
+    const resumeId = session.sdkSessionId
+
     try {
       const query = await getQuery()
-
-      // Build options — resume if we have a previous SDK session ID
-      const resumeId = session.sdkSessionId
       const claudeCodePath = resolveClaudeCodePath()
       console.log(`[Claude] runQuery: cwd=${session.cwd}, resumeId=${resumeId || 'none'}, claudeCodePath=${claudeCodePath || 'none'}`)
       const canUseTool: CanUseTool = async (toolName, input, opts) => {
