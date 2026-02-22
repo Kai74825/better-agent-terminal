@@ -543,7 +543,11 @@ export class ClaudeAgentManager {
       }
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error)
-      if (errMsg !== 'aborted' && errMsg !== 'The operation was aborted') {
+      const isAbort = errMsg === 'aborted'
+        || errMsg === 'The operation was aborted'
+        || errMsg.includes('aborted')
+        || session?.abortController.signal.aborted
+      if (!isAbort) {
         // If we were trying to resume and the process crashed, retry without resume
         if (resumeId && errMsg.includes('exited with code')) {
           console.warn('Claude query failed with resume, retrying without resume:', errMsg)

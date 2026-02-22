@@ -135,14 +135,24 @@ export default function App() {
     })
 
     // Load saved workspaces and settings on startup
-    workspaceStore.load()
-    settingsStore.load()
-
-    // Load active profile name
-    window.electronAPI.profile.list().then(result => {
+    // If active profile is remote, fall back to Default local profile to avoid hanging
+    const initProfile = async () => {
+      const result = await window.electronAPI.profile.list()
       const active = result.profiles.find(p => p.id === result.activeProfileId)
-      if (active) setActiveProfileName(active.name)
-    })
+      if (active?.type === 'remote') {
+        // Remote profile can't auto-connect — switch to first local profile
+        const localProfile = result.profiles.find(p => p.type !== 'remote')
+        if (localProfile) {
+          await window.electronAPI.profile.load(localProfile.id)
+          setActiveProfileName(localProfile.name)
+        }
+      } else if (active) {
+        setActiveProfileName(active.name)
+      }
+      await workspaceStore.load()
+      settingsStore.load()
+    }
+    initProfile()
 
     // Listen for workspace detach/reattach events (main window only)
     const unsubDetach = window.electronAPI.workspace.onDetached((wsId) => {
