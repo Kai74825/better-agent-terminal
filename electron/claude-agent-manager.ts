@@ -810,7 +810,7 @@ export class ClaudeAgentManager {
     const os = await import('os')
     const readline = await import('readline')
 
-    const encoded = cwd.replace(/:/g, '-').replace(/[\\/]/g, '-')
+    const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-')
     const projectDir = pathModule.join(os.homedir(), '.claude', 'projects', encoded)
 
     const results: SessionSummary[] = []
@@ -888,7 +888,7 @@ export class ClaudeAgentManager {
     const os = await import('os')
     const readline = await import('readline')
 
-    const encoded = cwd.replace(/:/g, '-').replace(/[\\/]/g, '-')
+    const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-')
     const projectDir = pathModule.join(os.homedir(), '.claude', 'projects', encoded)
     const filePath = pathModule.join(projectDir, `${sdkSessionId}.jsonl`)
 
