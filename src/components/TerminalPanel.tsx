@@ -368,10 +368,10 @@ export function TerminalPanel({ terminalId, isActive = true, terminalType }: Ter
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         resizeTimer = null
-        if (!isActive) return
         fitAddon.fit()
         const { cols, rows } = terminal
         window.electronAPI.pty.resize(terminalId, cols, rows)
+        terminal.refresh(0, terminal.rows - 1)
       }, 150)
     })
     resizeObserver.observe(containerRef.current)

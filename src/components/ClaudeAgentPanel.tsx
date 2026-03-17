@@ -90,7 +90,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [currentModel, setCurrentModel] = useState<string>('')
   const [effortLevel, setEffortLevel] = useState<string>('high')
   const [enable1MContext, setEnable1MContext] = useState(false)
-  const [claudeUsage, setClaudeUsage] = useState<{ fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null } | null>(null)
+  const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null)
   const [permissionFocus, setPermissionFocus] = useState(0) // 0=Yes, 1=Yes always, 2=No, 3=custom text
@@ -111,6 +111,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [accountInfo, setAccountInfo] = useState<{ email?: string; organization?: string; subscriptionType?: string } | null>(null)
   const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([])
   const [showSlashMenu, setShowSlashMenu] = useState(false)
+  const showSlashMenuRef = useRef(false)
   const [slashFilter, setSlashFilter] = useState('')
   const [slashMenuIndex, setSlashMenuIndex] = useState(0)
   // Ctrl+P file picker
@@ -144,6 +145,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   const [userScrolledUp, setUserScrolledUp] = useState(false)
   const isNearBottomRef = useRef(true)
   const [aboveViewportUserMsgIds, setAboveViewportUserMsgIds] = useState<Set<string>>(new Set())
+  const [claudeFontSize, setClaudeFontSize] = useState(settingsStore.getSettings().fontSize)
   const userMsgRefsMap = useRef<Map<string, HTMLDivElement>>(new Map())
   const observerRef = useRef<IntersectionObserver | null>(null)
 
@@ -391,18 +393,22 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         setIsInterrupted(false)
         setStreamingText('')
         setStreamingThinking('')
-        // Show result text for slash commands like /context that don't produce assistant messages
+        // Show result text only for slash commands that don't produce assistant messages
         const rd = resultData as { result?: string; subtype?: string } | undefined
         if (rd?.result && rd.subtype === 'success') {
           setMessages(prev => {
-            // Skip if any assistant message already has this content (avoid duplicates)
-            const alreadyShown = prev.some(m => 'role' in m && m.role === 'assistant' && m.content === rd.result)
+            // Skip if any assistant message contains the result text (already shown via onMessage)
+            const resultText = rd.result!
+            const alreadyShown = prev.some(m =>
+              'role' in m && m.role === 'assistant' && typeof m.content === 'string' &&
+              (m.content === resultText || m.content.includes(resultText) || resultText.includes(m.content))
+            )
             if (alreadyShown) return prev
             return [...prev, {
               id: `result-${Date.now()}`,
               sessionId,
               role: 'assistant' as const,
-              content: rd.result!,
+              content: resultText,
               timestamp: Date.now(),
             }]
           })
@@ -438,7 +444,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         console.log(`${tag} onStatus sdkSessionId=${((meta as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
         const m = meta as SessionMeta
         setSessionMeta(m)
-        if (m.model) setCurrentModel(m.model)
+        if (m.model) setCurrentModel(prev => prev || m.model!)
         // On first status, ensure bypass mode is applied
         if (!initialModeAppliedRef.current) {
           initialModeAppliedRef.current = true
@@ -519,14 +525,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
 
       const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
       const savedSdkSessionId = terminal?.sdkSessionId
+      const savedModel = terminal?.model
+
+      // Restore saved model to UI
+      if (savedModel) setCurrentModel(savedModel)
 
       if (savedSdkSessionId) {
         console.log(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
         historyLoadedRef.current = true
-        window.electronAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd)
+        window.electronAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel)
       } else {
         console.log(`${stag} FRESH startSession`)
-        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: 'bypassPermissions' })
+        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode: 'bypassPermissions', model: savedModel })
       }
     }
     return () => {
@@ -540,7 +550,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       window.electronAPI.claude.getSessionMeta(sessionId).then(meta => {
         if (meta) {
           setSessionMeta(meta as SessionMeta)
-          if ((meta as SessionMeta).model) setCurrentModel((meta as SessionMeta).model!)
+          if ((meta as SessionMeta).model) setCurrentModel(prev => prev || (meta as SessionMeta).model!)
         }
       }).catch(() => {})
     }
@@ -550,6 +560,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   useEffect(() => {
     if (sessionMeta?.sdkSessionId && availableModels.length === 0) {
       window.electronAPI.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
+        console.log('[getSupportedModels] raw response:', JSON.stringify(models, null, 2))
         if (models && models.length > 0) {
           setAvailableModels(models)
         }
@@ -568,14 +579,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     window.electronAPI.git.getBranch(cwd).then(branch => setGitBranch(branch)).catch(() => setGitBranch(null))
   }, [cwd])
 
-  // Poll Claude usage (5h / 7d rate limits) every 60 seconds
+  // Subscribe to font size changes from settings
   useEffect(() => {
-    const fetchUsage = () => {
-      window.electronAPI.claude.getUsage().then(u => { if (u) setClaudeUsage(u) }).catch(() => {})
-    }
-    fetchUsage()
-    const timer = setInterval(fetchUsage, 60 * 1000)
-    return () => clearInterval(timer)
+    return settingsStore.subscribe(() => {
+      setClaudeFontSize(settingsStore.getSettings().fontSize)
+    })
+  }, [])
+
+  // Subscribe to global Claude usage from workspace store
+  useEffect(() => {
+    workspaceStore.startUsagePolling()
+    return workspaceStore.subscribe(() => {
+      const u = workspaceStore.claudeUsage
+      if (u) setClaudeUsage(u)
+    })
   }, [])
 
   // File picker: debounced search
@@ -608,6 +625,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     setShowModelList(false)
     setCurrentModel(modelValue)
     await window.electronAPI.claude.setModel(sessionId, modelValue)
+    workspaceStore.updateTerminalModel(sessionId, modelValue)
   }, [sessionId])
 
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
@@ -775,6 +793,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     await window.electronAPI.claude.setPermissionMode(sessionId, nextMode)
   }, [sessionId, permissionMode])
 
+  useEffect(() => { showSlashMenuRef.current = showSlashMenu }, [showSlashMenu])
+
   // Filtered slash commands based on current input
   const filteredSlashCommands = useMemo(() => {
     if (!showSlashMenu) return []
@@ -797,7 +817,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       setShowSlashMenu(true)
       setSlashFilter(val.slice(1))
       setSlashMenuIndex(0)
-    } else {
+    } else if (showSlashMenuRef.current) {
       setShowSlashMenu(false)
     }
   }, [])
@@ -882,6 +902,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
     const next = availableModels[(idx + 1) % availableModels.length]
     setCurrentModel(next.value)
     await window.electronAPI.claude.setModel(sessionId, next.value)
+    workspaceStore.updateTerminalModel(sessionId, next.value)
   }, [sessionId, currentModel, availableModels])
 
   const handleEffortChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -1805,6 +1826,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   return (
     <div
       className="claude-agent-panel"
+      style={{ '--claude-font-size': `${claudeFontSize}px` } as React.CSSProperties}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

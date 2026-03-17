@@ -107,6 +107,7 @@ interface SessionInstance {
   permissionMode: AppPermissionMode
   effort: 'low' | 'medium' | 'high' | 'max'
   enable1MContext: boolean
+  model?: string
   messageQueue: QueuedMessage[]
   isResting?: boolean
 }
@@ -168,7 +169,7 @@ export class ClaudeAgentManager {
     this.send('claude:tool-result', sessionId, { id: toolId, ...updates })
   }
 
-  async startSession(sessionId: string, options: { cwd: string; prompt?: string; sdkSessionId?: string; permissionMode?: AppPermissionMode }): Promise<boolean> {
+  async startSession(sessionId: string, options: { cwd: string; prompt?: string; sdkSessionId?: string; permissionMode?: AppPermissionMode; model?: string }): Promise<boolean> {
     // Prevent duplicate session creation
     if (this.sessions.has(sessionId)) {
       return true
@@ -207,6 +208,7 @@ export class ClaudeAgentManager {
         permissionMode: options.permissionMode || 'default',
         effort: 'high',
         enable1MContext: false,
+        model: options.model,
         messageQueue: [],
       })
 
@@ -356,6 +358,7 @@ export class ClaudeAgentManager {
         settingSources: ['user', 'project', 'local'],
         thinking: { type: 'adaptive' },
         effort: session.effort,
+        ...(session.model ? { model: session.model } : {}),
         ...(session.enable1MContext ? { betas: ['context-1m-2025-08-07'] } : {}),
         canUseTool,
         ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
@@ -412,10 +415,6 @@ export class ClaudeAgentManager {
       for await (const message of generator) {
         // Check abort
         if (session.abortController.signal.aborted) break
-
-        // Temporary: log all message types to debug /context and ctx tracking
-        const msgPreview = JSON.stringify(message).slice(0, 300)
-        fsSync.appendFileSync('/tmp/bat-ctx.log', `${new Date().toISOString()} [msg] type=${(message as Record<string,unknown>).type} subtype=${(message as Record<string,unknown>).subtype || ''} ${msgPreview}\n`)
 
         if (message.type === 'system' && message.subtype === 'init') {
           // Capture and persist the SDK session ID
@@ -603,7 +602,6 @@ export class ClaudeAgentManager {
             for (const [model, modelStats] of Object.entries(resultMsg.modelUsage)) {
               const line = `[Claude ctx] modelUsage[${model}]: input=${modelStats.inputTokens}, output=${modelStats.outputTokens}, contextWindow=${modelStats.contextWindow}`
               console.log(line)
-              fsSync.appendFileSync('/tmp/bat-ctx.log', `${new Date().toISOString()} ${line}\n`)
               totalInput += modelStats.inputTokens || 0
               totalOutput += modelStats.outputTokens || 0
               if (modelStats.contextWindow) {
@@ -612,13 +610,11 @@ export class ClaudeAgentManager {
             }
             const summary = `[Claude ctx] prev: input=${session.metadata.inputTokens}, output=${session.metadata.outputTokens} | new: input=${totalInput}, output=${totalOutput} | cost=${resultMsg.total_cost_usd}`
             console.log(summary)
-            fsSync.appendFileSync('/tmp/bat-ctx.log', `${new Date().toISOString()} ${summary}\n`)
             session.metadata.inputTokens = totalInput
             session.metadata.outputTokens = totalOutput
           } else if (resultMsg.usage) {
             const line = `[Claude ctx] usage fallback: input=${resultMsg.usage.input_tokens}, output=${resultMsg.usage.output_tokens} | prev: input=${session.metadata.inputTokens}, output=${session.metadata.outputTokens}`
             console.log(line)
-            fsSync.appendFileSync('/tmp/bat-ctx.log', `${new Date().toISOString()} ${line}\n`)
             // Fallback: usage is session-cumulative (like total_cost_usd), assign directly
             session.metadata.inputTokens = resultMsg.usage.input_tokens || 0
             session.metadata.outputTokens = resultMsg.usage.output_tokens || 0
@@ -752,13 +748,28 @@ export class ClaudeAgentManager {
 
   async setModel(sessionId: string, model: string): Promise<boolean> {
     const session = this.sessions.get(sessionId)
-    if (!session?.queryInstance) return false
+    if (!session || !model) return false
+
+    // Always persist the model on the session so the next runQuery picks it up
+    session.model = model
+    session.metadata.model = model
+
+    if (!session.queryInstance) {
+      // No active query yet — model will be used when the next query starts
+      console.log(`[setModel] stored model ${model} for session ${sessionId.slice(0, 8)} (no active query)`)
+      return true
+    }
+
     try {
+      console.log(`[setModel] setting model to ${model} for session ${sessionId.slice(0, 8)}`)
       await session.queryInstance.setModel(model)
+      this.send('claude:status', sessionId, { ...session.metadata })
+      console.log(`[setModel] success: ${model}`)
       return true
     } catch (e) {
-      console.warn('setModel failed:', e)
-      return false
+      // Model is already stored on the session — it will take effect on the next query
+      console.warn(`[setModel] SDK call failed (model stored for next query):`, e)
+      return true
     }
   }
 
@@ -1081,7 +1092,7 @@ export class ClaudeAgentManager {
     this.send('claude:history', sessionId, items)
   }
 
-  async resumeSession(sessionId: string, sdkSessionIdToResume: string, cwd: string): Promise<boolean> {
+  async resumeSession(sessionId: string, sdkSessionIdToResume: string, cwd: string, model?: string): Promise<boolean> {
     // Stop current session if running
     const session = this.sessions.get(sessionId)
     if (session) {
@@ -1091,7 +1102,7 @@ export class ClaudeAgentManager {
 
     // Store the SDK session ID so startSession will use it for resume
     sdkSessionIds.set(sessionId, sdkSessionIdToResume)
-    const result = await this.startSession(sessionId, { cwd, sdkSessionId: sdkSessionIdToResume })
+    const result = await this.startSession(sessionId, { cwd, sdkSessionId: sdkSessionIdToResume, model })
 
     // Load and replay historical messages from the JSONL file
     if (result) {
@@ -1129,6 +1140,7 @@ export class ClaudeAgentManager {
     const permissionMode = session.permissionMode
     const effort = session.effort
     const enable1MContext = session.enable1MContext
+    const model = session.model
 
     // Tear down old session completely
     session.abortController.abort()
@@ -1144,6 +1156,7 @@ export class ClaudeAgentManager {
       if (newSession) {
         newSession.effort = effort
         newSession.enable1MContext = enable1MContext
+        newSession.model = model
       }
     }
     return ok

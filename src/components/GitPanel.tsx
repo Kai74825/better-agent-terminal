@@ -153,7 +153,8 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
         // For untracked/new files, git diff returns empty - read file content directly
         const fileEntry = changedFiles.find(f => f.file === filePath)
         if (fileEntry && (fileEntry.status === '??' || fileEntry.status === 'A')) {
-          const fullPath = workspaceFolderPath + '\\' + filePath.replace(/\//g, '\\')
+          const sep = window.electronAPI.platform === 'win32' ? '\\' : '/'
+          const fullPath = workspaceFolderPath + sep + filePath.replace(/[/\\]/g, sep)
           const result = await window.electronAPI.fs.readFile(fullPath)
           if (result.content) {
             const lines = result.content.split('\n').map(l => '+' + l).join('\n')
@@ -175,7 +176,8 @@ export function GitPanel({ workspaceFolderPath }: Readonly<GitPanelProps>) {
     if (!selectedFile) return
     setViewMode('file')
     if (fileContent !== null) return // already loaded
-    const fullPath = workspaceFolderPath + '\\' + selectedFile.replace(/\//g, '\\')
+    const sep = window.electronAPI.platform === 'win32' ? '\\' : '/'
+    const fullPath = workspaceFolderPath + sep + selectedFile.replace(/[/\\]/g, sep)
     const result = await window.electronAPI.fs.readFile(fullPath)
     setFileContent(result.content || result.error || 'Unable to read file')
   }, [selectedFile, fileContent, workspaceFolderPath])
