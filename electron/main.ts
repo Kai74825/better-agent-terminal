@@ -61,6 +61,10 @@ app.commandLine.appendSwitch('gpu-disk-cache-dir', path.join(app.getPath('temp')
 // Disable GPU shader disk cache (another source of "Unable to create cache" errors)
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
 
+// Disable Service Workers — we don't use them, and a corrupted SW database
+// causes Chromium to block the renderer for 4+ seconds on Windows during I/O recovery.
+app.commandLine.appendSwitch('disable-features', 'ServiceWorker')
+
 // Set AppUserModelId for Windows taskbar pinning (must be before app.whenReady)
 if (process.platform === 'win32') {
   app.setAppUserModelId('org.tonyq.better-agent-terminal')
@@ -203,25 +207,19 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    show: false,
+    // Show immediately — splash screen is inline HTML/CSS, paints instantly.
+    // Using show:false throttles the Chromium renderer, adding seconds to first paint.
+    show: true,
     backgroundColor: '#1a1a1a',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true
     },
-    backgroundThrottling: true,
     frame: true,
     titleBarStyle: 'default',
     title: 'Better Agent Terminal',
     icon: path.join(__dirname, '../assets/icon.ico')
-  })
-
-  // Show window once DOM is ready — splash screen (inline HTML/CSS) is already painted,
-  // so the user sees the skeleton immediately while React loads behind it.
-  mainWindow.webContents.once('dom-ready', () => {
-    logger.log(`[startup] showing window (dom-ready)`)
-    mainWindow?.show()
   })
 
   ptyManager = new PtyManager(getAllWindows)
