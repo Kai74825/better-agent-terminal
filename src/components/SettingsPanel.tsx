@@ -558,7 +558,12 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           <div className="settings-section">
             <h3>Remote Access</h3>
             <p className="settings-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-              Allow other Better Agent Terminal instances on your LAN to connect and control this instance.
+              允許其他 BAT 實例或行動裝置遠端連線控制此主機。詳見{' '}
+              <a href="https://github.com/tony1223/better-agent-terminal#remote-access--mobile-connect"
+                style={{ color: '#58a6ff' }}
+                onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>
+                README
+              </a>。
             </p>
 
             {serverStatus.running ? (
@@ -602,17 +607,22 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                 )}
               </>
             ) : (
-              <div className="settings-group" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input
-                  type="number"
-                  value={serverPort}
-                  onChange={e => setServerPort(e.target.value)}
-                  placeholder="Port"
-                  style={{ width: 80 }}
-                />
-                <button className="profile-action-btn primary" onClick={handleStartServer}>
-                  Start Server
-                </button>
+              <div className="settings-group">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="number"
+                    value={serverPort}
+                    onChange={e => setServerPort(e.target.value)}
+                    placeholder="Port"
+                    style={{ width: 80 }}
+                  />
+                  <button className="profile-action-btn primary" onClick={handleStartServer}>
+                    Start Server
+                  </button>
+                </div>
+                <p style={{ fontSize: 11, color: '#d29922', marginTop: 6, lineHeight: 1.4 }}>
+                  ⚠ 啟動後任何持有 Token 的裝置皆可完整控制此主機上的 BAT。請確認網路環境安全。
+                </p>
               </div>
             )}
 
@@ -628,7 +638,17 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               <label>Mobile Connect <span style={{ fontSize: 10, color: '#d29922', fontWeight: 'normal' }}>(Experimental)</span></label>
               <p style={{ fontSize: 11, color: '#8b949e', marginTop: 2, marginBottom: 6, lineHeight: 1.4 }}>
                 產生 QR Code 供遠端裝置掃描連線，可遠端控制此主機上的 BAT。
-                目前也可透過其他 Better Agent Terminal 以 Remote Profile 方式連入。
+                目前也可透過其他 Better Agent Terminal 以 Remote Profile 方式連入。建議搭配{' '}
+                <a href="https://tailscale.com/" style={{ color: '#58a6ff' }}
+                  onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>
+                  Tailscale
+                </a>{' '}使用。
+                詳見{' '}
+                <a href="https://github.com/tony1223/better-agent-terminal#remote-access--mobile-connect"
+                  style={{ color: '#58a6ff' }}
+                  onClick={e => { e.preventDefault(); window.electronAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>
+                  README
+                </a>。
               </p>
               {!qrDataUrl ? (
                 <>

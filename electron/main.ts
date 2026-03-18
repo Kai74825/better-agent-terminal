@@ -725,14 +725,18 @@ function registerLocalHandlers() {
   // Mobile QR code connection: ensure server is running, return connection URL
   ipcMain.handle('tunnel:get-connection', async () => {
     try {
-      // Start remote server if not already running
+      let port: number
+      let token: string
       if (!remoteServer.isRunning) {
-        remoteServer.start()
+        const result = remoteServer.start()
+        port = result.port
+        token = result.token
+      } else {
+        port = remoteServer.port!
+        const tokenPath = path.join(app.getPath('userData'), 'server-token.json')
+        token = JSON.parse(fsSync.readFileSync(tokenPath, 'utf-8')).token
       }
-      // Read persisted token
-      const tokenPath = path.join(app.getPath('userData'), 'server-token.json')
-      const data = JSON.parse(fsSync.readFileSync(tokenPath, 'utf-8'))
-      return getConnectionUrl(remoteServer.port!, data.token)
+      return getConnectionUrl(port, token)
     } catch (err: unknown) {
       return { error: err instanceof Error ? err.message : String(err) }
     }

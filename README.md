@@ -183,6 +183,69 @@ better-agent-terminal/
 
 ---
 
+## Remote Access & Mobile Connect
+
+BAT 內建 WebSocket Server，允許其他 BAT 實例或行動裝置遠端連線控制。此功能目前為**實驗性質**。
+
+### 運作原理
+
+1. **Host（主機端）** 在 Settings → Remote Access 啟動 WebSocket Server（預設 port 9876）
+2. Server 啟動時產生一組 **Connection Token**（32 字元 hex），用於驗證連線身份
+3. **Client（連線端）** 透過 Remote Profile 輸入主機 IP、Port、Token 即可連入
+4. 連線後 Client 可操作主機上的所有 Terminal、Claude Agent、Workspace 等功能
+
+### 連線方式
+
+#### 方式一：Remote Profile（BAT 對 BAT）
+
+在 Client 端的 BAT：
+
+1. 開啟 Settings → Profiles
+2. 建立新 Profile，類型選 **Remote**
+3. 填入 Host IP、Port（9876）、Token
+4. 載入該 Profile 即連上遠端主機
+
+#### 方式二：QR Code（行動裝置）
+
+在 Host 端的 BAT：
+
+1. 開啟 Settings → Remote Access → **Generate QR Code**
+2. 若 Server 未啟動會自動啟動
+3. 使用行動裝置掃描 QR Code 即可取得連線資訊
+4. QR Code 內含 WebSocket URL 與 Token（JSON 格式）
+
+### 推薦使用 Tailscale 進行跨網段連線
+
+若 Host 與 Client 不在同一個區域網路（例如在家連公司電腦），建議使用 [Tailscale](https://tailscale.com/) 建立安全的點對點 VPN：
+
+- **免費方案**支援最多 100 台裝置
+- 不需要設定 port forwarding 或架設額外伺服器
+- 每台裝置會取得一個固定的 `100.x.x.x` IP
+- BAT 會自動偵測 Tailscale IP 並優先使用
+
+**安裝方式：**
+
+| 平台 | 安裝 |
+|------|------|
+| macOS | [Download](https://tailscale.com/download/macos) 或 `brew install tailscale` |
+| Windows | [Download](https://tailscale.com/download/windows) |
+| iOS | [App Store](https://apps.apple.com/app/tailscale/id1470499037) |
+| Android | [Google Play](https://play.google.com/store/apps/details?id=com.tailscale.ipn) |
+| Linux | [Install Guide](https://tailscale.com/download/linux) |
+
+安裝後登入同一帳號，所有裝置即可互通。BAT 的 QR Code 會自動使用 Tailscale IP。
+
+### 安全注意事項
+
+> **⚠ 警告：** 啟動 Remote Server 會開放 WebSocket 連線，任何持有 Token 的裝置皆可完整控制此主機上的 BAT，包括執行終端指令、操作檔案系統、控制 Claude Agent 等。
+>
+> - 請勿在不信任的網路環境下啟動 Server
+> - 請勿將 Token 分享給不信任的人
+> - 不使用時請關閉 Server
+> - 強烈建議搭配 Tailscale 使用，避免直接暴露在公網
+
+---
+
 ## Configuration
 
 Workspaces and settings are saved to:
