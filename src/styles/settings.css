@@ -537,6 +537,36 @@
   border-color: var(--accent-color);
 }
 
+.statusline-color-picker {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  background: none;
+}
+
+.statusline-color-reset {
+  font-size: 10px;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.statusline-color-reset:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .statusline-config-toggle {
   flex-shrink: 0;
   display: flex;

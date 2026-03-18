@@ -434,6 +434,22 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                       }}
                       title="Toggle separator after this item"
                     >&gt;</button>
+                    <input
+                      type="color"
+                      className="statusline-color-picker"
+                      value={item.color || '#999999'}
+                      onChange={e => {
+                        const updated = slItems.map(i => i.id === item.id ? { ...i, color: e.target.value } : i)
+                        setSlItems(updated); settingsStore.setStatuslineItems(updated)
+                      }}
+                      title="Set color"
+                    />
+                    {item.color && (
+                      <button className="statusline-color-reset" onClick={() => {
+                        const updated = slItems.map(i => i.id === item.id ? { ...i, color: undefined } : i)
+                        setSlItems(updated); settingsStore.setStatuslineItems(updated)
+                      }} title="Reset color">x</button>
+                    )}
                     <label className="statusline-config-toggle">
                       <input type="checkbox" checked={item.visible} onChange={() => {
                         const updated = slItems.map(i => i.id === item.id ? { ...i, visible: !i.visible } : i)

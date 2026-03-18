@@ -197,7 +197,7 @@ export interface AppSettings {
 
 export type StatuslineItemId =
   | 'sessionId' | 'tokens' | 'turns' | 'duration'
-  | 'contextPct' | 'cost' | 'workspace'
+  | 'contextPct' | 'cost' | 'workspace' | 'gitBranch'
   | 'usage5h' | 'usage5hReset' | 'usage7d' | 'usage7dReset'
   | 'prompts'
 
@@ -206,6 +206,7 @@ export interface StatuslineItemConfig {
   visible: boolean
   separatorAfter?: boolean
   align?: 'left' | 'center' | 'right'
+  color?: string  // Custom color (hex or CSS color)
 }
 
 export interface StatuslineItemDef {
@@ -217,8 +218,9 @@ export interface StatuslineItemDef {
 }
 
 export const STATUSLINE_ITEMS: StatuslineItemDef[] = [
-  { id: 'sessionId',    label: 'Session ID',  description: 'First 8 chars of SDK session ID (click to resume)',   defaultVisible: true,  group: 'session' },
-  { id: 'tokens',       label: 'Tokens',      description: 'Total input + output token count',                    defaultVisible: true,  group: 'session' },
+  { id: 'sessionId',    label: 'Session ID',   description: 'First 8 chars of SDK session ID (click to resume)',  defaultVisible: true,  group: 'session' },
+  { id: 'gitBranch',    label: 'Git Branch',   description: 'Current git branch name',                            defaultVisible: true,  group: 'session' },
+  { id: 'tokens',       label: 'Tokens',       description: 'Total input + output token count',                   defaultVisible: true,  group: 'session' },
   { id: 'turns',        label: 'Turns',        description: 'Number of conversation turns',                       defaultVisible: true,  group: 'session' },
   { id: 'duration',     label: 'Duration',     description: 'Session duration in seconds',                        defaultVisible: true,  group: 'session' },
   { id: 'contextPct',   label: 'Context %',    description: 'Percentage of context window used',                  defaultVisible: true,  group: 'context' },

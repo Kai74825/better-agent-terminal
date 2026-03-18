@@ -2468,11 +2468,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         )}
         <div className="claude-input-footer">
           <div className="claude-input-controls">
-            {gitBranch && (
-              <span className="claude-status-btn claude-statusline-branch" title={`Branch: ${gitBranch}`}>
-                [{gitBranch}]
-              </span>
-            )}
             <span
               className={`claude-status-btn claude-mode-${permissionMode}`}
               onClick={handlePermissionModeCycle}
@@ -2693,6 +2688,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               {sessionMeta?.sdkSessionId ? sessionMeta.sdkSessionId.slice(0, 8) : sessionId.slice(0, 8)}
             </span>
           ),
+          gitBranch: () => !gitBranch ? null : (
+            <span key="gitBranch" className="claude-statusline-item">[{gitBranch}]</span>
+          ),
           tokens: () => !sessionMeta ? null : (
             <span key="tokens" className="claude-statusline-item" title={`in: ${sessionMeta.inputTokens.toLocaleString()} / out: ${sessionMeta.outputTokens.toLocaleString()}`}>
               {(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok
@@ -2746,7 +2744,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
           for (const item of items) {
             const node = renderers[item.id]?.()
             if (!node) continue
-            nodes.push(node)
+            // Wrap with color style if configured
+            if (item.color) {
+              nodes.push(<span key={`c-${item.id}`} style={{ color: item.color }}>{node}</span>)
+            } else {
+              nodes.push(node)
+            }
             if (item.separatorAfter) nodes.push(<span key={`sep-${item.id}`} className="claude-statusline-sep">&middot;</span>)
           }
           return nodes

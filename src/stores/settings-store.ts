@@ -217,11 +217,11 @@ class SettingsStore {
         .map(d => ({ id: d.id, visible: d.defaultVisible, align: 'left' as const }))
       return [...this.settings.statuslineItems, ...missing]
     }
-    // Default: left = session/context, right = limits/prompts
+    // Default: all left-aligned with separators between groups
     return STATUSLINE_ITEMS.map(d => ({
       id: d.id,
       visible: d.defaultVisible,
-      align: (d.group === 'limits' || d.group === 'actions' ? 'right' : 'left') as 'left' | 'right',
+      align: 'left' as const,
       separatorAfter: d.id === 'duration' || d.id === 'cost' || d.id === 'usage7dReset',
     }))
   }
