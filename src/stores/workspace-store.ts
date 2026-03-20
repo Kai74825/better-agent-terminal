@@ -482,6 +482,8 @@ class WorkspaceStore {
 
   // Activity tracking
   private lastActivityNotify: number = 0
+  private _savePromise: Promise<void> = Promise.resolve()
+  private _savePending = false
 
   updateTerminalActivity(id: string): void {
     const now = Date.now()
@@ -517,29 +519,40 @@ class WorkspaceStore {
     return lastActivities.length > 0 ? Math.max(...lastActivities) : null
   }
 
-  // Persistence
+  // Persistence — serialized to prevent concurrent writes from corrupting the file
   async save(): Promise<void> {
-    // Strip runtime-only fields from terminals before saving
-    const savedTerminals = this.state.terminals.map(t => ({
-      id: t.id,
-      workspaceId: t.workspaceId,
-      type: t.type,
-      agentPreset: t.agentPreset,
-      title: t.title,
-      alias: t.alias,
-      cwd: t.cwd,
-      sdkSessionId: t.sdkSessionId,
-      model: t.model,
-      sessionMeta: t.sessionMeta,
-    }))
-    const data = JSON.stringify({
-      workspaces: this.state.workspaces,
-      activeWorkspaceId: this.state.activeWorkspaceId,
-      activeGroup: this.activeGroup,
-      terminals: savedTerminals,
-      activeTerminalId: this.state.activeTerminalId,
+    // If a save is already queued, skip — the queued save will capture the latest state
+    if (this._savePending) return
+    this._savePending = true
+
+    // Wait for any in-flight save to finish, then perform ours
+    this._savePromise = this._savePromise.then(async () => {
+      this._savePending = false
+      const savedTerminals = this.state.terminals.map(t => ({
+        id: t.id,
+        workspaceId: t.workspaceId,
+        type: t.type,
+        agentPreset: t.agentPreset,
+        title: t.title,
+        alias: t.alias,
+        cwd: t.cwd,
+        sdkSessionId: t.sdkSessionId,
+        model: t.model,
+        sessionMeta: t.sessionMeta,
+      }))
+      const data = JSON.stringify({
+        workspaces: this.state.workspaces,
+        activeWorkspaceId: this.state.activeWorkspaceId,
+        activeGroup: this.activeGroup,
+        terminals: savedTerminals,
+        activeTerminalId: this.state.activeTerminalId,
+      })
+      await window.electronAPI.workspace.save(data)
+    }).catch(e => {
+      console.error('Failed to save workspace data:', e)
     })
-    await window.electronAPI.workspace.save(data)
+
+    return this._savePromise
   }
 
   async load(): Promise<void> {
@@ -572,6 +585,7 @@ class WorkspaceStore {
         this.activeGroup = parsed.activeGroup || null
         this.notify()
       } catch (e) {
+        window.electronAPI?.debug?.log?.(`Failed to parse workspace data: ${e}`)
         console.error('Failed to parse workspace data:', e)
       }
     }

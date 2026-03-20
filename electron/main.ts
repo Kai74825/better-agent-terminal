@@ -362,7 +362,9 @@ function registerProxiedHandlers() {
   // Workspace persistence
   registerHandler('workspace:save', async (data: string) => {
     const configPath = path.join(app.getPath('userData'), 'workspaces.json')
-    await fs.writeFile(configPath, data, 'utf-8')
+    const tmpPath = configPath + '.tmp'
+    await fs.writeFile(tmpPath, data, 'utf-8')
+    await fs.rename(tmpPath, configPath)
     return true
   })
   registerHandler('workspace:load', async () => {
