@@ -257,6 +257,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
+  const restoredRef = useRef(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -327,9 +328,32 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current) }
   }, [searchQuery, rootPath])
 
+  // Restore last selected file on mount
+  useEffect(() => {
+    if (restoredRef.current) return
+    restoredRef.current = true
+    const storageKey = `file-tree-selected:${rootPath}`
+    const saved = localStorage.getItem(storageKey)
+    if (!saved) return
+    try {
+      const { path, name } = JSON.parse(saved)
+      // Check if file still exists
+      window.electronAPI.fs.readFile(path).then(result => {
+        if (!result.error) {
+          setSelectedFile({ path, name, isDirectory: false })
+        } else {
+          localStorage.removeItem(storageKey)
+        }
+      })
+    } catch {
+      localStorage.removeItem(storageKey)
+    }
+  }, [rootPath])
+
   const handleSelect = useCallback((entry: FileEntry) => {
     setSelectedFile(entry)
-  }, [])
+    localStorage.setItem(`file-tree-selected:${rootPath}`, JSON.stringify({ path: entry.path, name: entry.name }))
+  }, [rootPath])
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault()
