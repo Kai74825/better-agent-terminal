@@ -130,11 +130,14 @@ export function resolveNodePath(): string {
     }
   }
 
-  return 'node' // last resort
+  // 3. Fallback: use Electron's own binary with ELECTRON_RUN_AS_NODE=1
+  // This makes the Electron binary behave as a plain Node.js runtime
+  return process.execPath
 }
 
 // Lazy cached resolution
 let cachedPath: string | null = null
+let usingElectronFallback = false
 
 /**
  * Get the resolved node binary path (lazy, cached).
@@ -143,8 +146,18 @@ let cachedPath: string | null = null
 export function getNodeExecutable(): string {
   if (cachedPath === null) {
     cachedPath = resolveNodePath()
+    usingElectronFallback = cachedPath === process.execPath
   }
   return cachedPath
+}
+
+/**
+ * Whether the resolved node binary is Electron's own binary (fallback).
+ * When true, ELECTRON_RUN_AS_NODE=1 must be set in the subprocess env.
+ */
+export function isElectronFallback(): boolean {
+  getNodeExecutable() // ensure resolution
+  return usingElectronFallback
 }
 
 /**

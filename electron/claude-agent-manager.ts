@@ -6,7 +6,7 @@ import * as pathModule from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
 import type { Query, PermissionMode, CanUseTool, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from './logger'
-import { getNodeExecutable } from './node-resolver'
+import { getNodeExecutable, isElectronFallback } from './node-resolver'
 
 // App-level permission mode extends SDK's PermissionMode with bypassPlan
 // bypassPlan = plan mode (read-only exploration) + auto-approve all tool permissions
@@ -385,11 +385,16 @@ export class ClaudeAgentManager {
 
     // Declare resumeId outside try so it's accessible in catch for retry logic
     const resumeId = session.sdkSessionId
+    const electronFallback = isElectronFallback()
 
     try {
       const query = await getQuery()
       const claudeCodePath = resolveClaudeCodePath()
       const nodeExecutable = getNodeExecutable()
+      if (electronFallback) {
+        process.env.ELECTRON_RUN_AS_NODE = '1'
+        logger.log('[Claude] Using Electron binary as Node.js runtime (ELECTRON_RUN_AS_NODE=1)')
+      }
       logger.log(`[Claude] runQuery: cwd=${session.cwd}, resumeId=${resumeId || 'none'}, claudeCodePath=${claudeCodePath || 'none'}, nodeExecutable=${nodeExecutable}`)
       const canUseTool: CanUseTool = async (toolName, input, opts) => {
         // Check if this is an AskUserQuestion tool — always show UI
@@ -494,7 +499,7 @@ export class ClaudeAgentManager {
         ...(session.enable1MContext ? { betas: ['context-1m-2025-08-07'] } : {}),
         canUseTool,
         ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
-        ...(nodeExecutable !== 'node' ? { executable: nodeExecutable } : {}),
+        ...(nodeExecutable !== 'node' || electronFallback ? { executable: nodeExecutable } : {}),
         stderr: (data: string) => {
           logger.error('[Claude Code stderr]', data)
           stderrOutput += data
@@ -972,6 +977,10 @@ export class ClaudeAgentManager {
         this.send('claude:error', sessionId, displayMsg)
       }
     } finally {
+      // Clean up ELECTRON_RUN_AS_NODE to avoid affecting other child processes
+      if (electronFallback) {
+        delete process.env.ELECTRON_RUN_AS_NODE
+      }
       if (session) {
         session.state.isStreaming = false
         session.currentPrompt = undefined
