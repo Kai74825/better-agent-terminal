@@ -260,7 +260,7 @@ export class ClaudeAgentManager {
     this.send('claude:tool-result', sessionId, { id: toolId, ...updates })
   }
 
-  async startSession(sessionId: string, options: { cwd: string; prompt?: string; sdkSessionId?: string; permissionMode?: AppPermissionMode; model?: string }): Promise<boolean> {
+  async startSession(sessionId: string, options: { cwd: string; prompt?: string; sdkSessionId?: string; permissionMode?: AppPermissionMode; model?: string; effort?: 'low' | 'medium' | 'high' | 'max' }): Promise<boolean> {
     // Prevent duplicate session creation
     if (this.sessions.has(sessionId)) {
       return true
@@ -298,7 +298,7 @@ export class ClaudeAgentManager {
         pendingPermissions: new Map(),
         pendingAskUser: new Map(),
         permissionMode: options.permissionMode || 'default',
-        effort: 'high',
+        effort: options.effort || 'medium',
         enable1MContext: false,
         model: options.model,
         messageQueue: [],

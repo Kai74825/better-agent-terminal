@@ -211,6 +211,8 @@ export interface AppSettings {
   createDefaultAgentTerminal: boolean;  // 是否預設建立 Agent Terminal
   allowBypassPermissions: boolean;  // 允許切換 bypassPermissions 模式時不再確認
   enable1MContext: boolean;  // 啟用 1M token context (僅 Sonnet 4/4.5)
+  defaultModel?: string;     // 預設模型（空 = 使用 SDK 預設）
+  defaultEffort?: 'low' | 'medium' | 'high' | 'max';  // 預設 effort level
   showDockBadge?: boolean;               // Dock 圖示顯示待處理數量
   notifyOnComplete?: boolean;           // Agent 完成時發送系統通知
   notifySound?: boolean;               // 通知時播放聲音

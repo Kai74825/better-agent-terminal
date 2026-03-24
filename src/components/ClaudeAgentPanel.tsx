@@ -113,7 +113,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
   })
   const [permissionMode, setPermissionMode] = useState<string>('bypassPermissions')
   const [currentModel, setCurrentModel] = useState<string>('')
-  const [effortLevel, setEffortLevel] = useState<string>('high')
+  const [effortLevel, setEffortLevel] = useState<string>('medium')
   const [enable1MContext, setEnable1MContext] = useState(false)
   const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
@@ -724,10 +724,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
       const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
       const savedSdkSessionId = terminal?.sdkSessionId
       const savedModel = terminal?.model
+      const globalSettings = settingsStore.getSettings()
       dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}"`)
 
-      // Restore saved model to UI
-      if (savedModel) setCurrentModel(savedModel)
+      // Restore saved model to UI, or use global default
+      const effectiveModel = savedModel || globalSettings.defaultModel
+      if (effectiveModel) setCurrentModel(effectiveModel)
+
+      // Use global default effort
+      const effectiveEffort = globalSettings.defaultEffort || 'medium'
+      setEffortLevel(effectiveEffort)
 
       if (savedSdkSessionId) {
         dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
@@ -735,7 +741,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
         window.electronAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel)
       } else {
         dlog(`${stag} FRESH startSession`)
-        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode, model: savedModel })
+        window.electronAPI.claude.startSession(sessionId, { cwd, permissionMode, model: effectiveModel, effort: effectiveEffort as 'low' | 'medium' | 'high' | 'max' })
       }
     }
     return () => {
@@ -2612,7 +2618,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId }: Read
               <option value="low">low</option>
               <option value="medium">medium</option>
               <option value="high">high</option>
-              <option value="max">max</option>
             </select>
             {accountInfo?.organization && (
               <span className="claude-status-btn claude-account-info" title={`${accountInfo.email || ''} (${accountInfo.subscriptionType || 'unknown'})`}>

@@ -323,6 +323,30 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               </label>
               <p className="settings-hint">{t('settings.enable1MContextHint')}</p>
             </div>
+
+            <div className="settings-group">
+              <label>{t('settings.defaultModel')}</label>
+              <input
+                type="text"
+                value={settings.defaultModel || ''}
+                onChange={e => settingsStore.setDefaultModel(e.target.value)}
+                placeholder={t('settings.defaultModelPlaceholder')}
+              />
+              <p className="settings-hint">{t('settings.defaultModelHint')}</p>
+            </div>
+
+            <div className="settings-group">
+              <label>{t('settings.defaultEffort')}</label>
+              <select
+                value={settings.defaultEffort || 'medium'}
+                onChange={e => settingsStore.setDefaultEffort(e.target.value as 'low' | 'medium' | 'high')}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <p className="settings-hint">{t('settings.defaultEffortHint')}</p>
+            </div>
           </div>
 
           <div className="settings-section">

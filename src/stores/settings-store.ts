@@ -192,6 +192,18 @@ class SettingsStore {
     this.save()
   }
 
+  setDefaultModel(model: string): void {
+    this.settings = { ...this.settings, defaultModel: model || undefined }
+    this.notify()
+    this.save()
+  }
+
+  setDefaultEffort(effort: 'low' | 'medium' | 'high' | 'max'): void {
+    this.settings = { ...this.settings, defaultEffort: effort }
+    this.notify()
+    this.save()
+  }
+
   setShowDockBadge(show: boolean): void {
     this.settings = { ...this.settings, showDockBadge: show }
     this.notify()
