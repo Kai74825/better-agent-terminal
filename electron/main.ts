@@ -996,9 +996,15 @@ function registerProxiedHandlers() {
     logger.log('[usage] [session-key] 5h=', data.five_hour?.utilization, 'reset=', data.five_hour?.resets_at, '7d=', data.seven_day?.utilization, 'reset=', data.seven_day?.resets_at)
 
     // If both reset times are null the session belongs to a different account
-    // (wrong org) — return null to fall back to OAuth which has correct data
+    // (wrong org) — clear caches so next poll re-extracts fresh from Chrome,
+    // then return null to fall back to OAuth which has correct data
     if (data.five_hour?.resets_at == null && data.seven_day?.resets_at == null) {
-      logger.log('[usage] [session-key] Both resets_at are null — session likely stale or wrong account, skipping')
+      logger.log('[usage] [session-key] Both resets_at are null — session likely stale or wrong account, clearing cache')
+      _cachedSessionKey = null
+      _cachedOrgId = null
+      _cachedCfClearance = null
+      _sessionKeyCacheTime = 0
+      _orgIdCacheTime = 0
       return null
     }
 
