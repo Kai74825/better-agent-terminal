@@ -317,6 +317,7 @@
 
 .claude-markdown ul, .claude-markdown ol { margin: 0.3em 0; padding-left: 1.6em; }
 .claude-markdown li { margin: 0.1em 0; }
+.claude-markdown li > p { margin: 0; }
 
 .claude-markdown table { border-collapse: collapse; margin: 0.4em 0; width: auto; }
 .claude-markdown th, .claude-markdown td { border: 1px solid var(--border-color); padding: 3px 8px; font-size: 0.9em; text-align: left; }
