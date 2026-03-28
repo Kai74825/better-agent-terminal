@@ -396,101 +396,69 @@ app.whenReady().then(async () => {
   logger.log(`[startup] ═══════════════════════════════════════`)
   logger.log(`[startup] app.whenReady fired at +${t0 - _t0}ms from IPC reg, +${t0 - _processStart}ms from process`)
 
-  // Initialize window registry (migrate from workspaces.json on first run)
-  const entries = await windowRegistry.ensureInitialized()
+  // Ensure profile system is initialized (migrates from workspaces.json on first run)
+  await windowRegistry.ensureInitialized()
 
   // Collect window IDs to create
   const windowsToCreate: { id: string; bounds?: { x: number; y: number; width: number; height: number } }[] = []
 
-  // Get active profiles to determine which windows to restore
-  const activeProfileIds = await profileManager.getActiveProfileIds()
-  logger.log(`[startup] active profiles: ${activeProfileIds.join(', ') || '(none)'}`)
+  // Clear windows.json — it's purely runtime state, snapshots are the source of truth
+  await windowRegistry.clear()
+
+  // Helper: restore all windows from a profile snapshot into the registry
+  const restoreFromSnapshot = async (profileId: string): Promise<number> => {
+    const snapshot = await profileManager.loadSnapshot(profileId)
+    if (!snapshot || snapshot.windows.length === 0) return 0
+    for (const winSnap of snapshot.windows) {
+      const entry = await windowRegistry.createEntry({ profileId })
+      entry.workspaces = winSnap.workspaces
+      entry.activeWorkspaceId = winSnap.activeWorkspaceId
+      entry.activeGroup = winSnap.activeGroup
+      entry.terminals = winSnap.terminals
+      entry.activeTerminalId = winSnap.activeTerminalId
+      entry.bounds = winSnap.bounds
+      await windowRegistry.saveEntry(entry)
+      windowsToCreate.push({ id: entry.id, bounds: winSnap.bounds })
+    }
+    return snapshot.windows.length
+  }
 
   if (launchProfileId) {
-    // --profile= launch: create a window entry linked to that profile
-    const entry = await windowRegistry.createEntry({ profileId: launchProfileId })
-    windowsToCreate.push({ id: entry.id })
-    logger.log(`[startup] profile launch → window ${entry.id}`)
-  } else if (activeProfileIds.length > 0) {
-    // Restore windows from registry that belong to active profiles
-    const validEntries = entries.filter(e =>
-      (e.workspaces as unknown[]).length > 0 && e.profileId && activeProfileIds.includes(e.profileId)
-    )
-    // Clean up orphans (empty workspaces or inactive profiles)
-    const orphans = entries.filter(e => !validEntries.includes(e))
-    for (const orphan of orphans) {
-      logger.log(`[startup] removing orphan window ${orphan.id}`)
-      windowRegistry.removeEntry(orphan.id)
+    // --profile= launch: restore that profile's windows
+    const count = await restoreFromSnapshot(launchProfileId)
+    if (count === 0) {
+      // No snapshot — create empty window
+      const entry = await windowRegistry.createEntry({ profileId: launchProfileId })
+      windowsToCreate.push({ id: entry.id })
     }
-
-    if (validEntries.length > 0) {
-      const sorted = [...validEntries].sort((a, b) => b.lastActiveAt - a.lastActiveAt)
-      for (const entry of sorted) {
-        windowsToCreate.push({ id: entry.id, bounds: entry.bounds })
-      }
-      logger.log(`[startup] restoring ${sorted.length} window(s) from active profiles`)
-    } else {
-      // Active profiles have no windows in registry — restore from snapshots
-      for (const pid of activeProfileIds) {
-        const snapshot = await profileManager.loadSnapshot(pid)
-        if (snapshot && snapshot.windows.length > 0) {
-          for (const winSnap of snapshot.windows) {
-            const entry = await windowRegistry.createEntry({ profileId: pid })
-            entry.workspaces = winSnap.workspaces
-            entry.activeWorkspaceId = winSnap.activeWorkspaceId
-            entry.activeGroup = winSnap.activeGroup
-            entry.terminals = winSnap.terminals
-            entry.activeTerminalId = winSnap.activeTerminalId
-            entry.bounds = winSnap.bounds
-            await windowRegistry.saveEntry(entry)
-            windowsToCreate.push({ id: entry.id, bounds: winSnap.bounds })
-          }
-          logger.log(`[startup] restored ${snapshot.windows.length} window(s) from profile ${pid} snapshot`)
-        }
-      }
-      // Still nothing — create empty window with first active profile
-      if (windowsToCreate.length === 0) {
-        const entry = await windowRegistry.createEntry({ profileId: activeProfileIds[0] })
-        windowsToCreate.push({ id: entry.id })
-        logger.log(`[startup] created empty window for profile ${activeProfileIds[0]}`)
-      }
-    }
+    await profileManager.activateProfile(launchProfileId)
+    logger.log(`[startup] profile launch ${launchProfileId} → ${windowsToCreate.length} window(s)`)
   } else {
-    // No active profiles — use default if it exists, otherwise first available
-    const { profiles } = await profileManager.list()
-    const fallback = profiles.find(p => p.id === 'default') || profiles.find(p => p.type === 'local') || profiles[0]
-    const fallbackId = fallback?.id || 'default'
-    logger.log(`[startup] no active profiles, falling back to ${fallbackId}`)
+    // Normal launch: restore windows for all active profiles
+    let activeProfileIds = await profileManager.getActiveProfileIds()
+    logger.log(`[startup] active profiles: ${activeProfileIds.join(', ') || '(none)'}`)
 
-    // Try to restore from snapshot
-    const snapshot = await profileManager.loadSnapshot(fallbackId)
-    if (snapshot && snapshot.windows.length > 0) {
-      for (const winSnap of snapshot.windows) {
-        const entry = await windowRegistry.createEntry({ profileId: fallbackId })
-        entry.workspaces = winSnap.workspaces
-        entry.activeWorkspaceId = winSnap.activeWorkspaceId
-        entry.activeGroup = winSnap.activeGroup
-        entry.terminals = winSnap.terminals
-        entry.activeTerminalId = winSnap.activeTerminalId
-        entry.bounds = winSnap.bounds
-        await windowRegistry.saveEntry(entry)
-        windowsToCreate.push({ id: entry.id, bounds: winSnap.bounds })
-      }
-    } else {
-      // Try legacy recovery
-      const recovered = await windowRegistry.remigrateFromWorkspacesJson()
-      if (recovered) {
-        windowsToCreate.push({ id: recovered.id })
-        logger.log(`[startup] recovered window from workspaces.json`)
-      } else {
-        const entry = await windowRegistry.createEntry({ profileId: fallbackId })
-        windowsToCreate.push({ id: entry.id })
-        logger.log(`[startup] created new empty window`)
-      }
+    // If no active profiles, fallback to default or first local profile
+    if (activeProfileIds.length === 0) {
+      const { profiles } = await profileManager.list()
+      const fallback = profiles.find(p => p.id === 'default') || profiles.find(p => p.type === 'local') || profiles[0]
+      const fallbackId = fallback?.id || 'default'
+      activeProfileIds = [fallbackId]
+      await profileManager.activateProfile(fallbackId)
+      logger.log(`[startup] no active profiles, falling back to ${fallbackId}`)
     }
 
-    // Mark the fallback profile as active
-    await profileManager.activateProfile(fallbackId)
+    for (const pid of activeProfileIds) {
+      const count = await restoreFromSnapshot(pid)
+      logger.log(`[startup] restored ${count} window(s) from profile ${pid}`)
+    }
+
+    // If still no windows (all snapshots empty), create one empty window
+    if (windowsToCreate.length === 0) {
+      const entry = await windowRegistry.createEntry({ profileId: activeProfileIds[0] })
+      windowsToCreate.push({ id: entry.id })
+      logger.log(`[startup] created empty window for profile ${activeProfileIds[0]}`)
+    }
   }
 
   const t1 = Date.now()

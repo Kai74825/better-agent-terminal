@@ -64,6 +64,10 @@ export class WindowRegistry {
     await this.writeAll(filtered)
   }
 
+  async clear(): Promise<void> {
+    await this.writeAll([])
+  }
+
   async createEntry(opts?: { profileId?: string }): Promise<WindowEntry> {
     const entry: WindowEntry = {
       id: generateId(),
