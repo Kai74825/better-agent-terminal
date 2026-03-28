@@ -254,15 +254,20 @@ class SettingsStore {
 
   // Statusline configuration
   getStatuslineItems(): StatuslineItemConfig[] {
+    // Items whose color is managed dynamically in the renderer — strip any user-configured color
+    const DYNAMIC_COLOR_ITEMS = new Set(['contextPct'])
+    const stripDynamicColors = (items: StatuslineItemConfig[]) =>
+      items.map(i => DYNAMIC_COLOR_ITEMS.has(i.id) ? { ...i, color: undefined } : i)
+
     if (this.settings.statuslineItems?.length) {
       const savedIds = new Set(this.settings.statuslineItems.map(i => i.id))
       const missing = STATUSLINE_ITEMS
         .filter(d => !savedIds.has(d.id))
         .map(d => ({ id: d.id, visible: d.defaultVisible, align: 'left' as const }))
-      return [...this.settings.statuslineItems, ...missing]
+      return stripDynamicColors([...this.settings.statuslineItems, ...missing])
     }
-    // Default template: gitBranch(#61afef),sessionId(#d19a66) > tokens,turns,duration > contextPct(#d19a66),cost > usage5h,usage5hReset > usage7d(#e5c07b),usage7dReset(#e5c07b) > prompts(#d19a66)
-    return parseStatuslineTemplate('gitBranch(#61afef),sessionId(#d19a66) > tokens,turns,duration > contextPct(#d19a66),cost > usage5h,usage5hReset > usage7d(#e5c07b),usage7dReset(#e5c07b) > prompts(#d19a66)')
+    // Default template
+    return stripDynamicColors(parseStatuslineTemplate('gitBranch(#61afef),sessionId(#d19a66) > tokens,turns,duration > contextPct,cost > usage5h,usage5hReset > usage7d(#e5c07b),usage7dReset(#e5c07b) > prompts(#d19a66)'))
   }
 
   setStatuslineItems(items: StatuslineItemConfig[]): void {

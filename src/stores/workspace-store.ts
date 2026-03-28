@@ -21,18 +21,91 @@ class WorkspaceStore {
 
   // Global Claude usage (shared across all panels)
   // Adaptive polling: backs off on rate limits, pauses when hidden, refreshes on focus
-  private _claudeUsage: { fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null } | null = null
+  private _claudeUsage: { fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null; fiveHourStale?: boolean } | null = null
   private _usageTimer: ReturnType<typeof setTimeout> | null = null
   private _usagePollingStarted = false
   private _usageInflight = false
-  private _usageBaseInterval = 120 * 1000            // 2 min normal (API has strict rate limits)
+  private _usageRateLimited = false                 // true while in rate-limit backoff — blocks refreshUsageNow
+  private _usageRateLimitStreak = 0                 // consecutive 429s — drives cumulative backoff (60s × 2^streak, streak capped at 3 → max 480s)
+  private _usageBaseInterval = 120 * 1000            // 2 min normal
   private _usageCurrentInterval = 120 * 1000
-  private _usageMaxInterval = 480 * 1000            // 480s max backoff
   private _usageMinInterval = 60 * 1000             // 1 min min (after activity)
-  private _usageRateLimitMin = 120 * 1000           // 2 min min when rate limited
+  private _fiveHourStaleTimer: ReturnType<typeof setTimeout> | null = null
+  private static readonly _USAGE_CACHE_KEY = 'bat_claude_usage_cache'
+  private static readonly _FIVE_HOUR_STALE_MS = 10 * 60 * 1000  // 10 min without fresh data → mark stale
   private _visibilityHandler: (() => void) | null = null
 
   get claudeUsage() { return this._claudeUsage }
+
+  /** Pacing analysis for 5h window: compare utilization vs time elapsed %.
+   *  Returns null if data is insufficient. */
+  getUsagePacing(): { onPace: boolean; timeElapsedPct: number; estimatedMinutesToLimit: number | null } | null {
+    const u = this._claudeUsage
+    if (!u || u.fiveHour == null || !u.fiveHourReset) return null
+    const now = Date.now()
+    const resetMs = new Date(u.fiveHourReset).getTime()
+    const periodMs = 5 * 3_600_000
+    const remainingMs = Math.max(0, resetMs - now)
+    const elapsedMs = periodMs - remainingMs
+    if (elapsedMs <= 0) return null
+    const timeElapsedPct = (elapsedMs / periodMs) * 100
+    const onPace = u.fiveHour <= timeElapsedPct
+    let estimatedMinutesToLimit: number | null = null
+    if (u.fiveHour > 0) {
+      const ratePerMs = u.fiveHour / elapsedMs
+      if (ratePerMs > 0) {
+        const remainingPct = 100 - u.fiveHour
+        const remainingMin = Math.round(remainingMs / 60_000)
+        estimatedMinutesToLimit = Math.min(Math.round(remainingPct / ratePerMs / 60_000), remainingMin)
+      }
+    }
+    return { onPace, timeElapsedPct, estimatedMinutesToLimit }
+  }
+
+  private _persistUsage() {
+    if (!this._claudeUsage) return
+    try {
+      const { fiveHourStale: _, ...data } = this._claudeUsage
+      localStorage.setItem(WorkspaceStore._USAGE_CACHE_KEY, JSON.stringify({ ...data, savedAt: new Date().toISOString() }))
+    } catch { /* quota exceeded — non-fatal */ }
+  }
+
+  private _loadPersistedUsage() {
+    try {
+      const raw = localStorage.getItem(WorkspaceStore._USAGE_CACHE_KEY)
+      if (!raw) return
+      const cached = JSON.parse(raw) as { fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null }
+      const now = Date.now()
+      const fiveExpired = cached.fiveHourReset ? now > new Date(cached.fiveHourReset).getTime() : false
+      const sevenExpired = cached.sevenDayReset ? now > new Date(cached.sevenDayReset).getTime() : false
+      this._claudeUsage = {
+        fiveHour:      fiveExpired  ? null : cached.fiveHour,
+        fiveHourReset: fiveExpired  ? null : cached.fiveHourReset,
+        sevenDay:      sevenExpired ? null : cached.sevenDay,
+        sevenDayReset: sevenExpired ? null : cached.sevenDayReset,
+        fiveHourStale: false,
+      }
+      this.notify()
+    } catch { /* corrupt cache — ignore */ }
+  }
+
+  private _startStaleTimer() {
+    if (this._fiveHourStaleTimer) return  // already running
+    this._fiveHourStaleTimer = setTimeout(() => {
+      this._fiveHourStaleTimer = null
+      if (this._claudeUsage) {
+        this._claudeUsage = { ...this._claudeUsage, fiveHourStale: true }
+        this.notify()
+      }
+    }, WorkspaceStore._FIVE_HOUR_STALE_MS)
+  }
+
+  private _clearStaleTimer() {
+    if (this._fiveHourStaleTimer) {
+      clearTimeout(this._fiveHourStaleTimer)
+      this._fiveHourStaleTimer = null
+    }
+  }
 
   private async _fetchUsage() {
     if (this._usageInflight) return
@@ -41,22 +114,31 @@ class WorkspaceStore {
       const u = await window.electronAPI.claude.getUsage()
       if (!u) return
 
-      // Handle rate-limit response from main process
-      // Use server's retryAfterSec directly — do not double existing interval,
-      // since OAuth always rate-limits on Windows and exponential backoff causes 1.5h+ staleness
+      // Handle rate-limit response — cumulative backoff: 60s × 2^streak, streak capped at 3
       if ('rateLimited' in u && (u as any).rateLimited) {
-        const retryAfterMs = ((u as any).retryAfterSec || 60) * 1000
-        this._usageCurrentInterval = Math.min(retryAfterMs, this._usageMaxInterval)
+        this._usageRateLimitStreak++
+        this._usageRateLimited = true
+        const exp = Math.min(this._usageRateLimitStreak, 3)
+        this._usageCurrentInterval = 60_000 * Math.pow(2, exp)
+        this._startStaleTimer()
         return
       }
 
-      // Success — reset to base interval
+      // Success — reset streak, interval, stale state
+      this._usageRateLimitStreak = 0
+      this._usageRateLimited = false
       this._usageCurrentInterval = this._usageBaseInterval
-      this._claudeUsage = u
+      this._clearStaleTimer()
+      this._claudeUsage = { ...u, fiveHourStale: false }
+      this._persistUsage()
       this.notify()
     } catch {
-      // Network error — double the interval (exponential backoff)
-      this._usageCurrentInterval = Math.min(this._usageCurrentInterval * 2, this._usageMaxInterval)
+      // Network error — same cumulative backoff as rate-limit
+      this._usageRateLimitStreak++
+      this._usageRateLimited = true
+      const exp = Math.min(this._usageRateLimitStreak, 3)
+      this._usageCurrentInterval = 60_000 * Math.pow(2, exp)
+      this._startStaleTimer()
     } finally {
       this._usageInflight = false
     }
@@ -73,6 +155,9 @@ class WorkspaceStore {
   startUsagePolling() {
     if (this._usagePollingStarted) return
     this._usagePollingStarted = true
+
+    // Restore persisted usage immediately so UI doesn't flash empty on startup
+    this._loadPersistedUsage()
 
     // Initial fetch
     this._fetchUsage().then(() => this._scheduleNextPoll())
@@ -96,6 +181,7 @@ class WorkspaceStore {
   /** Call after agent activity (turn completed, session ended) for a timely refresh */
   refreshUsageNow() {
     if (!this._usagePollingStarted) return
+    if (this._usageRateLimited) return  // don't hammer during backoff
     // Use shorter interval temporarily after activity
     this._usageCurrentInterval = this._usageMinInterval
     this._fetchUsage().then(() => this._scheduleNextPoll())

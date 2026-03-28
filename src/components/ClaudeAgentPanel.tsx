@@ -2988,8 +2988,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             if (!sessionMeta || sessionMeta.contextWindow <= 0) return null
             const ctxTokens = sessionMeta.contextTokens || (sessionMeta.inputTokens + sessionMeta.outputTokens)
             const pct = Math.round((ctxTokens / sessionMeta.contextWindow) * 100)
+            const ctxColor = pct >= 80 ? '#e05252' : pct >= 50 ? '#e6a700' : '#89ca78'
             return (
-              <span key="contextPct" className="claude-statusline-item" title={`context: ${ctxTokens.toLocaleString()} / ${sessionMeta.contextWindow.toLocaleString()} tokens\ntotal: ${(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok`}>
+              <span key="contextPct" className="claude-statusline-item" style={{ color: ctxColor }} title={`context: ${ctxTokens.toLocaleString()} / ${sessionMeta.contextWindow.toLocaleString()} tokens\ntotal: ${(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok`}>
                 ctx {pct}%
               </span>
             )
@@ -3001,11 +3002,23 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             const ws = workspaceId ? workspaceStore.getState().workspaces.find(w => w.id === workspaceId) : null
             return ws ? <span key="workspace" className="claude-statusline-item">{ws.alias || ws.name}</span> : null
           },
-          usage5h: () => claudeUsage?.fiveHour == null ? null : (
-            <span key="usage5h" className={`claude-statusline-item${claudeUsage.fiveHour > 80 ? ' claude-usage-high' : claudeUsage.fiveHour > 50 ? ' claude-usage-mid' : ''}`}>
-              5h:{Math.round(claudeUsage.fiveHour)}%
-            </span>
-          ),
+          usage5h: () => {
+            if (claudeUsage?.fiveHour == null) return null
+            const pacing = workspaceStore.getUsagePacing()
+            const pacingIcon = pacing ? (pacing.onPace ? ' ▼' : ' ▲') : ''
+            const pacingTitle = pacing
+              ? `Time elapsed: ${Math.round(pacing.timeElapsedPct)}%${pacing.estimatedMinutesToLimit != null ? `\nETA to limit: ~${pacing.estimatedMinutesToLimit}min` : ''}`
+              : ''
+            const stale = (claudeUsage as any).fiveHourStale
+            return (
+              <span key="usage5h"
+                className={`claude-statusline-item${claudeUsage.fiveHour > 80 ? ' claude-usage-high' : claudeUsage.fiveHour > 50 ? ' claude-usage-mid' : ''}${stale ? ' claude-usage-stale' : ''}`}
+                title={pacingTitle || undefined}
+                style={!pacing?.onPace && pacing ? { fontWeight: 600 } : undefined}>
+                5h:{Math.round(claudeUsage.fiveHour)}%{pacingIcon}
+              </span>
+            )
+          },
           usage5hReset: () => {
             if (!claudeUsage?.fiveHourReset) return null
             return <span key="usage5hReset" className="claude-statusline-item">↻{fmtRemaining(new Date(claudeUsage.fiveHourReset))}</span>
