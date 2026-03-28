@@ -27,7 +27,7 @@ class WorkspaceStore {
   private _usageInflight = false
   private _usageBaseInterval = 120 * 1000            // 2 min normal (API has strict rate limits)
   private _usageCurrentInterval = 120 * 1000
-  private _usageMaxInterval = 30 * 60 * 1000       // 30 min max backoff
+  private _usageMaxInterval = 480 * 1000            // 480s max backoff
   private _usageMinInterval = 60 * 1000             // 1 min min (after activity)
   private _usageRateLimitMin = 120 * 1000           // 2 min min when rate limited
   private _visibilityHandler: (() => void) | null = null
