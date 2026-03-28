@@ -231,6 +231,7 @@ export function Sidebar({
       try {
         const { workspaceId: dragWorkspaceId, sourceWindowId } = JSON.parse(moveData)
         if (sourceWindowId && sourceWindowId !== windowId) {
+          e.stopPropagation() // prevent container onDrop from firing a second moveToWindow
           const targetIndex = workspaces.findIndex(w => w.id === targetId)
           const insertIndex = dragPosition === 'after' ? targetIndex + 1 : targetIndex
           window.electronAPI.workspace.moveToWindow(
