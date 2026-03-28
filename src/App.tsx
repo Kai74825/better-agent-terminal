@@ -368,70 +368,14 @@ export default function App() {
     }
   }, [])
 
-  // Handle profile switch: kill all terminals, load profile, reload store
-  const handleProfileSwitch = useCallback(async (profileId: string) => {
-    // Kill all running terminals and claude sessions
-    const currentState = workspaceStore.getState()
-    for (const terminal of currentState.terminals) {
-      try { await window.electronAPI.pty.kill(terminal.id) } catch { /* ignore */ }
-    }
-
-    // Disconnect existing remote connection if any
-    await window.electronAPI.remote.disconnect()
-
-    // Check if this is a remote profile
-    const profile = await window.electronAPI.profile.get(profileId)
-    if (!profile) return
-
-    if (profile.type === 'remote' && profile.remoteHost && profile.remoteToken) {
-      // Connect to remote host
-      const connectResult = await window.electronAPI.remote.connect(
-        profile.remoteHost,
-        profile.remotePort || 9876,
-        profile.remoteToken
-      )
-      if ('error' in connectResult) {
-        setAppNotification(t('app.remoteConnectionFailedFallback', { error: connectResult.error }))
-        // Fall back to first local profile
-        const listResult = await window.electronAPI.profile.list()
-        const localProfile = listResult.profiles.find(p => p.type !== 'remote')
-        if (localProfile) {
-          await window.electronAPI.profile.load(localProfile.id)
-          await workspaceStore.load()
-          setActiveProfileName(localProfile.name)
-        }
-        setIsRemoteConnected(false)
-        setShowProfiles(false)
-        return
-      }
-      // Set as active profile (no local workspace load for remote)
-      await window.electronAPI.profile.setActiveId(profileId)
-    } else {
-      // Load the local profile (writes to workspaces.json)
-      const result = await window.electronAPI.profile.load(profileId)
-      if (!result) return
-    }
-
-    // Clear workspace init tracking so terminals re-initialize after profile switch
-    clearInitializedWorkspaces()
-
-    // Reload workspace store from the (possibly remote) workspaces.json
-    await workspaceStore.load()
-
-    // Update active profile name and remote status
-    const listResult = await window.electronAPI.profile.list()
-    const active = listResult.profiles.find(p => p.id === listResult.activeProfileId)
-    if (active) setActiveProfileName(active.name)
-    setIsRemoteConnected(profile.type === 'remote')
-
-    setShowProfiles(false)
-  }, [])
-
-  // Open profile in a new app instance
+  // Open profile in a new app instance (or focus if already open)
   const handleProfileNewWindow = useCallback(async (profileId: string) => {
-    await window.electronAPI.app.openNewInstance(profileId)
+    const result = await window.electronAPI.app.openNewInstance(profileId)
+    if (result?.alreadyOpen) {
+      setAppNotification(t('profiles.alreadyOpen'))
+    }
     setShowProfiles(false)
-  }, [])
+  }, [t])
 
   // Get the workspace for env dialog
   const envDialogWorkspace = envDialogWorkspaceId
@@ -613,7 +557,7 @@ export default function App() {
         <SettingsPanel onClose={() => setShowSettings(false)} />
       )}
       {showProfiles && (
-        <ProfilePanel onClose={() => setShowProfiles(false)} onSwitch={handleProfileSwitch} onSwitchNewWindow={handleProfileNewWindow} />
+        <ProfilePanel onClose={() => setShowProfiles(false)} onSwitchNewWindow={handleProfileNewWindow} />
       )}
       {envDialogWorkspace && (
         <WorkspaceEnvDialog

@@ -137,11 +137,11 @@
     "duplicate": "Duplicate",
     "deleteProfile": "Delete Profile",
     "deleteConfirm": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
-    "switchProfile": "Switch Profile",
-    "switchConfirm": "Switch in this window (closes all terminals) or open in a new window?",
-    "switchHere": "Switch Here",
-    "saveAndSwitchHere": "Save & Switch Here",
-    "newWindow": "New Window",
+    "switchProfile": "Open Profile",
+    "openInNewWindow": "Open this profile in a new window?",
+    "saveAndOpen": "Save Current & Open",
+    "newWindow": "Open",
+    "alreadyOpen": "This profile is already open in another window.",
     "host": "Host"
   },
 

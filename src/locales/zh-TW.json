@@ -137,11 +137,11 @@
     "duplicate": "複製",
     "deleteProfile": "刪除設定檔",
     "deleteConfirm": "確定要刪除「{{name}}」嗎？此操作無法復原。",
-    "switchProfile": "切換設定檔",
-    "switchConfirm": "在此視窗中切換（將關閉所有終端）或在新視窗中開啟？",
-    "switchHere": "在此切換",
-    "saveAndSwitchHere": "儲存並在此切換",
-    "newWindow": "新視窗",
+    "switchProfile": "開啟設定檔",
+    "openInNewWindow": "在新視窗中開啟此設定檔？",
+    "saveAndOpen": "儲存當前並開啟",
+    "newWindow": "開啟",
+    "alreadyOpen": "此設定檔已在另一個視窗中開啟。",
     "host": "主機"
   },
 

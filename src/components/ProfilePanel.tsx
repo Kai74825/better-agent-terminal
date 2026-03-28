@@ -14,11 +14,11 @@ interface ProfileEntry {
 
 interface ProfilePanelProps {
   onClose: () => void
-  onSwitch: (profileId: string) => void
+  onSwitch?: (profileId: string) => void  // deprecated, kept for compat
   onSwitchNewWindow: (profileId: string) => void
 }
 
-export function ProfilePanel({ onClose, onSwitch, onSwitchNewWindow }: ProfilePanelProps) {
+export function ProfilePanel({ onClose, onSwitchNewWindow }: ProfilePanelProps) {
   const { t } = useTranslation()
   const [profiles, setProfiles] = useState<ProfileEntry[]>([])
   const [activeProfileId, setActiveProfileId] = useState<string>('default')
@@ -171,17 +171,13 @@ export function ProfilePanel({ onClose, onSwitch, onSwitchNewWindow }: ProfilePa
     setConfirmSwitch(profileId)
   }
 
-  const handleSwitchConfirm = async (saveFirst: boolean, newWindow = false) => {
+  const handleSwitchConfirm = async (saveFirst: boolean) => {
     if (!confirmSwitch) return
     if (saveFirst) {
       await window.electronAPI.profile.save(activeProfileId)
     }
     setConfirmSwitch(null)
-    if (newWindow) {
-      onSwitchNewWindow(confirmSwitch)
-    } else {
-      onSwitch(confirmSwitch)
-    }
+    onSwitchNewWindow(confirmSwitch)
   }
 
   const formatDate = (ts: number) => {
@@ -420,19 +416,18 @@ export function ProfilePanel({ onClose, onSwitch, onSwitchNewWindow }: ProfilePa
         </div>
       )}
 
-      {/* Confirm switch dialog */}
+      {/* Confirm switch dialog — always opens new window */}
       {confirmSwitch && (
         <div className="settings-overlay" style={{ zIndex: 1001 }} onClick={() => setConfirmSwitch(null)}>
           <div className="settings-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, padding: 20 }}>
             <h3 style={{ margin: '0 0 12px' }}>{t('profiles.switchProfile')}</h3>
             <p style={{ margin: '0 0 16px', color: '#aaa' }}>
-              {t('profiles.switchConfirm')}
+              {t('profiles.openInNewWindow')}
             </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button className="profile-action-btn" onClick={() => setConfirmSwitch(null)}>{t('common.cancel')}</button>
-              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(false)}>{t('profiles.switchHere')}</button>
-              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(true)}>{t('profiles.saveAndSwitchHere')}</button>
-              <button className="profile-action-btn primary" onClick={() => handleSwitchConfirm(false, true)}>{t('profiles.newWindow')}</button>
+              <button className="profile-action-btn" onClick={() => handleSwitchConfirm(true)}>{t('profiles.saveAndOpen')}</button>
+              <button className="profile-action-btn primary" onClick={() => handleSwitchConfirm(false)}>{t('profiles.newWindow')}</button>
             </div>
           </div>
         </div>

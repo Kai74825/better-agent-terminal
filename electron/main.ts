@@ -1181,12 +1181,19 @@ function registerLocalHandlers() {
     return entry.id
   })
 
-  // Open new instance with a specific profile
+  // Open new instance with a specific profile (skip if already open)
   ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
+    // Check if a window with this profile is already open
+    const entries = await windowRegistry.readAll()
+    const existing = entries.find(e => e.profileId === profileId)
+    if (existing) {
+      return { alreadyOpen: true, windowId: existing.id }
+    }
     const entry = await windowRegistry.createEntry({ profileId })
     const { spawn } = await import('child_process')
     const args = [app.getAppPath(), `--window=${entry.id}`, `--profile=${profileId}`]
     spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref()
+    return { alreadyOpen: false, windowId: entry.id }
   })
 
   // Workspace detach/reattach (local window management)
