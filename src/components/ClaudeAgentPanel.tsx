@@ -111,6 +111,11 @@ interface AttachedImage {
   dataUrl: string
 }
 
+interface AttachedFile {
+  path: string
+  name: string
+}
+
 type MessageItem = ClaudeMessage | ClaudeToolCall
 
 // Track sessions that have been started to prevent duplicate calls across StrictMode remounts
@@ -158,6 +163,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
   const [askAnswers, setAskAnswers] = useState<Record<string, string>>({})
   const [askOtherText, setAskOtherText] = useState<Record<string, string>>({})
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([])
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [gitBranch, setGitBranch] = useState<string | null>(null)
   const [showResumeList, setShowResumeList] = useState(false)
@@ -967,7 +973,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
 
   const handleSend = useCallback(async () => {
     const trimmed = inputValueRef.current.trim()
-    if (!trimmed && attachedImages.length === 0) return
+    if (!trimmed && attachedImages.length === 0 && attachedFiles.length === 0) return
 
     // Save to input history
     if (trimmed) {
@@ -1010,8 +1016,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
     }
 
     const imageDataUrls = attachedImages.map(i => i.dataUrl)
+    const filePaths = attachedFiles.map(f => f.path)
     clearInput()
     setAttachedImages([])
+    setAttachedFiles([])
     setPromptSuggestion(null)
     setShowSlashMenu(false)
     if (!isStreaming || isInterrupted) {
@@ -1021,20 +1029,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
       setStreamingThinking('')
     }
 
+    // Build prompt with file paths prepended
+    let promptToSend = trimmed
+    if (filePaths.length > 0) {
+      const filePrefix = filePaths.map(p => `@${p}`).join('\n')
+      promptToSend = filePrefix + (trimmed ? '\n\n' + trimmed : '')
+    }
+
     // Add user message locally
     const imageNote = imageDataUrls.length > 0
       ? `\n[${imageDataUrls.length} image${imageDataUrls.length > 1 ? 's' : ''} attached]`
       : ''
+    const fileNames = filePaths.map(p => p.split('/').pop()).join(', ')
+    const fileNote = filePaths.length > 0
+      ? `\n[${filePaths.length} file${filePaths.length > 1 ? 's' : ''} attached: ${fileNames}]`
+      : ''
+    const displayContent = (trimmed + imageNote + fileNote).replace(/^\n/, '')
     setMessages(prev => [...prev, {
       id: `user-${Date.now()}`,
       sessionId,
       role: 'user' as const,
-      content: trimmed + imageNote,
+      content: displayContent,
       timestamp: Date.now(),
     }])
 
-    await window.electronAPI.claude.sendMessage(sessionId, trimmed, imageDataUrls.length > 0 ? imageDataUrls : undefined)
-  }, [isStreaming, sessionId, attachedImages, clearInput])
+    await window.electronAPI.claude.sendMessage(sessionId, promptToSend, imageDataUrls.length > 0 ? imageDataUrls : undefined)
+  }, [isStreaming, sessionId, attachedImages, attachedFiles, clearInput])
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
@@ -1468,6 +1488,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
   }, [sessionId, pendingQuestion, askAnswers, askOtherText])
 
   const MAX_IMAGES = 5
+  const MAX_FILES = 10
 
   const addImageByPath = useCallback(async (filePath: string) => {
     setAttachedImages(prev => {
@@ -1489,6 +1510,15 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
       console.error('Failed to read image:', err)
     }
   }, [attachedImages])
+
+  const addFileByPath = useCallback((filePath: string) => {
+    setAttachedFiles(prev => {
+      if (prev.length >= MAX_FILES) return prev
+      if (prev.some(f => f.path === filePath)) return prev
+      const name = filePath.split('/').pop() || filePath
+      return [...prev, { path: filePath, name }]
+    })
+  }, [])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items
@@ -1518,23 +1548,36 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
-    const files = e.dataTransfer.files
-    for (const file of files) {
-      if (file.type.startsWith('image/') && file.path) {
+    for (const file of e.dataTransfer.files) {
+      if (!file.path) continue
+      if (file.type.startsWith('image/')) {
         await addImageByPath(file.path)
+      } else {
+        addFileByPath(file.path)
       }
     }
-  }, [addImageByPath])
+  }, [addImageByPath, addFileByPath])
 
-  const handleSelectImages = useCallback(async () => {
-    const paths = await window.electronAPI.dialog.selectImages()
+  const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'])
+
+  const handleSelectAttachments = useCallback(async () => {
+    const paths = await window.electronAPI.dialog.selectFiles()
     for (const p of paths) {
-      await addImageByPath(p)
+      const ext = p.slice(p.lastIndexOf('.')).toLowerCase()
+      if (IMAGE_EXTENSIONS.has(ext)) {
+        await addImageByPath(p)
+      } else {
+        addFileByPath(p)
+      }
     }
-  }, [addImageByPath])
+  }, [addImageByPath, addFileByPath])
 
   const removeImage = useCallback((filePath: string) => {
     setAttachedImages(prev => prev.filter(img => img.path !== filePath))
+  }, [])
+
+  const removeFile = useCallback((filePath: string) => {
+    setAttachedFiles(prev => prev.filter(f => f.path !== filePath))
   }, [])
 
   const toggleTool = useCallback((id: string, isThinking?: boolean) => {
@@ -2663,7 +2706,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
           disabled={false}
           rows={1}
         />
-        {attachedImages.length > 0 && (
+        {(attachedImages.length > 0 || attachedFiles.length > 0) && (
           <div className="claude-attachments">
             {attachedImages.map(img => (
               <div key={img.path} className="claude-attachment">
@@ -2677,10 +2720,23 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
                 </button>
               </div>
             ))}
-            {attachedImages.length < MAX_IMAGES && (
+            {attachedFiles.map(file => (
+              <div key={file.path} className="claude-attachment-file" title={file.path}>
+                <span className="claude-attachment-file-icon">&#128196;</span>
+                <span className="claude-attachment-file-name">{file.name}</span>
+                <button
+                  className="claude-attachment-remove"
+                  onClick={() => removeFile(file.path)}
+                  title={t('claude.removeFile')}
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+            {(attachedImages.length < MAX_IMAGES || attachedFiles.length < MAX_FILES) && (
               <button
                 className="claude-add-image-btn"
-                onClick={handleSelectImages}
+                onClick={handleSelectAttachments}
                 title={t('claude.addImage')}
               >
                 +
@@ -2736,7 +2792,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             )}
             <span
               className="claude-status-btn"
-              onClick={handleSelectImages}
+              onClick={handleSelectAttachments}
               title={t('claude.attachImages')}
             >
               &#128206;

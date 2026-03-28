@@ -1524,6 +1524,54 @@
   color: var(--claude-accent);
 }
 
+/* File attachment chip */
+.claude-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 24px 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  position: relative;
+  max-width: 160px;
+  flex-shrink: 0;
+}
+
+.claude-attachment-file-icon {
+  font-size: calc(var(--claude-font-size) - 1px);
+  flex-shrink: 0;
+}
+
+.claude-attachment-file-name {
+  font-size: calc(var(--claude-font-size) - 2px);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-add-file-btn {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px dashed var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(var(--claude-font-size) - 1px);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transition: all 0.15s;
+}
+
+.claude-add-file-btn:hover {
+  border-color: var(--claude-accent);
+  color: var(--claude-accent);
+}
+
 .claude-input-area.drag-over {
   border-color: var(--claude-accent);
   background: rgba(217, 119, 6, 0.06);

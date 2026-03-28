@@ -1077,6 +1077,14 @@ function registerLocalHandlers() {
     return result.canceled ? [] : result.filePaths
   })
 
+  ipcMain.handle('dialog:select-files', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      defaultPath: app.getPath('home'),
+      properties: ['openFile', 'multiSelections'],
+    })
+    return result.canceled ? [] : result.filePaths
+  })
+
   ipcMain.handle('dialog:confirm', async (_event, message: string, title?: string) => {
     const result = await dialog.showMessageBox(mainWindow!, {
       type: 'warning',

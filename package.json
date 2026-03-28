@@ -17,7 +17,8 @@
     "diagnose:ctrl-o": "npx electron tests/diagnose-ctrl-o.js",
     "diagnose:ctrl-o:quick": "npx electron tests/diagnose-ctrl-o.js --quick",
     "diagnose:ctrl-o:verbose": "npx electron tests/diagnose-ctrl-o.js --verbose",
-    "test:node-resolver": "npx tsx tests/node-resolver.test.ts"
+    "test:node-resolver": "npx tsx tests/node-resolver.test.ts",
+    "test:file-drag": "npx tsx tests/file-drag-to-chat.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",

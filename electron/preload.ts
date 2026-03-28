@@ -46,6 +46,7 @@ const electronAPI = {
   dialog: {
     selectFolder: () => ipcRenderer.invoke('dialog:select-folder'),
     selectImages: () => ipcRenderer.invoke('dialog:select-images') as Promise<string[]>,
+    selectFiles: () => ipcRenderer.invoke('dialog:select-files') as Promise<string[]>,
     confirm: (message: string, title?: string) => ipcRenderer.invoke('dialog:confirm', message, title) as Promise<boolean>,
   },
   image: {
