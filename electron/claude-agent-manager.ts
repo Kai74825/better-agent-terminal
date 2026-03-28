@@ -1206,11 +1206,11 @@ export class ClaudeAgentManager {
     return true
   }
 
-  async getSupportedModels(sessionId: string): Promise<Array<{ value: string; displayName: string; description: string }>> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.queryInstance) return []
+  async getSupportedModels(_sessionId: string): Promise<Array<{ value: string; displayName: string; description: string }>> {
     try {
-      return await session.queryInstance.supportedModels()
+      const query = await getQuery()
+      const instance = query({ prompt: '', cwd: '/' })
+      return await instance.supportedModels()
     } catch (e) {
       logger.warn('getSupportedModels failed:', e)
       return []
