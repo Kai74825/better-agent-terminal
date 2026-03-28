@@ -9,6 +9,7 @@ interface SidebarProps {
   width: number
   workspaces: Workspace[]
   activeWorkspaceId: string | null
+  windowId: string | null
   groups: string[]
   activeGroup: string | null
   activeProfileName?: string
@@ -30,6 +31,7 @@ export function Sidebar({
   width,
   workspaces,
   activeWorkspaceId,
+  windowId,
   groups,
   activeGroup,
   activeProfileName,
@@ -178,11 +180,18 @@ export function Sidebar({
     setDraggedId(workspaceId)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('text/plain', workspaceId)
+    // Custom MIME for cross-window workspace moves
+    if (windowId) {
+      e.dataTransfer.setData('application/x-bat-workspace-move', JSON.stringify({
+        workspaceId,
+        sourceWindowId: windowId,
+      }))
+    }
     requestAnimationFrame(() => {
       const target = e.target as HTMLElement
       target.classList.add('dragging')
     })
-  }, [])
+  }, [windowId])
 
   const handleDragEnd = useCallback((e: React.DragEvent) => {
     const target = e.target as HTMLElement
@@ -197,6 +206,8 @@ export function Sidebar({
     e.dataTransfer.dropEffect = 'move'
 
     if (draggedId === workspaceId) return
+    // For cross-window drags (no local draggedId), check MIME type
+    if (!draggedId && !e.dataTransfer.types.includes('application/x-bat-workspace-move')) return
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const midY = rect.top + rect.height / 2
@@ -213,6 +224,25 @@ export function Sidebar({
 
   const handleDrop = useCallback((e: React.DragEvent, targetId: string) => {
     e.preventDefault()
+
+    // Check for cross-window drop
+    const moveData = e.dataTransfer.getData('application/x-bat-workspace-move')
+    if (moveData && windowId) {
+      try {
+        const { workspaceId: dragWorkspaceId, sourceWindowId } = JSON.parse(moveData)
+        if (sourceWindowId && sourceWindowId !== windowId) {
+          const targetIndex = workspaces.findIndex(w => w.id === targetId)
+          const insertIndex = dragPosition === 'after' ? targetIndex + 1 : targetIndex
+          window.electronAPI.workspace.moveToWindow(
+            sourceWindowId, windowId, dragWorkspaceId, Math.max(0, insertIndex)
+          )
+          setDraggedId(null)
+          setDragOverId(null)
+          setDragPosition(null)
+          return
+        }
+      } catch { /* ignore parse errors */ }
+    }
 
     if (!draggedId || draggedId === targetId) {
       setDraggedId(null)
@@ -244,7 +274,7 @@ export function Sidebar({
     setDraggedId(null)
     setDragOverId(null)
     setDragPosition(null)
-  }, [draggedId, dragPosition, workspaces, onReorderWorkspaces])
+  }, [draggedId, dragPosition, workspaces, onReorderWorkspaces, windowId])
 
   return (
     <aside className="sidebar" style={{ width }}>
@@ -289,8 +319,13 @@ export function Sidebar({
       <div
         className={`workspace-list${externalDragOver ? ' external-drag-over' : ''}`}
         onDragOver={(e) => {
-          // Only react to external file drops (not internal workspace reorder)
+          // Only react to external file drops or cross-window workspace drags (not internal workspace reorder)
           if (draggedId) return
+          if (e.dataTransfer.types.includes('application/x-bat-workspace-move')) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            return
+          }
           if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
@@ -301,11 +336,29 @@ export function Sidebar({
           // Only reset if leaving the workspace-list entirely
           if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
             setExternalDragOver(false)
+            setDragOverId(null)
+            setDragPosition(null)
           }
         }}
         onDrop={(e) => {
           setExternalDragOver(false)
           if (draggedId) return
+          // Cross-window drop on container (append at end)
+          const moveData = e.dataTransfer.getData('application/x-bat-workspace-move')
+          if (moveData && windowId) {
+            try {
+              const { workspaceId, sourceWindowId } = JSON.parse(moveData)
+              if (sourceWindowId && sourceWindowId !== windowId) {
+                e.preventDefault()
+                window.electronAPI.workspace.moveToWindow(
+                  sourceWindowId, windowId, workspaceId, workspaces.length
+                )
+                setDragOverId(null)
+                setDragPosition(null)
+                return
+              }
+            } catch { /* ignore */ }
+          }
           e.preventDefault()
           const files = Array.from(e.dataTransfer.files)
           for (const file of files) {

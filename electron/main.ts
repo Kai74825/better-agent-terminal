@@ -1478,6 +1478,58 @@ function registerLocalHandlers() {
     return { alreadyOpen: false, windowIds: [entry.id] }
   })
 
+  // Cross-window workspace move (re-index only, no session rebuild)
+  ipcMain.handle('workspace:move-to-window', async (_event, sourceWindowId: string, targetWindowId: string, workspaceId: string, insertIndex: number) => {
+    const sourceEntry = await windowRegistry.getEntry(sourceWindowId)
+    const targetEntry = await windowRegistry.getEntry(targetWindowId)
+    if (!sourceEntry || !targetEntry) return false
+
+    // Find workspace in source
+    const srcWorkspaces = sourceEntry.workspaces as any[]
+    const wsIndex = srcWorkspaces.findIndex((w: any) => w.id === workspaceId)
+    if (wsIndex === -1) return false
+    const [workspace] = srcWorkspaces.splice(wsIndex, 1)
+
+    // Move associated terminals
+    const srcTerminals = sourceEntry.terminals as any[]
+    const movedTerminals = srcTerminals.filter((t: any) => t.workspaceId === workspaceId)
+    sourceEntry.terminals = srcTerminals.filter((t: any) => t.workspaceId !== workspaceId)
+
+    // Insert workspace at target position
+    const tgtWorkspaces = targetEntry.workspaces as any[]
+    const clampedIndex = Math.min(insertIndex, tgtWorkspaces.length)
+    tgtWorkspaces.splice(clampedIndex, 0, workspace)
+    ;(targetEntry.terminals as any[]).push(...movedTerminals)
+
+    // Fix activeWorkspaceId if the moved workspace was active in source
+    if (sourceEntry.activeWorkspaceId === workspaceId) {
+      sourceEntry.activeWorkspaceId = srcWorkspaces[0]?.id || null
+    }
+    // Set moved workspace as active in target
+    targetEntry.activeWorkspaceId = workspaceId
+
+    // Fix activeTerminalId in source if it belonged to the moved workspace
+    const movedTerminalIds = new Set(movedTerminals.map((t: any) => t.id))
+    if (sourceEntry.activeTerminalId && movedTerminalIds.has(sourceEntry.activeTerminalId)) {
+      sourceEntry.activeTerminalId = null
+    }
+
+    // Save both entries
+    sourceEntry.lastActiveAt = Date.now()
+    targetEntry.lastActiveAt = Date.now()
+    await windowRegistry.saveEntry(sourceEntry)
+    await windowRegistry.saveEntry(targetEntry)
+
+    // Notify both renderers to reload
+    const sourceWin = windowMap.get(sourceWindowId)
+    const targetWin = windowMap.get(targetWindowId)
+    if (sourceWin && !sourceWin.isDestroyed()) sourceWin.webContents.send('workspace:reload')
+    if (targetWin && !targetWin.isDestroyed()) targetWin.webContents.send('workspace:reload')
+
+    logger.log(`[workspace] Moved workspace ${workspaceId} from ${sourceWindowId} to ${targetWindowId}`)
+    return true
+  })
+
   // Workspace detach/reattach (local window management)
   ipcMain.handle('workspace:detach', async (event, workspaceId: string) => {
     if (detachedWindows.has(workspaceId)) {

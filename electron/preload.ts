@@ -37,6 +37,13 @@ const electronAPI = {
       ipcRenderer.on('workspace:reattached', handler)
       return () => ipcRenderer.removeListener('workspace:reattached', handler)
     },
+    moveToWindow: (sourceWindowId: string, targetWindowId: string, workspaceId: string, insertIndex: number) =>
+      ipcRenderer.invoke('workspace:move-to-window', sourceWindowId, targetWindowId, workspaceId, insertIndex),
+    onReload: (callback: () => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('workspace:reload', handler)
+      return () => ipcRenderer.removeListener('workspace:reload', handler)
+    },
   },
   settings: {
     save: (data: string) => ipcRenderer.invoke('settings:save', data),

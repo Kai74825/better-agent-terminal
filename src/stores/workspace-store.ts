@@ -16,6 +16,7 @@ class WorkspaceStore {
   }
 
   private activeGroup: string | null = null
+  private windowId: string | null = null
   private listeners: Set<Listener> = new Set()
 
   // Global Claude usage (shared across all panels)
@@ -536,6 +537,16 @@ class WorkspaceStore {
       .filter((time): time is number => time !== undefined)
 
     return lastActivities.length > 0 ? Math.max(...lastActivities) : null
+  }
+
+  // Window identity for cross-window drag
+  setWindowId(id: string): void { this.windowId = id }
+  getWindowId(): string | null { return this.windowId }
+
+  listenForReload(): () => void {
+    return window.electronAPI.workspace.onReload(() => {
+      this.load()
+    })
   }
 
   // Persistence — serialized to prevent concurrent writes from corrupting the file

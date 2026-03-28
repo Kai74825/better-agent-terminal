@@ -284,6 +284,10 @@ export default function App() {
           setActiveProfileName(`${fallback.name}:${winIdx}`)
         }
 
+        // Store windowId for cross-window workspace drag
+        const winId = await window.electronAPI.app.getWindowId()
+        if (winId) workspaceStore.setWindowId(winId)
+
         const tLoad = performance.now()
         // Load settings first (lightweight, no re-render), then workspaces (triggers heavy re-render)
         await settingsStore.load()
@@ -314,6 +318,9 @@ export default function App() {
       window.electronAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     })
 
+    // Listen for cross-window workspace reload
+    const unsubReload = workspaceStore.listenForReload()
+
     // Listen for workspace detach/reattach events (main window only)
     const unsubDetach = window.electronAPI.workspace.onDetached((wsId) => {
       setDetachedIds(prev => new Set(prev).add(wsId))
@@ -330,6 +337,7 @@ export default function App() {
       unsubscribe()
       unsubscribeOutput()
       unsubSystemResume()
+      unsubReload()
       unsubDetach()
       unsubReattach()
     }
@@ -433,6 +441,7 @@ export default function App() {
         width={panelSettings.sidebar.width}
         workspaces={visibleWorkspaces}
         activeWorkspaceId={state.activeWorkspaceId}
+        windowId={workspaceStore.getWindowId()}
         groups={workspaceStore.getGroups()}
         activeGroup={workspaceStore.getActiveGroup()}
         onSetActiveGroup={(group) => workspaceStore.setActiveGroup(group)}

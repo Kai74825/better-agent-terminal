@@ -15,6 +15,8 @@ interface ElectronAPI {
   workspace: {
     save: (data: string) => Promise<boolean>
     load: () => Promise<string | null>
+    moveToWindow: (sourceWindowId: string, targetWindowId: string, workspaceId: string, insertIndex: number) => Promise<boolean>
+    onReload: (callback: () => void) => () => void
   }
   settings: {
     save: (data: string) => Promise<boolean>
