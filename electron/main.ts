@@ -92,6 +92,13 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('org.tonyq.better-agent-terminal')
 }
 
+// Single instance lock — if a second instance is launched, focus existing and open new window
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  // Another instance is already running — it will handle second-instance event
+  app.quit()
+}
+
 const windowMap = new Map<string, BrowserWindow>() // windowId → BrowserWindow
 let ptyManager: PtyManager | null = null
 let claudeManager: ClaudeAgentManager | null = null
@@ -490,6 +497,53 @@ app.whenReady().then(async () => {
     }
   }
 
+  // Second instance launched — open a new window in existing process
+  app.on('second-instance', async (_event, argv) => {
+    // Check if launched with --profile=
+    const profileArg2 = argv.find(a => a.startsWith('--profile='))
+    const profileId2 = profileArg2 ? profileArg2.split('=')[1] || null : null
+
+    if (profileId2) {
+      // Open profile (focus if already open, otherwise restore from snapshot)
+      const entries = await windowRegistry.readAll()
+      const existing = entries.filter(e => e.profileId === profileId2)
+      const openWin = existing.find(e => {
+        const w = windowMap.get(e.id)
+        return w && !w.isDestroyed()
+      })
+      if (openWin) {
+        const w = windowMap.get(openWin.id)!
+        if (w.isMinimized()) w.restore()
+        w.focus()
+      } else {
+        await profileManager.activateProfile(profileId2)
+        const snapshot = await profileManager.loadSnapshot(profileId2)
+        if (snapshot && snapshot.windows.length > 0) {
+          for (const winSnap of snapshot.windows) {
+            const entry = await windowRegistry.createEntry({ profileId: profileId2 })
+            entry.workspaces = winSnap.workspaces
+            entry.activeWorkspaceId = winSnap.activeWorkspaceId
+            entry.activeGroup = winSnap.activeGroup
+            entry.terminals = winSnap.terminals
+            entry.activeTerminalId = winSnap.activeTerminalId
+            entry.bounds = winSnap.bounds
+            await windowRegistry.saveEntry(entry)
+            createWindow(entry.id, winSnap.bounds)
+          }
+        } else {
+          const entry = await windowRegistry.createEntry({ profileId: profileId2 })
+          createWindow(entry.id)
+        }
+      }
+    } else {
+      // No profile arg — open new window inheriting first active profile
+      const activeIds = await profileManager.getActiveProfileIds()
+      const pid = activeIds[0] || 'default'
+      const entry = await windowRegistry.createEntry({ profileId: pid })
+      createWindow(entry.id)
+    }
+  })
+
   // Listen for system resume from sleep/hibernate
   powerMonitor.on('resume', () => {
     logger.log('System resumed from sleep')
@@ -573,6 +627,10 @@ function registerProxiedHandlers() {
     entry.activeTerminalId = parsed.activeTerminalId || null
     entry.lastActiveAt = Date.now()
     await windowRegistry.saveEntry(entry)
+    // Also persist to profile snapshot so force-quit doesn't lose state
+    if (entry.profileId) {
+      profileManager.save(entry.profileId).catch(() => { /* ignore */ })
+    }
     return true
   })
   registerHandler('workspace:load', async (ctx) => {
