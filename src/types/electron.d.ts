@@ -29,7 +29,7 @@ interface ElectronAPI {
     writeImage: (filePath: string) => Promise<boolean>
   }
   app: {
-    openNewInstance: (profileId: string) => Promise<void>
+    openNewInstance: (profileId: string) => Promise<{ alreadyOpen: boolean; windowId?: string; windowIds?: string[] }>
     getLaunchProfile: () => Promise<string | null>
   }
   tunnel: {

@@ -220,10 +220,13 @@ export default function App() {
         const result = await window.electronAPI.profile.list()
         dlog(`[init] profile.list: ${(performance.now() - t1).toFixed(0)}ms`)
 
-        // Use launch profile if provided (new window), otherwise use stored active profile
-        const active = launchProfileId
-          ? result.profiles.find(p => p.id === launchProfileId)
-          : result.profiles.find(p => p.id === result.activeProfileId)
+        // Determine which profile this window should use:
+        // 1. Launch profile (--profile= argument) takes priority
+        // 2. Window registry's profileId (per-window binding)
+        // 3. Global activeProfileId as fallback
+        const windowProfileId = await window.electronAPI.app.getWindowProfile()
+        const profileId = launchProfileId || windowProfileId || result.activeProfileId
+        const active = result.profiles.find(p => p.id === profileId)
 
         if (active?.type === 'remote' && active.remoteHost && active.remoteToken) {
           // Try connecting to remote

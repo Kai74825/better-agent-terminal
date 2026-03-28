@@ -290,6 +290,15 @@ function createWindow(windowId: string, bounds?: { x: number; y: number; width: 
   win.on('moved', saveBounds)
   win.on('resized', saveBounds)
 
+  win.on('close', () => {
+    // Auto-save profile snapshot before window closes
+    windowRegistry.getEntry(windowId).then(entry => {
+      if (entry?.profileId) {
+        profileManager.save(entry.profileId).catch(() => { /* ignore */ })
+      }
+    }).catch(() => { /* ignore */ })
+  })
+
   win.on('closed', () => {
     windowMap.delete(windowId)
     // Close detached windows that were opened from this window
@@ -321,6 +330,7 @@ const profileArg = process.argv.find(a => a.startsWith('--profile='))
 const launchProfileId = profileArg ? profileArg.split('=')[1] || null : null
 
 const windowRegistry = new WindowRegistry()
+profileManager.setWindowRegistry(windowRegistry)
 
 app.whenReady().then(async () => {
   const t0 = Date.now()
@@ -496,11 +506,6 @@ function registerProxiedHandlers() {
     entry.activeTerminalId = parsed.activeTerminalId || null
     entry.lastActiveAt = Date.now()
     await windowRegistry.saveEntry(entry)
-    // Also write workspaces.json for backward compat (profile save/load still reads it)
-    const configPath = path.join(app.getPath('userData'), 'workspaces.json')
-    const tmpPath = configPath + '.tmp'
-    await fs.writeFile(tmpPath, data, 'utf-8')
-    await fs.rename(tmpPath, configPath)
     return true
   })
   registerHandler('workspace:load', async (ctx) => {
@@ -1247,6 +1252,13 @@ function registerLocalHandlers() {
   // Get the profile ID this instance was launched with (--profile= argument)
   ipcMain.handle('app:get-launch-profile', () => launchProfileId)
   ipcMain.handle('app:get-window-id', (event) => getWindowIdByWebContents(event.sender))
+  // Get the profile ID bound to this window's registry entry
+  ipcMain.handle('app:get-window-profile', async (event) => {
+    const windowId = getWindowIdByWebContents(event.sender)
+    if (!windowId) return null
+    const entry = await windowRegistry.getEntry(windowId)
+    return entry?.profileId ?? null
+  })
 
   // Dock badge count (macOS/Linux)
   ipcMain.handle('app:set-dock-badge', (_event, count: number) => {
@@ -1257,29 +1269,60 @@ function registerLocalHandlers() {
     }
   })
 
-  // Open new empty window (Cmd+N)
-  ipcMain.handle('app:new-window', async () => {
-    const entry = await windowRegistry.createEntry()
+  // Open new empty window (Cmd+N) — inherits profileId from source window
+  ipcMain.handle('app:new-window', async (event) => {
+    let profileId: string | undefined
+    const sourceWindowId = getWindowIdByWebContents(event.sender)
+    if (sourceWindowId) {
+      const sourceEntry = await windowRegistry.getEntry(sourceWindowId)
+      profileId = sourceEntry?.profileId
+    }
+    const entry = await windowRegistry.createEntry({ profileId })
     createWindow(entry.id)
     return entry.id
   })
 
-  // Open new instance with a specific profile (focus if already open)
+  // Open profile windows (focus existing if already open, otherwise restore all from snapshot)
   ipcMain.handle('app:open-new-instance', async (_event, profileId: string) => {
     const entries = await windowRegistry.readAll()
-    const existing = entries.find(e => e.profileId === profileId)
-    if (existing) {
-      // Focus the existing window instead of showing "already open" dialog
-      const win = windowMap.get(existing.id)
-      if (win && !win.isDestroyed()) {
-        if (win.isMinimized()) win.restore()
-        win.focus()
-      }
-      return { alreadyOpen: true, windowId: existing.id }
+    const existingForProfile = entries.filter(e => e.profileId === profileId)
+
+    // If any windows already open for this profile, focus the most recent one
+    const openWindows = existingForProfile.filter(e => {
+      const win = windowMap.get(e.id)
+      return win && !win.isDestroyed()
+    })
+    if (openWindows.length > 0) {
+      const mostRecent = openWindows.sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0]
+      const win = windowMap.get(mostRecent.id)!
+      if (win.isMinimized()) win.restore()
+      win.focus()
+      return { alreadyOpen: true, windowId: mostRecent.id }
     }
+
+    // Load profile snapshot and open all its windows
+    const snapshot = await profileManager.loadSnapshot(profileId)
+    if (snapshot && snapshot.windows.length > 0) {
+      const windowIds: string[] = []
+      for (const winSnap of snapshot.windows) {
+        const entry = await windowRegistry.createEntry({ profileId })
+        entry.workspaces = winSnap.workspaces
+        entry.activeWorkspaceId = winSnap.activeWorkspaceId
+        entry.activeGroup = winSnap.activeGroup
+        entry.terminals = winSnap.terminals
+        entry.activeTerminalId = winSnap.activeTerminalId
+        entry.bounds = winSnap.bounds
+        await windowRegistry.saveEntry(entry)
+        createWindow(entry.id, winSnap.bounds)
+        windowIds.push(entry.id)
+      }
+      return { alreadyOpen: false, windowIds }
+    }
+
+    // Fallback: no snapshot data, open empty window
     const entry = await windowRegistry.createEntry({ profileId })
     createWindow(entry.id)
-    return { alreadyOpen: false, windowId: entry.id }
+    return { alreadyOpen: false, windowIds: [entry.id] }
   })
 
   // Workspace detach/reattach (local window management)
