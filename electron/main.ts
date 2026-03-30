@@ -804,6 +804,13 @@ function registerProxiedHandlers() {
   const TOKEN_CACHE_TTL = 10 * 60 * 1000     // 10 minutes
   const SESSION_KEY_CACHE_TTL = 30 * 60 * 1000 // 30 minutes
   const ORG_ID_CACHE_TTL = 30 * 60 * 1000    // 30 minutes (re-detect after account switch)
+  // OAuth account info — sourced from /api/oauth/account (authoritative org ID + plan tier)
+  let _cachedOAuthOrgId: string | null = null
+  let _cachedOAuthOrgName: string | null = null
+  let _cachedOAuthRateLimitTier: string | null = null
+  let _cachedOAuthEmail: string | null = null
+  let _oauthOrgIdCacheTime = 0
+  const OAUTH_ORG_ID_CACHE_TTL = 60 * 60 * 1000 // 1 hour (org membership rarely changes)
   // Firefox-specific: cached cookie path + EBUSY stale-cache state
   let _firefoxCookiePath: string | null = null
   let _firefoxCookiePathCacheTime = 0
@@ -848,6 +855,35 @@ function registerProxiedHandlers() {
       }
       return null
     } catch { return null }
+  }
+
+  /** Fetch account info via OAuth — authoritative source for org ID and plan tier */
+  async function getOAuthAccountInfo(): Promise<{ orgId: string; orgName: string; rateLimitTier: string; email: string } | null> {
+    const now = Date.now()
+    if (_cachedOAuthOrgId && now - _oauthOrgIdCacheTime < OAUTH_ORG_ID_CACHE_TTL) {
+      return { orgId: _cachedOAuthOrgId, orgName: _cachedOAuthOrgName ?? '', rateLimitTier: _cachedOAuthRateLimitTier ?? '', email: _cachedOAuthEmail ?? '' }
+    }
+    const token = await getOAuthToken()
+    if (!token) return null
+    try {
+      const res = await fetch('https://api.anthropic.com/api/oauth/account', {
+        headers: { 'Authorization': `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Accept': 'application/json' },
+      })
+      if (!res.ok) return null
+      const data = await res.json()
+      const membership = data.memberships?.[0]
+      if (!membership) return null
+      _cachedOAuthOrgId = membership.organization.uuid
+      _cachedOAuthOrgName = membership.organization.name ?? ''
+      _cachedOAuthRateLimitTier = membership.organization.rate_limit_tier ?? ''
+      _cachedOAuthEmail = data.email_address ?? ''
+      _oauthOrgIdCacheTime = now
+      logger.log('[usage] OAuth account info: org=', _cachedOAuthOrgId, 'tier=', _cachedOAuthRateLimitTier)
+      return { orgId: _cachedOAuthOrgId!, orgName: _cachedOAuthOrgName, rateLimitTier: _cachedOAuthRateLimitTier, email: _cachedOAuthEmail }
+    } catch (e) {
+      logger.error('[usage] getOAuthAccountInfo failed:', e)
+      return null
+    }
   }
 
   /** Decrypt a Chrome v10 encrypted cookie value on macOS */
@@ -1137,7 +1173,9 @@ function registerProxiedHandlers() {
   async function fetchUsageViaSessionKey(): Promise<{ fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null } | null> {
     const creds = (await getSessionKeyFromChrome()) ?? (await getSessionKeyFromFirefox())
     if (!creds) return null
-    const orgId = await getOrgId(creds.sessionKey, creds.cfClearance)
+    // Use OAuth org ID as the authoritative source — avoids wrong-org data when session key belongs to a different account
+    const accountInfo = await getOAuthAccountInfo()
+    const orgId = accountInfo?.orgId ?? (await getOrgId(creds.sessionKey, creds.cfClearance))
     if (!orgId) return null
 
     const cookieParts = [`sessionKey=${creds.sessionKey}`]
@@ -1160,20 +1198,6 @@ function registerProxiedHandlers() {
 
     const data = await res.json()
     logger.log('[usage] [session-key] 5h=', data.five_hour?.utilization, 'reset=', data.five_hour?.resets_at, '7d=', data.seven_day?.utilization, 'reset=', data.seven_day?.resets_at)
-
-    // Stale/wrong-account detection: session key belongs to a different org when:
-    // 1. Both reset times are null (original case), OR
-    // 2. 5h reset is null AND 7d utilization is 0 (org exists but has never been used —
-    //    happens when Chrome session belongs to an old/wrong account that has a 7d window
-    //    but zero actual usage, while the correct account shows non-zero via OAuth)
-    const isStale =
-      (data.five_hour?.resets_at == null && data.seven_day?.resets_at == null) ||
-      (data.five_hour?.resets_at == null && (data.seven_day?.utilization ?? 0) === 0)
-    if (isStale) {
-      clearSessionKeyCache()
-      logger.log('[usage] [session-key] Stale/wrong-account session detected (5h_reset=', data.five_hour?.resets_at, '7d_util=', data.seven_day?.utilization, '), clearing cache')
-      return null
-    }
 
     return {
       fiveHour: data.five_hour?.utilization ?? null,
@@ -1226,6 +1250,20 @@ function registerProxiedHandlers() {
       logger.error('[usage] get-usage failed:', e)
       return null
     }
+  })
+
+  registerHandler('claude:get-usage-account', async (_ctx) => {
+    try {
+      const info = await getOAuthAccountInfo()
+      if (!info) return null
+      // Format rate_limit_tier for display: "default_claude_max_20x" → "Claude Max 20x"
+      const tier = info.rateLimitTier
+        .replace(/^default_/, '')
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase())
+        .replace(/(\d+[Xx])$/, m => m.toUpperCase())
+      return { email: info.email, orgName: info.orgName, tier }
+    } catch { return null }
   })
 
   // Git

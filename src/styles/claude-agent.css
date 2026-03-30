@@ -1021,7 +1021,8 @@
 }
 
 .claude-input {
-  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   background: transparent;
   border: none;
   color: var(--text-primary);

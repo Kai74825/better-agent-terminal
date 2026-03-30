@@ -22,6 +22,7 @@ class WorkspaceStore {
   // Global Claude usage (shared across all panels)
   // Adaptive polling: backs off on rate limits, pauses when hidden, refreshes on focus
   private _claudeUsage: { fiveHour: number | null; sevenDay: number | null; fiveHourReset: string | null; sevenDayReset: string | null; fiveHourStale?: boolean } | null = null
+  private _usageAccount: { email: string; orgName: string; tier: string } | null = null
   private _usageTimer: ReturnType<typeof setTimeout> | null = null
   private _usagePollingStarted = false
   private _usageInflight = false
@@ -36,6 +37,7 @@ class WorkspaceStore {
   private _visibilityHandler: (() => void) | null = null
 
   get claudeUsage() { return this._claudeUsage }
+  get usageAccount() { return this._usageAccount }
 
   /** Pacing analysis for 5h window: compare utilization vs time elapsed %.
    *  Returns null if data is insufficient. */
@@ -158,6 +160,11 @@ class WorkspaceStore {
 
     // Restore persisted usage immediately so UI doesn't flash empty on startup
     this._loadPersistedUsage()
+
+    // Fetch account info once (org name, email, plan tier for tooltip)
+    window.electronAPI.claude.getUsageAccount().then(info => {
+      if (info) { this._usageAccount = info; this.notify() }
+    }).catch(() => {})
 
     // Initial fetch
     this._fetchUsage().then(() => this._scheduleNextPoll())

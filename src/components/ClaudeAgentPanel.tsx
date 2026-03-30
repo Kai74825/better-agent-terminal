@@ -156,6 +156,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
   const [effortLevel, setEffortLevel] = useState<string>('medium')
   const [enable1MContext, setEnable1MContext] = useState(false)
   const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
+  const [usageAccount, setUsageAccount] = useState(workspaceStore.usageAccount)
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null)
   const [planFileContent, setPlanFileContent] = useState<string | null>(null)
@@ -845,6 +846,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
     return workspaceStore.subscribe(() => {
       const u = workspaceStore.claudeUsage
       if (u) setClaudeUsage(u)
+      const a = workspaceStore.usageAccount
+      if (a) setUsageAccount(a)
     })
   }, [])
 
@@ -3015,14 +3018,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             if (claudeUsage?.fiveHour == null) return null
             const pacing = workspaceStore.getUsagePacing()
             const pacingIcon = pacing ? (pacing.onPace ? ' ▼' : ' ▲') : ''
-            const pacingTitle = pacing
-              ? `Time elapsed: ${Math.round(pacing.timeElapsedPct)}%${pacing.estimatedMinutesToLimit != null ? `\nETA to limit: ~${pacing.estimatedMinutesToLimit}min` : ''}`
-              : ''
             const stale = (claudeUsage as any).fiveHourStale
+            const accountLine = usageAccount ? `${usageAccount.email} · ${usageAccount.orgName} · ${usageAccount.tier}` : ''
+            const pacingLine = pacing ? `Time elapsed: ${Math.round(pacing.timeElapsedPct)}%${pacing.estimatedMinutesToLimit != null ? ` · ETA: ~${pacing.estimatedMinutesToLimit}min` : ''}` : ''
+            const titleParts = [accountLine, pacingLine].filter(Boolean)
             return (
               <span key="usage5h"
                 className={`claude-statusline-item${claudeUsage.fiveHour > 80 ? ' claude-usage-high' : claudeUsage.fiveHour > 50 ? ' claude-usage-mid' : ''}${stale ? ' claude-usage-stale' : ''}`}
-                title={pacingTitle || undefined}
+                title={titleParts.join('\n') || undefined}
                 style={!pacing?.onPace && pacing ? { fontWeight: 600 } : undefined}>
                 5h:{Math.round(claudeUsage.fiveHour)}%{pacingIcon}
               </span>
@@ -3032,11 +3035,17 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             if (!claudeUsage?.fiveHourReset) return null
             return <span key="usage5hReset" className="claude-statusline-item">↻{fmtRemaining(new Date(claudeUsage.fiveHourReset))}</span>
           },
-          usage7d: () => claudeUsage?.sevenDay == null ? null : (
-            <span key="usage7d" className={`claude-statusline-item${(claudeUsage.sevenDay ?? 0) > 80 ? ' claude-usage-high' : (claudeUsage.sevenDay ?? 0) > 50 ? ' claude-usage-mid' : ''}`}>
-              7d:{Math.round(claudeUsage.sevenDay ?? 0)}%
-            </span>
-          ),
+          usage7d: () => {
+            if (claudeUsage?.sevenDay == null) return null
+            const accountLine = usageAccount ? `${usageAccount.email} · ${usageAccount.orgName} · ${usageAccount.tier}` : ''
+            return (
+              <span key="usage7d"
+                className={`claude-statusline-item${(claudeUsage.sevenDay ?? 0) > 80 ? ' claude-usage-high' : (claudeUsage.sevenDay ?? 0) > 50 ? ' claude-usage-mid' : ''}`}
+                title={accountLine || undefined}>
+                7d:{Math.round(claudeUsage.sevenDay ?? 0)}%
+              </span>
+            )
+          },
           usage7dReset: () => {
             if (!claudeUsage?.sevenDayReset) return null
             return <span key="usage7dReset" className="claude-statusline-item">↻{fmtRemaining(new Date(claudeUsage.sevenDayReset))}</span>
