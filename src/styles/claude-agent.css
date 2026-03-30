@@ -1732,6 +1732,13 @@
   white-space: nowrap;
 }
 
+.claude-statusline-clickable {
+  cursor: pointer;
+}
+.claude-statusline-clickable:hover {
+  text-decoration: underline;
+}
+
 .claude-statusline-branch {
   color: var(--accent-color);
   font-weight: 500;

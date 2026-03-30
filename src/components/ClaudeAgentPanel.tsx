@@ -2788,7 +2788,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
                 onClick={() => setShowModelList(true)}
                 title={`Model: ${currentModel} (click to select)`}
               >
-                {'</>'} {currentModel}
+                {'</>'} {currentModel}{sessionMeta && sessionMeta.contextWindow > 0 ? ` (${sessionMeta.contextWindow >= 1000000 ? `${Math.round(sessionMeta.contextWindow / 1000000)}M` : `${Math.round(sessionMeta.contextWindow / 1000)}k`})` : ''}
               </span>
             )}
             <select
@@ -2999,7 +2999,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             <span key="gitBranch" className="claude-statusline-item">[{gitBranch}]</span>
           ),
           tokens: () => !sessionMeta ? null : (
-            <span key="tokens" className="claude-statusline-item" title={`in: ${sessionMeta.inputTokens.toLocaleString()} / out: ${sessionMeta.outputTokens.toLocaleString()}`}>
+            <span key="tokens" className="claude-statusline-item claude-statusline-clickable" title={`in: ${sessionMeta.inputTokens.toLocaleString()} / out: ${sessionMeta.outputTokens.toLocaleString()}\nclick to show /context`}
+              onClick={() => { if (!inputValueRef.current.trim()) { setInputValue('/context'); setTimeout(() => handleSend(), 0) } }}>
               {(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok
             </span>
           ),
@@ -3015,7 +3016,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, showUs
             const pct = Math.round((ctxTokens / sessionMeta.contextWindow) * 100)
             const ctxColor = pct >= 80 ? '#e05252' : pct >= 50 ? '#e6a700' : '#89ca78'
             return (
-              <span key="contextPct" className="claude-statusline-item" style={{ color: ctxColor }} title={`context: ${ctxTokens.toLocaleString()} / ${sessionMeta.contextWindow.toLocaleString()} tokens\ntotal: ${(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok`}>
+              <span key="contextPct" className="claude-statusline-item claude-statusline-clickable" style={{ color: ctxColor }} title={`context: ${ctxTokens.toLocaleString()} / ${sessionMeta.contextWindow.toLocaleString()} tokens\ntotal: ${(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok\nclick to show /context`}
+                onClick={() => { if (!inputValueRef.current.trim()) { setInputValue('/context'); setTimeout(() => handleSend(), 0) } }}>
                 ctx {pct}%
               </span>
             )
