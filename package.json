@@ -132,10 +132,6 @@
           "from": "bin/bat-server.sh",
           "to": "bat-server"
         }
-      ],
-      "files": [
-        "!node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**",
-        "!node_modules/@anthropic-ai/claude-agent-sdk-linux-*/**"
       ]
     },
     "dmg": {
@@ -162,6 +158,7 @@
       "!node_modules/better-sqlite3/src/**",
       "!node_modules/better-sqlite3/build/Release/obj/**",
       "!node_modules/@anthropic-ai/claude-code-*/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**",
       "assets/icon.ico",
       "assets/icon.png",
       "assets/icon-512.png"
@@ -170,7 +167,6 @@
       "bin/**",
       "node_modules/@openai/codex-*/vendor/**/*",
       "node_modules/@anthropic-ai/claude-code/bin/**",
-      "node_modules/@anthropic-ai/claude-agent-sdk-*/**",
       "node_modules/@anthropic-ai/*/vendor/**/*",
       "node_modules/@anthropic-ai/**/*.wasm",
       "node_modules/@img/**/*"
