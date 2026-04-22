@@ -271,7 +271,7 @@ class SettingsStore {
     }
     if (this.settings.agentCommandType === 'codex') {
       return this.settings.allowBypassPermissions
-        ? 'codex --sandbox danger-full-access'
+        ? 'codex --yolo'
         : 'codex'
     }
     const option = AGENT_COMMAND_OPTIONS.find(o => o.id === this.settings.agentCommandType)
