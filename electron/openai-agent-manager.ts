@@ -457,6 +457,10 @@ export class OpenAIAgentManager {
     session.lastEventAt = Date.now()
     const ctrl = session.abortController
 
+    if (session.modelMessages.length === 0) {
+      this.rebuildModelMessages(session)
+    }
+
     const displayContent = prompt + (images?.length ? `\n[${images.length} image${images.length > 1 ? 's' : ''} attached]` : '')
     this.addMessage(sessionId, {
       id: `user-${Date.now()}`,
@@ -465,10 +469,6 @@ export class OpenAIAgentManager {
       content: displayContent,
       timestamp: Date.now(),
     })
-
-    if (session.modelMessages.length === 0) {
-      this.rebuildModelMessages(session)
-    }
 
     // Build user message content — multi-part when images are attached
     let userContent: unknown = prompt
