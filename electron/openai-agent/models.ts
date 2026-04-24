@@ -8,6 +8,7 @@ export interface OpenAIModelInfo {
 }
 
 export const OPENAI_MODELS: OpenAIModelInfo[] = [
+  { value: 'gpt-5.5',       displayName: 'GPT-5.5',       description: 'Newest frontier GPT-5.5',   contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsReasoning: true },
   { value: 'gpt-5.4',       displayName: 'GPT-5.4',       description: 'Flagship GPT-5.4',           contextWindow: 1_050_000, maxOutputTokens: 128_000, supportsReasoning: true },
   { value: 'gpt-5.4-mini',  displayName: 'GPT-5.4 Mini',  description: 'Fast GPT-5.4',               contextWindow: 400_000,   maxOutputTokens: 128_000, supportsReasoning: true },
   { value: 'gpt-5.4-nano',  displayName: 'GPT-5.4 Nano',  description: 'Cheapest GPT-5.4',           contextWindow: 400_000,   maxOutputTokens: 128_000, supportsReasoning: true },
@@ -19,7 +20,7 @@ export const OPENAI_MODELS: OpenAIModelInfo[] = [
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.4-mini'
 
-export const CODEX_CHATGPT_SUPPORTED_MODELS = new Set(['gpt-5.4', 'gpt-5.4-mini'])
+export const CODEX_CHATGPT_SUPPORTED_MODELS = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'])
 
 export function findModel(id: string | undefined): OpenAIModelInfo | undefined {
   if (!id) return undefined
