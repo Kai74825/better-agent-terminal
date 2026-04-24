@@ -7,6 +7,7 @@ import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/t
 import type { EffortLevel } from '../src/types'
 import type { Query, PermissionMode, CanUseTool, SlashCommand, SDKSession } from '@anthropic-ai/claude-agent-sdk'
 import { logger } from './logger'
+import { wrapInterruptedPrompt } from './agent-prompt-utils'
 import { getNodeExecutable, isElectronFallback } from './node-resolver'
 import { worktreeManager } from './worktree-manager'
 import type { WorktreeInfo } from './worktree-manager'
@@ -526,9 +527,7 @@ export class ClaudeAgentManager {
       session.pendingPermissions.clear()
       session.pendingAskUser.clear()
       session.messageQueue.length = 0
-      const contextualPrompt = abortedPrompt && abortedPrompt !== prompt
-        ? `[使用者先前的訊息（已中斷）: "${abortedPrompt}"]\n\n${prompt}`
-        : prompt
+      const contextualPrompt = abortedPrompt ? wrapInterruptedPrompt(abortedPrompt, prompt) : prompt
       session.messageQueue.push({ prompt: contextualPrompt, images })
       return true
     }

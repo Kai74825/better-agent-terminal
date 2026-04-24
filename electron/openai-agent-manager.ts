@@ -4,6 +4,7 @@ import type { SessionSummary } from './openai-agent/persistence'
 import { prepareImageForApi } from './image-utils'
 import { logger } from './logger'
 import { broadcastHub } from './remote/broadcast-hub'
+import { wrapInterruptedPrompt } from './agent-prompt-utils'
 import { buildBuiltinTools } from './openai-tools/registry'
 import { TOOL_CONTEXT_KEY, type OpenAIPermissionMode, type OpenAIToolContext } from './openai-tools/context'
 import { loadOpenAIKey, getKeySource } from './openai-agent/api-key'
@@ -443,9 +444,7 @@ export class OpenAIAgentManager {
       const aborted = session.currentPrompt
       session.abortController.abort()
       session.messageQueue.length = 0
-      const contextual = aborted && aborted !== prompt
-        ? `[使用者先前的訊息（已中斷）: "${aborted}"]\n\n${prompt}`
-        : prompt
+      const contextual = aborted ? wrapInterruptedPrompt(aborted, prompt) : prompt
       session.messageQueue.push({ prompt: contextual, images })
       return true
     }
