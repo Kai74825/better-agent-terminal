@@ -1,5 +1,6 @@
 import type { BrowserWindow } from 'electron'
 import { existsSync, promises as fs } from 'fs'
+import path from 'path'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
 import type { SessionSummary } from './claude-agent-manager'
 import { logger } from './logger'
@@ -18,6 +19,7 @@ import { handleItemCompleted, handleItemStarted, handleItemUpdated, type CodexSt
 import type { CodexApprovalPolicy, CodexSandboxMode, CodexSessionInstance, HistoryItem, SessionMetadata } from './codex-agent/types'
 
 const sdkThreadIds = new Map<string, string>()
+const WORKTREE_DIR_NAME = '.bat-worktrees'
 
 export class CodexAgentManager {
   private sessions: Map<string, CodexSessionInstance> = new Map()
@@ -190,6 +192,17 @@ export class CodexAgentManager {
     }
   }
 
+  private isManagedWorktreePath(candidate: string | undefined): candidate is string {
+    if (!candidate) return false
+    return path.basename(path.dirname(candidate)) === WORKTREE_DIR_NAME
+  }
+
+  private hostRootFromWorktreePath(candidate: string | undefined): string | undefined {
+    if (!this.isManagedWorktreePath(candidate)) return undefined
+    const hostRoot = path.resolve(candidate, '..', '..')
+    return existsSync(hostRoot) ? hostRoot : undefined
+  }
+
   async startSession(sessionId: string, options: {
     cwd: string
     prompt?: string
@@ -225,25 +238,35 @@ export class CodexAgentManager {
 
     if (options.useWorktree) {
       try {
-        if (options.worktreePath && existsSync(options.worktreePath)) {
+        const cwdAsWorktreePath = this.isManagedWorktreePath(options.cwd) ? options.cwd : undefined
+        const preferredWorktreePath = options.worktreePath || cwdAsWorktreePath
+        const existingWorktreePath = preferredWorktreePath && existsSync(preferredWorktreePath)
+          ? preferredWorktreePath
+          : undefined
+        const sourceCwd = this.isManagedWorktreePath(options.cwd)
+          ? this.hostRootFromWorktreePath(options.cwd) || this.hostRootFromWorktreePath(preferredWorktreePath) || options.cwd
+          : options.cwd
+
+        if (existingWorktreePath) {
           worktreeInfo = worktreeManager.rehydrate(
             sessionId,
-            options.cwd,
-            options.worktreePath,
+            sourceCwd,
+            existingWorktreePath,
             options.worktreeBranch || `bat/worktree-${sessionId.slice(0, 8)}`
           )
           await worktreeManager.resolveSourceBranch(sessionId)
-          effectiveCwd = options.worktreePath
+          effectiveCwd = existingWorktreePath
           logger.log(`${stag} Reusing Codex worktree at ${effectiveCwd}`)
         } else {
-          worktreeInfo = await worktreeManager.createWorktree(sessionId, options.cwd)
+          const createCwd = this.hostRootFromWorktreePath(preferredWorktreePath) || sourceCwd
+          worktreeInfo = await worktreeManager.createWorktree(sessionId, createCwd)
           effectiveCwd = worktreeInfo.worktreePath
           logger.log(`${stag} Created Codex worktree at ${effectiveCwd}`)
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err)
         logger.warn(`${stag} Failed to create Codex worktree, falling back to normal cwd: ${errMsg}`)
-        worktreeWarning = 'Failed to create worktree. Running in normal mode.'
+        worktreeWarning = `Failed to create worktree. Running in normal mode.\n${errMsg}`
       }
     }
 
