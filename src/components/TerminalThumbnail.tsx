@@ -122,7 +122,7 @@ export const TerminalThumbnail = memo(function TerminalThumbnail({ terminal, isA
   // Check if this is an agent terminal
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
-  const isWorktreeTerminal = !isAgent && !!terminal.worktreePath
+  const isWorktreeTerminal = !!terminal.worktreePath
   const displayTitle = terminal.alias || terminal.title
 
   useEffect(() => {
@@ -154,7 +154,7 @@ export const TerminalThumbnail = memo(function TerminalThumbnail({ terminal, isA
       <div className="thumbnail-header">
         <div className={`thumbnail-title ${isAgent ? 'agent-terminal' : ''}`}>
           {isAgent && <span>{agentConfig?.icon}</span>}
-          {isWorktreeTerminal && <span>🌳</span>}
+          {isWorktreeTerminal && <span title={terminal.worktreeBranch || 'worktree'}>🌳</span>}
           <span>{displayTitle}</span>
         </div>
         <ActivityIndicator terminalId={terminal.id} size="small" />

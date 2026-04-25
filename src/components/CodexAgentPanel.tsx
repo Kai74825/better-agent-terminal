@@ -1190,7 +1190,20 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     // Mark that history will be loaded — prevents sys-init from wiping messages
     historyLoadedRef.current = true
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
-    await window.electronAPI.claude.resumeSession(sessionId, sdkSessionId, cwd, undefined, apiVersion, undefined, undefined, undefined, terminal?.agentPreset, codexSandboxMode, codexApprovalPolicy)
+    const resumeUsesWorktree = terminal?.agentPreset === 'codex-agent-worktree' || !!terminal?.worktreePath
+    await window.electronAPI.claude.resumeSession(
+      sessionId,
+      sdkSessionId,
+      cwd,
+      undefined,
+      apiVersion,
+      resumeUsesWorktree ? true : undefined,
+      terminal?.worktreePath,
+      terminal?.worktreeBranch,
+      terminal?.agentPreset,
+      codexSandboxMode,
+      codexApprovalPolicy
+    )
     workspaceStore.setTerminalSdkSessionId(sessionId, sdkSessionId)
   }, [sessionId, cwd, isV2Session])
 

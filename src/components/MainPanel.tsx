@@ -84,6 +84,9 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
           ) : (
             <span>{displayTitle}</span>
           )}
+          {terminal.worktreeBranch && (
+            <span className="main-panel-worktree-label">🌳 {terminal.worktreeBranch}</span>
+          )}
         </div>
         {isClaudeCode && !isWorker && (
           <div className="msg-filter-bar">

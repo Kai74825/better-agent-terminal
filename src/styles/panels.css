@@ -67,6 +67,16 @@
   color: var(--agent-color, var(--claude-accent));
 }
 
+.main-panel-worktree-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .main-panel-actions {
   display: flex;
   align-items: center;

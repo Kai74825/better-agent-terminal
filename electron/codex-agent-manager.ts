@@ -1,10 +1,12 @@
 import type { BrowserWindow } from 'electron'
-import { promises as fs } from 'fs'
+import { existsSync, promises as fs } from 'fs'
 import type { ClaudeMessage, ClaudeToolCall, ClaudeSessionState } from '../src/types/claude-agent'
 import type { SessionSummary } from './claude-agent-manager'
 import { logger } from './logger'
 import { broadcastHub } from './remote/broadcast-hub'
 import { wrapInterruptedPrompt } from './agent-prompt-utils'
+import { worktreeManager } from './worktree-manager'
+import type { WorktreeInfo } from './worktree-manager'
 import { findCodexBinary, getCodexInstallHint } from './codex-agent/binary'
 import { stringifyCodexError } from './codex-agent/errors'
 import { dataUrlToTempFile } from './codex-agent/image-attachments'
@@ -198,6 +200,9 @@ export class CodexAgentManager {
     codexSandboxMode?: CodexSandboxMode
     codexApprovalPolicy?: CodexApprovalPolicy
     agentPreset?: string
+    useWorktree?: boolean
+    worktreePath?: string
+    worktreeBranch?: string
     [key: string]: unknown
   }): Promise<boolean> {
     if (this.sessions.has(sessionId)) return true
@@ -214,16 +219,44 @@ export class CodexAgentManager {
 
     const sandboxMode = options.codexSandboxMode || 'workspace-write'
     const approvalPolicy = options.codexApprovalPolicy || 'on-request'
+    let effectiveCwd = options.cwd
+    let worktreeInfo: WorktreeInfo | undefined
+    let worktreeWarning: string | undefined
+
+    if (options.useWorktree) {
+      try {
+        if (options.worktreePath && existsSync(options.worktreePath)) {
+          worktreeInfo = worktreeManager.rehydrate(
+            sessionId,
+            options.cwd,
+            options.worktreePath,
+            options.worktreeBranch || `bat/worktree-${sessionId.slice(0, 8)}`
+          )
+          await worktreeManager.resolveSourceBranch(sessionId)
+          effectiveCwd = options.worktreePath
+          logger.log(`${stag} Reusing Codex worktree at ${effectiveCwd}`)
+        } else {
+          worktreeInfo = await worktreeManager.createWorktree(sessionId, options.cwd)
+          effectiveCwd = worktreeInfo.worktreePath
+          logger.log(`${stag} Created Codex worktree at ${effectiveCwd}`)
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        logger.warn(`${stag} Failed to create Codex worktree, falling back to normal cwd: ${errMsg}`)
+        worktreeWarning = 'Failed to create worktree. Running in normal mode.'
+      }
+    }
 
     const session: CodexSessionInstance = {
       abortController: new AbortController(),
       state: { sessionId, messages: [], isStreaming: false },
-      cwd: options.cwd,
+      cwd: effectiveCwd,
       metadata: {
         ...this.makeMetadata(),
         model: effectiveModel,
-        cwd: options.cwd,
+        cwd: effectiveCwd,
       },
+      ...(worktreeInfo ? { worktreeInfo, originalCwd: options.cwd } : {}),
       sandboxMode,
       approvalPolicy,
       model: effectiveModel,
@@ -239,9 +272,34 @@ export class CodexAgentManager {
       id: `sys-init-${sessionId}`,
       sessionId,
       role: 'system',
-      content: `Codex session started (sandbox: ${sandboxMode}, approval: ${approvalPolicy})`,
+      content: `Codex session started (sandbox: ${sandboxMode}, approval: ${approvalPolicy})${worktreeInfo ? ` [worktree: ${worktreeInfo.branchName}]` : ''}`,
       timestamp: Date.now(),
     })
+
+    if (worktreeInfo) {
+      this.addMessage(sessionId, {
+        id: `sys-worktree-${sessionId}`,
+        sessionId,
+        role: 'system',
+        content: `Running in worktree isolation: ${worktreeInfo.branchName}\nPath: ${worktreeInfo.worktreePath}`,
+        timestamp: Date.now(),
+      })
+      this.send('claude:worktree-info', sessionId, {
+        branchName: worktreeInfo.branchName,
+        worktreePath: worktreeInfo.worktreePath,
+        sourceBranch: worktreeInfo.sourceBranch,
+        gitRoot: worktreeInfo.gitRoot,
+      })
+    }
+    if (worktreeWarning) {
+      this.addMessage(sessionId, {
+        id: `sys-worktree-warn-${sessionId}`,
+        sessionId,
+        role: 'system',
+        content: worktreeWarning,
+        timestamp: Date.now(),
+      })
+    }
 
     // Create Codex instance and thread
     try {
@@ -252,7 +310,7 @@ export class CodexAgentManager {
       session.codexInstance = codex
 
       const threadOpts: Record<string, unknown> = {
-        workingDirectory: options.cwd,
+        workingDirectory: effectiveCwd,
         sandboxMode,
         approvalPolicy,
         modelReasoningEffort: session.effort,
@@ -634,7 +692,17 @@ export class CodexAgentManager {
     return this.sessions.get(sessionId)?.isResting ?? false
   }
 
-  async resumeSession(sessionId: string, threadId: string, cwd: string, model?: string, codexSandboxMode?: CodexSandboxMode, codexApprovalPolicy?: CodexApprovalPolicy): Promise<boolean> {
+  async resumeSession(
+    sessionId: string,
+    threadId: string,
+    cwd: string,
+    model?: string,
+    codexSandboxMode?: CodexSandboxMode,
+    codexApprovalPolicy?: CodexApprovalPolicy,
+    useWorktree?: boolean,
+    worktreePath?: string,
+    worktreeBranch?: string
+  ): Promise<boolean> {
     sdkThreadIds.set(sessionId, threadId)
     // Signal "loading" immediately so the panel can render a skeleton while the
     // Codex instance spins up and the JSONL is parsed. loadSessionHistory()
@@ -644,6 +712,7 @@ export class CodexAgentManager {
       cwd, model,
       ...(codexSandboxMode ? { codexSandboxMode } : {}),
       ...(codexApprovalPolicy ? { codexApprovalPolicy } : {}),
+      ...(useWorktree ? { useWorktree: true, worktreePath, worktreeBranch } : {}),
     })
     if (result) {
       await this.loadSessionHistory(sessionId, threadId).catch(err => {
@@ -763,8 +832,25 @@ export class CodexAgentManager {
   async getContextUsage(_sessionId: string): Promise<null> { return null }
   async forkSession(_sessionId: string): Promise<null> { return null }
   async fetchSubagentMessages(_sessionId: string, _agentToolUseId: string): Promise<[]> { return [] }
-  async getWorktreeStatus(_sessionId: string): Promise<null> { return null }
-  async cleanupWorktree(_sessionId: string, _deleteBranch?: boolean): Promise<boolean> { return false }
+  async getWorktreeStatus(sessionId: string): Promise<{ diff: string; branchName: string; worktreePath: string; sourceBranch: string } | null> {
+    return worktreeManager.getWorktreeStatus(sessionId)
+  }
+
+  async cleanupWorktree(sessionId: string, deleteBranch = true): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    try {
+      await worktreeManager.removeWorktree(sessionId, deleteBranch)
+      if (session) {
+        session.worktreeInfo = undefined
+        session.originalCwd = undefined
+      }
+      this.send('claude:worktree-info', sessionId, null)
+      return true
+    } catch (err) {
+      logger.error(`[codex:${sessionId.slice(0, 8)}] Failed to cleanup worktree:`, err)
+      return false
+    }
+  }
 
   resolvePermission(_sessionId: string, _toolUseId: string, _result: unknown): boolean { return false }
   resolveAskUser(_sessionId: string, _toolUseId: string, _answers: unknown): boolean { return false }

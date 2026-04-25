@@ -426,7 +426,19 @@ export function registerProxiedHandlers(deps: ProxiedHandlersDeps): void {
       agentPreset === 'openai-agent' ? 'openai' : 'claude'
     const type = agentPreset ? explicitType : (sessionManagerMap.get(sessionId) || 'claude')
     sessionManagerMap.set(sessionId, type)
-    if (type === 'codex') return getCodexManager()?.resumeSession(sessionId, sdkSessionId, cwd, model, codexSandboxMode, codexApprovalPolicy)
+    if (type === 'codex') {
+      return getCodexManager()?.resumeSession(
+        sessionId,
+        sdkSessionId,
+        cwd,
+        model,
+        codexSandboxMode,
+        codexApprovalPolicy,
+        useWorktree,
+        worktreePath,
+        worktreeBranch
+      )
+    }
     if (type === 'openai') return getOpenAIManager()?.resumeSession(sessionId, sdkSessionId, cwd, model, permissionMode, effort)
     return getClaudeManager()?.resumeSession(sessionId, sdkSessionId, cwd, model, apiVersion, useWorktree, worktreePath, worktreeBranch)
   })

@@ -1,5 +1,6 @@
 import type { ClaudeMessage, ClaudeSessionState, ClaudeToolCall } from '../../src/types/claude-agent'
 import type { CodexEffortLevel } from '../../src/types'
+import type { WorktreeInfo } from '../worktree-manager'
 
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never'
@@ -36,6 +37,8 @@ export interface CodexSessionInstance {
   metadata: SessionMetadata
   codexInstance?: unknown
   thread?: unknown
+  worktreeInfo?: WorktreeInfo
+  originalCwd?: string
   sandboxMode: CodexSandboxMode
   approvalPolicy: CodexApprovalPolicy
   model?: string

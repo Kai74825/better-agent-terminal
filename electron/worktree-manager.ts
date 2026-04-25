@@ -250,6 +250,14 @@ export class WorktreeManager {
    * Registers the worktree in the active map without creating it.
    */
   rehydrate(sessionId: string, originalCwd: string, worktreePath: string, branchName: string): WorktreeInfo {
+    const existing = this.activeWorktrees.get(sessionId)
+    if (existing?.worktreePath === worktreePath) {
+      existing.originalCwd = originalCwd
+      existing.branchName = branchName || existing.branchName
+      logger.log(`[Worktree] Reused active session ${sessionId.slice(0, 8)}: ${worktreePath} (branch: ${existing.branchName})`)
+      return existing
+    }
+
     // Try to detect gitRoot and sourceBranch from the worktree path
     const gitRoot = path.resolve(worktreePath, '..', '..')
     const info: WorktreeInfo = {
@@ -272,6 +280,19 @@ export class WorktreeManager {
     return info
   }
 
+  async resolveSourceBranch(sessionId: string): Promise<string> {
+    const info = this.activeWorktrees.get(sessionId)
+    if (!info) return ''
+    if (info.sourceBranch) return info.sourceBranch
+
+    try {
+      info.sourceBranch = await this.getCurrentBranch(info.gitRoot)
+      return info.sourceBranch
+    } catch {
+      return ''
+    }
+  }
+
   /**
    * Get worktree info for a session.
    */
@@ -287,8 +308,10 @@ export class WorktreeManager {
     if (!info) return null
 
     try {
+      const sourceBranch = info.sourceBranch || await this.resolveSourceBranch(sessionId)
+      if (!sourceBranch) return null
       const { stdout } = await execFileAsync(
-        'git', ['diff', `${info.sourceBranch}...${info.branchName}`],
+        'git', ['diff', `${sourceBranch}...${info.branchName}`],
         { cwd: info.gitRoot, maxBuffer: 10 * 1024 * 1024 }
       )
       return stdout
@@ -305,12 +328,13 @@ export class WorktreeManager {
     const info = this.activeWorktrees.get(sessionId)
     if (!info) return null
 
+    const sourceBranch = info.sourceBranch || await this.resolveSourceBranch(sessionId)
     const diff = await this.getDiff(sessionId) || ''
     return {
       diff,
       branchName: info.branchName,
       worktreePath: info.worktreePath,
-      sourceBranch: info.sourceBranch,
+      sourceBranch,
     }
   }
 
