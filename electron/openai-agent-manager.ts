@@ -452,14 +452,19 @@ export class OpenAIAgentManager {
     logger.log(`${stag} Starting cwd=${options.cwd} model=${model} resume=${!!options.resumeSdkSessionId}`)
 
     if (options.resumeSdkSessionId) {
-      const file = await findSessionFile(options.resumeSdkSessionId)
-      if (file) {
-        session.jsonlFile = file
-        const items = await loadHistory(file, sessionId)
-        this.replaceHistory(sessionId, items)
-        logger.log(`${stag} Resumed ${items.length} history items`)
-      } else {
-        logger.warn(`${stag} Resume file not found for ${options.resumeSdkSessionId}`)
+      this.send('claude:resume-loading', sessionId, true)
+      try {
+        const file = await findSessionFile(options.resumeSdkSessionId)
+        if (file) {
+          session.jsonlFile = file
+          const items = await loadHistory(file, sessionId)
+          this.replaceHistory(sessionId, items)
+          logger.log(`${stag} Resumed ${items.length} history items`)
+        } else {
+          logger.warn(`${stag} Resume file not found for ${options.resumeSdkSessionId}`)
+        }
+      } finally {
+        this.send('claude:resume-loading', sessionId, false)
       }
     } else {
       this.addMessage(sessionId, {

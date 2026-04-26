@@ -210,6 +210,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     return null
   })
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
+  const [isResumingHistory, setIsResumingHistory] = useState(false)
   const [activePlanFile, setActivePlanFile] = useState<string | null>(null)
   const [planFileTitle, setPlanFileTitle] = useState<string | null>(null)
   const [planFileTrigger, setPlanFileTrigger] = useState(0)
@@ -955,6 +956,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
       }),
 
+      api.onResumeLoading((sid: string, loading: boolean) => {
+        if (sid !== sessionId) return
+        setIsResumingHistory(loading)
+      }),
+
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) {
           console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
@@ -963,6 +969,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         const dlog2 = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
         dlog2(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
         historyLoadedRef.current = true
+        setIsResumingHistory(false)
         // Partition history items: main timeline vs subagent buckets
         const mainItems: MessageItem[] = []
         const subagentBuckets = new Map<string, MessageItem[]>()
@@ -3242,6 +3249,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             >
               {isLoadingMore ? t('common.loading') : t('claude.loadOlderMessages', { count: archivedCountRef.current - loadedFromArchiveRef.current })}
             </button>
+          </div>
+        )}
+        {isResumingHistory && allMessages.length === 0 && (
+          <div className="claude-resume-skeleton">
+            <span className="claude-resume-skeleton-spinner" />
+            <span>{t('claude.resumingHistory')}</span>
           </div>
         )}
         {allMessages.map((item, i) => {

@@ -7,6 +7,7 @@ export interface CodexStreamItemState {
   currentThinkingText: string
   currentThinkingByItemId: Record<string, string>
   currentItemId: string
+  itemIdPrefix: string
 }
 
 export interface CodexStreamItemSink {
@@ -51,8 +52,15 @@ function isThinkingItemType(itemType: string | undefined): boolean {
     || itemType === 'thinking'
 }
 
+function streamItemId(item: Record<string, unknown>, state: CodexStreamItemState): string {
+  const rawId = String(item?.id || '')
+  if (!rawId) return state.currentItemId || `${state.itemIdPrefix}:item-${Date.now()}`
+  if (rawId.startsWith(`${state.itemIdPrefix}:`)) return rawId
+  return `${state.itemIdPrefix}:${rawId}`
+}
+
 export function appendThinkingFromItem(item: Record<string, unknown>, state: CodexStreamItemState, sink: CodexStreamItemSink): void {
-  const itemId = String(item.id || state.currentItemId || `thinking-${Date.now()}`)
+  const itemId = streamItemId(item, state)
   const text = extractReasoningTextFromResponseItem(item)
   if (!text) return
 
@@ -76,7 +84,7 @@ export function appendThinkingFromItem(item: Record<string, unknown>, state: Cod
 
 export function handleItemStarted(sessionId: string, item: Record<string, unknown>, state: CodexStreamItemState, sink: CodexStreamItemSink): void {
   const itemType = item?.type as string
-  state.currentItemId = (item?.id as string) || `item-${Date.now()}`
+  state.currentItemId = streamItemId(item, state)
 
   if (itemType === 'agent_message') {
     state.currentAssistantText = ''
@@ -140,7 +148,7 @@ export function handleItemStarted(sessionId: string, item: Record<string, unknow
 
 export function handleItemUpdated(sessionId: string, item: Record<string, unknown>, state: CodexStreamItemState, sink: CodexStreamItemSink): void {
   const itemType = item?.type as string
-  const itemId = (item?.id as string) || state.currentItemId
+  const itemId = streamItemId(item, state)
 
   if (itemType === 'agent_message') {
     const text = (item?.text as string) || (item?.content as string) || ''
@@ -246,7 +254,7 @@ export function handleItemUpdated(sessionId: string, item: Record<string, unknow
 
 export function handleItemCompleted(sessionId: string, item: Record<string, unknown>, state: CodexStreamItemState, sink: CodexStreamItemSink): void {
   const itemType = item?.type as string
-  const itemId = (item?.id as string) || state.currentItemId
+  const itemId = streamItemId(item, state)
 
   if (itemType === 'agent_message') {
     const text = (item?.text as string) || (item?.content as string) || state.currentAssistantText

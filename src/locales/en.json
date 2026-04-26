@@ -377,6 +377,7 @@
   "claude": {
     "thinking": "Thinking",
     "loadOlderMessages": "Load older messages ({{count}} archived)",
+    "resumingHistory": "Loading session history…",
     "allowThisCall": "Allow this <strong>{{toolName}}</strong> call?",
     "yes": "Yes",
     "yesDontAskAgain": "Yes, don't ask again for this session",

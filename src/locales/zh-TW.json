@@ -377,6 +377,7 @@
   "claude": {
     "thinking": "思考中",
     "loadOlderMessages": "載入較舊的訊息（{{count}} 則已封存）",
+    "resumingHistory": "正在載入工作階段歷史…",
     "allowThisCall": "允許此 <strong>{{toolName}}</strong> 呼叫？",
     "yes": "是",
     "yesDontAskAgain": "是，此工作階段不再詢問",

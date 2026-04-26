@@ -2142,6 +2142,15 @@ export class ClaudeAgentManager {
   }
 
   private async loadSessionHistory(sessionId: string, sdkSessionId: string, cwd: string): Promise<void> {
+    this.send('claude:resume-loading', sessionId, true)
+    try {
+      await this._loadSessionHistoryInner(sessionId, sdkSessionId, cwd)
+    } finally {
+      this.send('claude:resume-loading', sessionId, false)
+    }
+  }
+
+  private async _loadSessionHistoryInner(sessionId: string, sdkSessionId: string, cwd: string): Promise<void> {
     const os = await import('os')
     const readline = await import('readline')
 

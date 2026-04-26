@@ -22,6 +22,10 @@ interface CacheFile {
 
 const CACHE_VERSION = 1
 const CACHE_FILENAME = 'codex-thread-log-cache.json'
+const MAX_ENTRIES = 5000
+// Don't bump `ts` on every read — debounced disk writes still happen, but a
+// resume-heavy session would otherwise mark the cache dirty every few seconds.
+const TOUCH_INTERVAL_MS = 60 * 60 * 1000 // 1 hour
 
 let cache: Map<string, CacheEntry> | null = null
 let loading: Promise<void> | null = null
@@ -90,6 +94,15 @@ async function flush(): Promise<void> {
   }
 }
 
+function pruneIfNeeded(): void {
+  if (!cache || cache.size <= MAX_ENTRIES) return
+  const overflow = cache.size - MAX_ENTRIES
+  // Sort by ts ascending → oldest first → drop them.
+  const sorted = Array.from(cache.entries()).sort((a, b) => a[1].ts - b[1].ts)
+  for (let i = 0; i < overflow; i++) cache.delete(sorted[i][0])
+  logger.log(`[codex-log-cache] Pruned ${overflow} oldest entries (size now ${cache.size})`)
+}
+
 function scheduleFlush(): void {
   if (pendingWrite) return
   pendingWrite = new Promise(resolve => {
@@ -114,6 +127,14 @@ export async function getCachedLogPath(threadId: string): Promise<string | null>
     scheduleFlush()
     return null
   }
+  // Bump ts so LRU prune keeps recently-used threads. Throttled to avoid
+  // marking the cache dirty on every resume.
+  const now = Date.now()
+  if (now - entry.ts > TOUCH_INTERVAL_MS) {
+    entry.ts = now
+    dirty = true
+    scheduleFlush()
+  }
   return entry.logPath
 }
 
@@ -132,6 +153,7 @@ export async function setCachedLogPath(threadId: string, logPath: string): Promi
     ...dateParts,
     ts: Date.now(),
   })
+  pruneIfNeeded()
   dirty = true
   scheduleFlush()
 }

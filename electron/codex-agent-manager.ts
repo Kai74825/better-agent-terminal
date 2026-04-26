@@ -456,6 +456,7 @@ export class CodexAgentManager {
       currentThinkingText: '',
       currentThinkingByItemId: {},
       currentItemId: '',
+      itemIdPrefix: `turn-${turnStart.toString(36)}`,
     }
     const itemSink: CodexStreamItemSink = {
       addMessage: msg => this.addMessage(sessionId, msg),

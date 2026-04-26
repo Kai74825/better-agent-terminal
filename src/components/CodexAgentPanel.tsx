@@ -672,6 +672,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         if (sid !== sessionId) return
         workspaceStore.updateTerminalActivity(sessionId)
         const { id, ...updates } = result as { id: string; status: string; result?: string; description?: string }
+        window.electronAPI.debug.log(`[renderer] onToolResult id=${id?.slice(0, 24)} status=${updates.status || 'unknown'} hasResult=${updates.result ? 'yes' : 'no'}`)
         if ((updates as { description?: string }).description) {
           window.electronAPI.debug.log(`[renderer] onToolResult description update id=${id} desc=${(updates as { description?: string }).description}`)
         }
@@ -3135,7 +3136,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         {isResumingHistory && allMessages.length === 0 && (
           <div className="claude-resume-skeleton">
             <span className="claude-resume-skeleton-spinner" />
-            <span>{t('common.loading')}</span>
+            <span>{t('claude.resumingHistory')}</span>
           </div>
         )}
         {allMessages.map((item, i) => {

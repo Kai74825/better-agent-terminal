@@ -358,6 +358,7 @@
   "claude": {
     "thinking": "思考中",
     "loadOlderMessages": "加载较旧的消息（{{count}} 条已归档）",
+    "resumingHistory": "正在加载会话历史…",
     "allowThisCall": "允许此 <strong>{{toolName}}</strong> 调用？",
     "yes": "是",
     "yesDontAskAgain": "是，此会话不再询问",
