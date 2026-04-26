@@ -607,18 +607,58 @@ export class ClaudeAgentManager {
   private _maybeAutoContinue(session: SessionInstance, sessionId: string): void {
     const ac = session.autoContinue
     if (!ac || !ac.enabled) return
-    if (ac.used >= ac.max) return
-    if (session.lastResultSubtype && session.lastResultSubtype !== 'success') return
-    if (session.state.isStreaming) return
-    if (session.messageQueue.length > 0) return
-    if (session.abortController.signal.aborted) return
-    ac.used++
-    const displayContent = `${ac.prompt}  [auto ${ac.used}/${ac.max}]`
+    const subtype = session.lastResultSubtype
+    const recoverableSubtype = !subtype || subtype === 'success' || subtype === 'error_max_turns'
+    if (ac.used >= ac.max) {
+      logger.log(`[Claude auto] skip sessionId=${sessionId} reason=max-used used=${ac.used}/${ac.max}`)
+      return
+    }
+    if (!recoverableSubtype) {
+      logger.log(`[Claude auto] skip sessionId=${sessionId} reason=result-subtype subtype=${subtype} used=${ac.used}/${ac.max}`)
+      return
+    }
+    if (session.state.isStreaming) {
+      logger.log(`[Claude auto] skip sessionId=${sessionId} reason=streaming used=${ac.used}/${ac.max}`)
+      return
+    }
+    if (session.messageQueue.length > 0) {
+      logger.log(`[Claude auto] skip sessionId=${sessionId} reason=queued queue=${session.messageQueue.length} used=${ac.used}/${ac.max}`)
+      return
+    }
+    if (session.abortController.signal.aborted) {
+      logger.log(`[Claude auto] skip sessionId=${sessionId} reason=aborted used=${ac.used}/${ac.max}`)
+      return
+    }
     // Defer one tick so the result/status events flush to clients first.
     setImmediate(() => {
       const s = this.sessions.get(sessionId)
-      if (!s || s.state.isStreaming) return
-      this._doSendMessage(s, sessionId, ac.prompt, undefined, displayContent)
+      const current = s?.autoContinue
+      if (!s || !current || !current.enabled) {
+        logger.log(`[Claude auto] skip sessionId=${sessionId} reason=session-missing`)
+        return
+      }
+      if (current.used >= current.max) {
+        logger.log(`[Claude auto] skip sessionId=${sessionId} reason=max-used-deferred used=${current.used}/${current.max}`)
+        return
+      }
+      if (s.state.isStreaming) {
+        logger.log(`[Claude auto] skip sessionId=${sessionId} reason=streaming-deferred used=${current.used}/${current.max}`)
+        return
+      }
+      if (s.messageQueue.length > 0) {
+        logger.log(`[Claude auto] skip sessionId=${sessionId} reason=queued-deferred queue=${s.messageQueue.length} used=${current.used}/${current.max}`)
+        return
+      }
+      if (s.abortController.signal.aborted) {
+        logger.log(`[Claude auto] skip sessionId=${sessionId} reason=aborted-deferred used=${current.used}/${current.max}`)
+        return
+      }
+      current.used++
+      const displayContent = `${current.prompt}  [auto ${current.used}/${current.max}]`
+      logger.log(`[Claude auto] continue sessionId=${sessionId} used=${current.used}/${current.max} subtype=${subtype || 'none'}`)
+      this._doSendMessage(s, sessionId, current.prompt, undefined, displayContent).catch((error) => {
+        logger.error(`[Claude auto] send failed sessionId=${sessionId}`, error)
+      })
     })
   }
 
@@ -633,6 +673,7 @@ export class ClaudeAgentManager {
     session.state.isStreaming = true
     session.abortController = new AbortController()
     session.currentPrompt = prompt
+    session.lastResultSubtype = undefined
 
     // Collect stderr output for better error diagnostics
     let stderrOutput = ''
@@ -1491,6 +1532,7 @@ export class ClaudeAgentManager {
     session.state.isStreaming = true
     session.abortController = new AbortController()
     session.currentPrompt = prompt
+    session.lastResultSubtype = undefined
     this.send('claude:streaming', sessionId, true)
 
     try {
