@@ -13,6 +13,7 @@ import { LinkedText, FilePreviewModal } from './PathLinker'
 import { renderChatMarkdown, openChatMarkdownLink } from '../utils/chat-markdown'
 import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
+import { firstMeaningfulLine, formatContentSize, truncateMiddle } from './CodexAgentPanel.helpers'
 
 interface SessionMeta {
   model?: string
@@ -2543,14 +2544,32 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   const parseContentBlocks = (text: string): string => {
     const trimmed = text.trim()
-    if (!trimmed.startsWith('[')) return text
+    if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return text
     try {
       const parsed = JSON.parse(trimmed)
-      if (!Array.isArray(parsed)) return text
-      const texts = parsed
-        .filter((b: { type?: string; text?: string }) => b.type === 'text' && typeof b.text === 'string')
-        .map((b: { text: string }) => b.text)
-      return texts.length > 0 ? texts.join('\n\n') : text
+      const extractTextBlocks = (value: unknown): string | null => {
+        if (Array.isArray(value)) {
+          const texts = value
+            .filter((b: { type?: string; text?: string }) => b && b.type === 'text' && typeof b.text === 'string')
+            .map((b: { text: string }) => b.text)
+          return texts.length > 0 ? texts.join('\n\n') : null
+        }
+        if (value && typeof value === 'object') {
+          const record = value as Record<string, unknown>
+          if (record.result !== undefined) return extractTextBlocks(record.result)
+          if (record.content !== undefined) return extractTextBlocks(record.content)
+          if (typeof record.text === 'string') return record.text
+          if (typeof record.output === 'string') return record.output
+          if (typeof record.stdout === 'string') return record.stdout
+        }
+        if (typeof value === 'string') return value
+        return null
+      }
+      const extracted = extractTextBlocks(parsed)
+      if (!extracted) return text
+      return extracted.trim().startsWith('{') || extracted.trim().startsWith('[')
+        ? parseContentBlocks(extracted)
+        : extracted
     } catch {
       return text
     }
@@ -2605,6 +2624,7 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     }
 
     if (typeof parsed.content === 'string') return { text: parsed.content, reminders, errors: resultErrors, meta }
+    if (typeof parsed.result === 'string') return { text: parseContentBlocks(parsed.result), reminders, errors: resultErrors, meta }
     if (typeof parsed.stdout === 'string') return { text: parsed.stdout, reminders, errors: resultErrors, meta }
     if (typeof parsed.output === 'string') return { text: parsed.output, reminders, errors: resultErrors, meta }
     if (typeof parsed.message === 'string') return { text: parsed.message, reminders, errors: resultErrors, meta }
@@ -3097,12 +3117,14 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               {item.result && (() => {
                 const raw = typeof item.result === 'string' ? item.result : String(item.result)
                 const { text: outText, reminders, errors, meta } = structuredToolOutput(item.toolName, raw)
-                // Collapse by default for read-only tools; collapse all if setting enabled
+                // Collapse by default for read-only tools, MCP tools, long outputs, or when setting enabled.
                 const isReadOnlyTool = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(item.toolName)
-                const shouldCollapse = isReadOnlyTool || settingsStore.getSettings().collapseToolOutputs
+                const isMcpTool = item.toolName.toLowerCase().startsWith('mcp_')
+                const isLongOutput = outText.split(/\r?\n/).length > 8 || outText.length > 900
+                const shouldCollapse = isReadOnlyTool || isMcpTool || isLongOutput || settingsStore.getSettings().collapseToolOutputs
                 const isOutExpanded = expandedTools.has(outBlockId)
-                const lineCount = outText ? outText.split('\n').length : 0
                 const metaText = meta.length > 0 ? meta.join(' · ') : ''
+                const outPreview = truncateMiddle(firstMeaningfulLine(outText), 180)
                 return (
                   <>
                     {errors.length > 0 && errors.map((err, i) => (
@@ -3125,7 +3147,21 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
                                   <LinkedText text={outText} />
                                 </>
                               )
-                            : <span className="claude-tool-collapsed-hint">{lineCount} lines{metaText ? ` · ${metaText}` : ''}</span>
+                            : (
+                              <span className="claude-tool-collapsed-hint">
+                                <span>{formatContentSize(outText)}{metaText ? ` · ${metaText}` : ''}</span>
+                                {outPreview && <span className="claude-tool-collapsed-preview">{outPreview}</span>}
+                                <button
+                                  className="claude-tool-mini-action"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setContentModal({ title: `${item.toolName} output`, content: outText })
+                                  }}
+                                >
+                                  open
+                                </button>
+                              </span>
+                            )
                           }
                         </span>
                         <span className={`claude-tool-chevron ${isOutExpanded ? 'expanded' : ''}`}>&#9654;</span>
