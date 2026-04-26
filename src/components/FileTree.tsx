@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { HighlightedCode } from './PathLinker'
+import { isProcfileName } from '../utils/procfile-parser'
 import hljs from 'highlight.js/lib/core'
 
 interface FileEntry {
@@ -15,9 +16,10 @@ interface FileTreeProps {
 const TEXT_EXTS = new Set([
   'ts', 'tsx', 'js', 'jsx', 'json', 'css', 'scss', 'less', 'html', 'htm',
   'md', 'txt', 'yml', 'yaml', 'toml', 'xml', 'svg', 'sh', 'bash', 'zsh',
+  'ps1', 'cmd', 'plist', 'nuspec',
   'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs',
   'env', 'gitignore', 'editorconfig', 'prettierrc', 'eslintrc',
-  'dockerfile', 'makefile', 'cfg', 'ini', 'conf', 'log',
+  'dockerfile', 'makefile', 'license', 'cfg', 'ini', 'conf', 'log',
 ])
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'])
@@ -33,6 +35,7 @@ function getFileExt(name: string): string {
 
 function canPreview(name: string): 'text' | 'image' | 'pdf' | null {
   const ext = getFileExt(name)
+  if (isProcfileName(name)) return 'text'
   if (TEXT_EXTS.has(ext)) return 'text'
   if (IMAGE_EXTS.has(ext)) return 'image'
   if (ext === 'pdf') return 'pdf'
@@ -105,6 +108,7 @@ function FileTreeNode({
 
 function getFileIcon(name: string): string {
   const ext = getFileExt(name)
+  if (isProcfileName(name)) return '⚙️'
   switch (ext) {
     case 'ts': case 'tsx': return '🔷'
     case 'js': case 'jsx': return '🟡'
@@ -113,8 +117,9 @@ function getFileIcon(name: string): string {
     case 'html': case 'htm': return '🌐'
     case 'md': return '📝'
     case 'png': case 'jpg': case 'jpeg': case 'gif': case 'webp': return '🖼️'
-    case 'sh': case 'bash': case 'zsh': return '⚙️'
+    case 'sh': case 'bash': case 'zsh': case 'ps1': case 'cmd': return '⚙️'
     case 'yml': case 'yaml': case 'toml': return '⚙️'
+    case 'plist': case 'nuspec': return '⚙️'
     case 'lock': return '🔒'
     case 'py': return '🐍'
     case 'go': return '🔵'
@@ -171,6 +176,69 @@ function renderMarkdown(text: string): string {
     ADD_TAGS: ['input'],  // Allow checkboxes for task lists
     ADD_ATTR: ['checked', 'disabled', 'type', 'data-external-link'],
   })
+}
+
+function clearSearchHighlights(container: HTMLElement) {
+  const existingMarks = container.querySelectorAll('mark.search-highlight')
+  existingMarks.forEach(mark => {
+    const parent = mark.parentNode
+    if (parent) {
+      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+      parent.normalize()
+    }
+  })
+}
+
+function highlightSearchMatches(container: HTMLElement, query: string): number {
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) return 0
+
+  const textNodes: Text[] = []
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      if (!parent) return NodeFilter.FILTER_REJECT
+      if (parent.closest('script, style, mark.search-highlight')) return NodeFilter.FILTER_REJECT
+      return node.nodeValue?.toLowerCase().includes(normalizedQuery)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT
+    },
+  })
+
+  let currentNode: Text | null
+  while ((currentNode = walker.nextNode() as Text | null)) {
+    textNodes.push(currentNode)
+  }
+
+  let total = 0
+  for (const textNode of textNodes) {
+    const text = textNode.nodeValue || ''
+    const lowerText = text.toLowerCase()
+    const fragment = document.createDocumentFragment()
+    let lastIndex = 0
+    let matchIndex = lowerText.indexOf(normalizedQuery, lastIndex)
+
+    while (matchIndex !== -1) {
+      if (matchIndex > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex, matchIndex)))
+      }
+      const mark = document.createElement('mark')
+      mark.className = 'search-highlight'
+      mark.dataset.matchIndex = String(total)
+      mark.textContent = text.slice(matchIndex, matchIndex + normalizedQuery.length)
+      fragment.appendChild(mark)
+      total += 1
+      lastIndex = matchIndex + normalizedQuery.length
+      matchIndex = lowerText.indexOf(normalizedQuery, lastIndex)
+    }
+
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
+    }
+    textNode.parentNode?.replaceChild(fragment, textNode)
+  }
+
+  return total
 }
 
 // Mermaid rendering: dynamically import mermaid only when needed
@@ -246,6 +314,12 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'source' | 'rendered'>('rendered')
+  const previewContentRef = useRef<HTMLDivElement>(null)
+  const previewSearchInputRef = useRef<HTMLInputElement>(null)
+  const [previewSearchOpen, setPreviewSearchOpen] = useState(false)
+  const [previewSearchQuery, setPreviewSearchQuery] = useState('')
+  const [previewMatchCount, setPreviewMatchCount] = useState(0)
+  const [previewCurrentMatch, setPreviewCurrentMatch] = useState(0)
   const isMarkdown = getFileExt(fileName) === 'md'
 
   useEffect(() => {
@@ -286,6 +360,64 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
     return () => { cancelled = true }
   }, [filePath, fileName, refreshKey])
 
+  useEffect(() => {
+    if (previewSearchOpen) {
+      setTimeout(() => previewSearchInputRef.current?.focus(), 50)
+    }
+  }, [previewSearchOpen])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && content !== null) {
+        event.preventDefault()
+        event.stopPropagation()
+        setPreviewSearchOpen(true)
+        return
+      }
+      if (event.key === 'Escape' && previewSearchOpen) {
+        event.preventDefault()
+        event.stopPropagation()
+        setPreviewSearchOpen(false)
+        setPreviewSearchQuery('')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [content, previewSearchOpen])
+
+  useEffect(() => {
+    const container = previewContentRef.current
+    if (!container) return
+
+    clearSearchHighlights(container)
+    const total = highlightSearchMatches(container, previewSearchQuery)
+    setPreviewMatchCount(total)
+    setPreviewCurrentMatch(total > 0 ? 1 : 0)
+
+    if (total > 0) {
+      const firstMatch = container.querySelector('mark.search-highlight[data-match-index="0"]')
+      container.querySelectorAll('mark.search-highlight').forEach(mark => mark.classList.remove('current'))
+      firstMatch?.classList.add('current')
+      firstMatch?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }, [content, viewMode, previewSearchQuery])
+
+  const navigatePreviewMatch = useCallback((direction: 1 | -1) => {
+    const container = previewContentRef.current
+    if (!container || previewMatchCount === 0) return
+
+    const nextMatch = direction === 1
+      ? (previewCurrentMatch % previewMatchCount) + 1
+      : ((previewCurrentMatch - 2 + previewMatchCount) % previewMatchCount) + 1
+
+    setPreviewCurrentMatch(nextMatch)
+    container.querySelectorAll('mark.search-highlight').forEach(mark => mark.classList.remove('current'))
+    const target = container.querySelector(`mark.search-highlight[data-match-index="${nextMatch - 1}"]`)
+    target?.classList.add('current')
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [previewCurrentMatch, previewMatchCount])
+
   if (loading) {
     return <div className="file-preview-status">Loading...</div>
   }
@@ -323,10 +455,42 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
             <button className={`git-diff-mode-btn${viewMode === 'source' ? ' active' : ''}`} onClick={() => setViewMode('source')}>Source</button>
           </div>
         )}
-        {isMarkdown && viewMode === 'rendered'
-          ? <MarkdownPreview content={content} />
-          : <HighlightedCode code={content} ext={getFileExt(fileName)} className="file-preview-text" />
-        }
+        {previewSearchOpen && (
+          <div className="file-preview-search">
+            <input
+              ref={previewSearchInputRef}
+              className="file-preview-search-input"
+              type="text"
+              placeholder="Search in preview..."
+              value={previewSearchQuery}
+              onChange={(event) => setPreviewSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  navigatePreviewMatch(event.shiftKey ? -1 : 1)
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  setPreviewSearchOpen(false)
+                  setPreviewSearchQuery('')
+                }
+              }}
+            />
+            {previewSearchQuery && (
+              <span className="file-preview-search-count">
+                {previewMatchCount > 0 ? `${previewCurrentMatch}/${previewMatchCount}` : 'No results'}
+              </span>
+            )}
+            <button className="file-preview-search-nav" onClick={() => navigatePreviewMatch(-1)} disabled={previewMatchCount === 0} title="Previous (Shift+Enter)">↑</button>
+            <button className="file-preview-search-nav" onClick={() => navigatePreviewMatch(1)} disabled={previewMatchCount === 0} title="Next (Enter)">↓</button>
+          </div>
+        )}
+        <div className="file-preview-scroll" ref={previewContentRef}>
+          {isMarkdown && viewMode === 'rendered'
+            ? <MarkdownPreview content={content} />
+            : <HighlightedCode code={content} ext={getFileExt(fileName)} className="file-preview-text" />
+          }
+        </div>
       </>
     )
   }
@@ -345,6 +509,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(null)
   const [searching, setSearching] = useState(false)
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -368,6 +533,26 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   useEffect(() => {
     loadRoot()
   }, [loadRoot])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        if (selectedFile) return
+        e.preventDefault()
+        e.stopPropagation()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+        return
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInputRef.current && searchQuery) {
+        e.preventDefault()
+        setSearchQuery('')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [searchQuery, selectedFile])
 
   // Restore scroll position after entries load
   useEffect(() => {
@@ -501,6 +686,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
       <div className="file-tree">
         <div className="file-tree-header">
           <input
+            ref={searchInputRef}
             className="file-tree-search"
             type="text"
             placeholder="Search files..."
