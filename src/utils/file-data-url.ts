@@ -13,9 +13,17 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+let pastedImageSequence = 0
+
 export function filenameForPastedImage(file: File): string {
-  const name = file.name?.trim()
-  if (name) return name
   const extension = file.type.split('/')[1] || 'png'
-  return `clipboard-${Date.now()}.${extension}`
+  const uniqueSuffix = `${Date.now()}-${++pastedImageSequence}`
+  const name = file.name?.trim()
+  if (!name) return `clipboard-${uniqueSuffix}.${extension}`
+
+  const dotIndex = name.lastIndexOf('.')
+  if (dotIndex > 0 && dotIndex < name.length - 1) {
+    return `${name.slice(0, dotIndex)}-${uniqueSuffix}${name.slice(dotIndex)}`
+  }
+  return `${name}-${uniqueSuffix}.${extension}`
 }
