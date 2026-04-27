@@ -673,6 +673,43 @@ export function registerProxiedHandlers(deps: ProxiedHandlersDeps): void {
       return { content }
     } catch { return { error: 'Failed to read file' } }
   })
+  registerHandler('fs:resolve-path-links', async (_ctx, cwd: string, rawPaths: string[]) => {
+    const TEXT_EXTS = new Set([
+      'ts', 'tsx', 'js', 'jsx', 'json', 'jsonl', 'css', 'scss', 'less', 'html', 'htm',
+      'md', 'mdx', 'txt', 'yml', 'yaml', 'toml', 'xml', 'svg', 'sh', 'bash', 'zsh',
+      'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'csproj', 'sln',
+      'slnx', 'fs', 'fsproj', 'vue', 'svelte', 'sql', 'graphql', 'log',
+    ])
+    const unique = Array.from(new Set((rawPaths || []).filter(p => typeof p === 'string' && p.length <= 500))).slice(0, 200)
+    const cwdAbs = cwd ? path.resolve(cwd) : ''
+    const parseRaw = (raw: string) => {
+      const cleaned = raw.replace(/^[`'"(<\[]+|[`'"),.;>\]]+$/g, '')
+      const lineMatch = cleaned.match(/^(.*?):(\d+)(?::(\d+))?$/)
+      if (!lineMatch) return { cleaned, pathText: cleaned, line: undefined, column: undefined }
+      return {
+        cleaned,
+        pathText: lineMatch[1],
+        line: Number(lineMatch[2]),
+        column: lineMatch[3] ? Number(lineMatch[3]) : undefined,
+      }
+    }
+    const results: { rawPath: string; path: string; exists: boolean; line?: number; column?: number }[] = []
+    for (const raw of unique) {
+      try {
+        const parsed = parseRaw(raw)
+        const ext = path.extname(parsed.pathText).slice(1).toLowerCase()
+        if (!TEXT_EXTS.has(ext)) continue
+        const isAbs = path.isAbsolute(parsed.pathText) || /^[A-Za-z]:[\\/]/.test(parsed.pathText)
+        if (!isAbs && !cwdAbs) continue
+        const abs = path.resolve(isAbs ? parsed.pathText : path.join(cwdAbs, parsed.pathText))
+        if (isSensitivePath(abs)) continue
+        const stat = await fs.stat(abs).catch(() => null)
+        if (!stat?.isFile()) continue
+        results.push({ rawPath: parsed.cleaned, path: abs, exists: true, line: parsed.line, column: parsed.column })
+      } catch { /* ignore invalid candidate */ }
+    }
+    return results
+  })
   registerHandler('fs:home', () => os.homedir())
 
   registerHandler('image:read-as-data-url', async (_ctx, filePath: string) => {

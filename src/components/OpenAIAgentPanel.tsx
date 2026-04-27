@@ -10,7 +10,7 @@ import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
 import type { AgentPresetId } from '../types/agent-presets'
 import { LinkedText, FilePreviewModal } from './PathLinker'
-import { renderChatMarkdown, openChatMarkdownLink } from '../utils/chat-markdown'
+import { ChatMarkdown } from './ChatMarkdown'
 import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { firstMeaningfulLine, formatContentSize, truncateMiddle } from './CodexAgentPanel.helpers'
@@ -3288,18 +3288,7 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             )
           })()}
           {msg.content && (
-            <div
-              className="claude-markdown"
-              dangerouslySetInnerHTML={{ __html: renderChatMarkdown(msg.content, cwd) }}
-              onClick={(e) => {
-                const target = e.target as HTMLElement
-                const link = target.closest('a') as HTMLAnchorElement | null
-                if (link?.href) {
-                  e.preventDefault()
-                  openChatMarkdownLink(link.href)
-                }
-              }}
-            />
+            <ChatMarkdown text={msg.content} cwd={cwd} />
           )}
           {msg.timestamp > 0 && (
             <span className="claude-msg-time" title={formatFullTimestamp(msg.timestamp)}>{formatTimestamp(msg.timestamp)}</span>
@@ -4053,13 +4042,10 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               <button className="claude-plan-modal-close" onClick={() => setContentModal(null)}>&times;</button>
             </div>
             {contentModal.markdown ? (
-              <div
+              <ChatMarkdown
+                text={contentModal.content}
+                cwd={cwd}
                 className="claude-plan-modal-body claude-plan-modal-markdown claude-markdown"
-                dangerouslySetInnerHTML={{ __html: renderChatMarkdown(contentModal.content, cwd) }}
-                onClick={(e) => {
-                  const link = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null
-                  if (link?.href) { e.preventDefault(); openChatMarkdownLink(link.href) }
-                }}
               />
             ) : (
               <pre className="claude-plan-modal-body">{contentModal.content}</pre>
