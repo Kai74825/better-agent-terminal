@@ -327,6 +327,10 @@ const electronAPI = {
   fs: {
     readdir: (dirPath: string) => ipcRenderer.invoke('fs:readdir', dirPath) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
     readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath) as Promise<{ content?: string; error?: string; size?: number }>,
+    resolvePathLinks: (cwd: string, rawPaths: string[]) =>
+      ipcRenderer.invoke('fs:resolve-path-links', cwd, rawPaths) as Promise<
+        { rawPath: string; path: string; exists: boolean; line?: number; column?: number }[]
+      >,
     search: (dirPath: string, query: string) => ipcRenderer.invoke('fs:search', dirPath, query) as Promise<{ name: string; path: string; isDirectory: boolean }[]>,
     home: () => ipcRenderer.invoke('fs:home') as Promise<string>,
     quickLocations: () =>

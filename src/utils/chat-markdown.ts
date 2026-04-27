@@ -3,11 +3,54 @@ import DOMPurify from 'dompurify'
 
 const markdownCache = new Map<string, string>()
 const MARKDOWN_CACHE_MAX = 500
+const PATH_LINK_EXTS = [
+  'ts', 'tsx', 'js', 'jsx', 'json', 'jsonl', 'css', 'scss', 'less', 'html', 'htm',
+  'md', 'mdx', 'txt', 'yml', 'yaml', 'toml', 'xml', 'svg', 'sh', 'bash', 'zsh',
+  'py', 'rb', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'cs', 'csproj', 'sln',
+  'slnx', 'fs', 'fsproj', 'vue', 'svelte', 'sql', 'graphql', 'log',
+]
+const PATH_LINK_DIRS = [
+  'src', 'app', 'lib', 'components', 'pages', 'routes', 'frontend', 'backend', 'electron',
+  'tests?', 'testplan', 'plan', 'analytics', 'schema', 'docs?', 'scripts?', 'styles?', 'utils?',
+  'stores?', 'types?', 'public', 'assets', 'config', 'migrations', 'controllers', 'models',
+  'views', 'services', 'hooks', 'api', 'server', 'client', 'packages', 'examples', 'release',
+  '\\.github', '\\.codex', '\\.claude',
+]
+const PATH_LINK_EXT_GROUP = PATH_LINK_EXTS.join('|')
+const PATH_LINK_DIR_GROUP = PATH_LINK_DIRS.join('|')
+
+export const PATH_LINK_CANDIDATE_RE = new RegExp(
+  String.raw`(?<![\w@.-])(?:[A-Za-z]:[\\/]|/(?:Users|home|tmp|var|opt|etc|usr|mnt|srv|root)/|\.{1,2}/|(?:${PATH_LINK_DIR_GROUP})/)[A-Za-z0-9_.@+\- /\\]*?\.(?:${PATH_LINK_EXT_GROUP})(?::\d+(?::\d+)?)?`,
+  'gi',
+)
 
 function absPathToFileUrl(absPath: string): string {
   const normalized = absPath.replace(/\\/g, '/')
   const withLeading = /^[A-Za-z]:\//.test(normalized) ? '/' + normalized : normalized
   return 'file://' + encodeURI(withLeading)
+}
+
+export function pathToFileUrl(absPath: string, line?: number, column?: number): string {
+  const hash = line ? `#line=${line}${column ? `&column=${column}` : ''}` : ''
+  return absPathToFileUrl(absPath) + hash
+}
+
+export function cleanPathLinkCandidate(raw: string): string {
+  return raw.replace(/^[`'"(<\[]+|[`'"),.;>\]]+$/g, '')
+}
+
+export function extractPathLinkCandidates(text: string): string[] {
+  if (!text || text.length > 250_000) return []
+  const withoutFenced = text.replace(/(^|\n)(`{3,}|~{3,})[\s\S]*?\n\2/g, '$1')
+  const found = new Set<string>()
+  PATH_LINK_CANDIDATE_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = PATH_LINK_CANDIDATE_RE.exec(withoutFenced)) !== null) {
+    const candidate = cleanPathLinkCandidate(match[0])
+    if (candidate) found.add(candidate)
+    if (found.size >= 100) break
+  }
+  return Array.from(found)
 }
 
 function resolveRelativePath(cwd: string, rel: string): string {
@@ -70,10 +113,17 @@ export function renderChatMarkdown(text: string, cwd: string): string {
 export function openChatMarkdownLink(href: string): void {
   if (href.startsWith('file://')) {
     try {
-      let filePath = decodeURIComponent(new URL(href).pathname)
+      const url = new URL(href)
+      let filePath = decodeURIComponent(url.pathname)
       if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1)
-      const eventName = /\.md(?:[?#]|$)/i.test(href) ? 'preview-markdown' : 'preview-file'
-      window.dispatchEvent(new CustomEvent(eventName, { detail: { path: filePath } }))
+      const lineMatch = url.hash.match(/(?:^#|[&#])line=(\d+)(?:[&#]column=(\d+))?/)
+      const detail = {
+        path: filePath,
+        line: lineMatch ? Number(lineMatch[1]) : undefined,
+        column: lineMatch?.[2] ? Number(lineMatch[2]) : undefined,
+      }
+      const eventName = /\.mdx?$/i.test(filePath) ? 'preview-markdown' : 'preview-file'
+      window.dispatchEvent(new CustomEvent(eventName, { detail }))
       return
     } catch {
       // fall through to openExternal
