@@ -436,7 +436,7 @@ function parseToken(token: string): { id: string; color?: string } {
 // Template string → config
 // Format: "sessionId(#e06c75),tokens > cost | prompts"
 export function parseStatuslineTemplate(template: string): StatuslineItemConfig[] {
-  const allIds = new Set(STATUSLINE_ITEMS.map(d => d.id))
+  const allIds = new Set<string>(STATUSLINE_ITEMS.map(d => d.id))
   const alignZones = template.split('|').map(s => s.trim())
   const aligns: Array<'left' | 'center' | 'right'> =
     alignZones.length >= 3 ? ['left', 'center', 'right'] :

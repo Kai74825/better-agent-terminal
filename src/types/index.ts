@@ -55,6 +55,8 @@ export interface TerminalInstance {
   scrollbackBuffer: string[];
   lastActivityTime?: number;
   hasPendingAction?: boolean;
+  hasUserInput?: boolean;         // Tracks user input before auto-running agent command
+  agentCommandSent?: boolean;     // Prevents duplicate auto-run agent commands
   sdkSessionId?: string;         // Claude SDK session ID for auto-resume
   model?: string;                // Selected Claude model for this session
   agentParams?: Record<string, AgentParamValue>; // Normalized agent-specific persisted params
