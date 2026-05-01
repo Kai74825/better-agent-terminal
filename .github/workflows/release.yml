@@ -257,3 +257,7 @@ jobs:
           if (-not $nupkg) { throw "choco pack failed - no .nupkg file created" }
           Write-Host "Pushing $($nupkg.Name)..."
           choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key "${{ secrets.CHOCO_API_KEY }}"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Chocolatey push failed with exit code $LASTEXITCODE; release artifacts were already published."
+            exit 0
+          }
