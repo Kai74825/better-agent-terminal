@@ -20,6 +20,32 @@ import { CodexTodoChecklist } from './CodexTodoChecklist'
 // Track sessions that have been started to prevent duplicate calls across StrictMode remounts
 const startedSessions = new Set<string>()
 
+function parseGeneratedImageResult(result: unknown): { dataUrl: string; revisedPrompt?: string } | null {
+  if (typeof result !== 'string') return null
+  try {
+    const parsed = JSON.parse(result) as { type?: string; dataUrl?: string; revisedPrompt?: string }
+    if (parsed.type === 'image_generation' && typeof parsed.dataUrl === 'string' && parsed.dataUrl.startsWith('data:image/')) {
+      return {
+        dataUrl: parsed.dataUrl,
+        revisedPrompt: parsed.revisedPrompt,
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function filenameForGeneratedImage(prompt: string, id?: string): string {
+  const base = (prompt || id || 'generated-image')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 64)
+    .replace(/^[.-]+|[.-]+$/g, '')
+  return `${base || 'generated-image'}.png`
+}
+
 export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose, showUserMsg = true, showAssistantMsg = true, showToolMsg = true, showThinkingMsg = true, isRemoteConnected = false }: Readonly<CodexAgentPanelProps>) {
   const { t } = useTranslation()
   const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
@@ -99,6 +125,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
   const [contentModal, setContentModal] = useState<{ title: string; content: string; markdown?: boolean } | null>(null)
+  const [imageModal, setImageModal] = useState<{ dataUrl: string; prompt: string; filename: string } | null>(null)
   // Subagent message storage (keyed by parent Task tool_use_id)
   const subagentMessagesRef = useRef<Map<string, MessageItem[]>>(new Map())
   const [subagentStreamingText, setSubagentStreamingText] = useState<Map<string, string>>(new Map())
@@ -129,6 +156,10 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const timer = setTimeout(() => { setActivePlanFile(null); setPlanFileShownAt(null) }, remaining)
     return () => clearTimeout(timer)
   }, [activePlanFile, planFileShownAt])
+
+  const handleSaveGeneratedImage = useCallback(async (image: { dataUrl: string; filename: string }) => {
+    await window.electronAPI.image.saveDataUrl(image.dataUrl, image.filename)
+  }, [])
   useEffect(() => {
     if (!activePlanFile) { setPlanFileTitle(null); return }
     window.electronAPI.fs.readFile(activePlanFile).then(r => {
@@ -2445,6 +2476,56 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       const dotClass = item.denied ? 'dot-denied' : item.isDeferred ? 'dot-deferred' : item.status === 'running' ? 'dot-running' : item.status === 'completed' ? 'dot-success' : 'dot-error'
       const desc = toolDescription(item.input)
 
+      if (item.toolName === 'image_gen') {
+        const generatedImage = parseGeneratedImageResult(item.result)
+        const prompt = generatedImage?.revisedPrompt || String(item.input.prompt || '')
+        const filename = filenameForGeneratedImage(prompt, item.id)
+        return (
+          <div key={item.id || index} className="tl-item" data-tool-id={item.id}>
+            <div className={`tl-dot ${dotClass}`} />
+            <div className="tl-content">
+              <div className="claude-tool-header" onClick={() => toggleTool(item.id)}>
+                <span className="claude-tool-name">image_gen</span>
+                {prompt && <span className="claude-tool-desc">{truncateMiddle(prompt, 120)}</span>}
+                {item.timestamp > 0 && <span className="claude-tool-time" title={formatFullTimestamp(item.timestamp)}>{formatTimestamp(item.timestamp)}</span>}
+              </div>
+              {generatedImage ? (
+                <div className="codex-generated-image-card">
+                  <button
+                    type="button"
+                    className="codex-generated-image-open"
+                    onClick={() => setImageModal({ dataUrl: generatedImage.dataUrl, prompt, filename })}
+                    title="Open generated image"
+                  >
+                    <img src={generatedImage.dataUrl} alt={prompt || 'Generated image'} />
+                  </button>
+                  <div className="codex-generated-image-actions">
+                    <button type="button" onClick={() => setImageModal({ dataUrl: generatedImage.dataUrl, prompt, filename })}>Open</button>
+                    <button type="button" onClick={() => handleSaveGeneratedImage({ dataUrl: generatedImage.dataUrl, filename })}>Save as...</button>
+                  </div>
+                  {prompt && <div className="codex-generated-image-prompt">{prompt}</div>}
+                </div>
+              ) : (
+                <div className="claude-tool-blocks">
+                  <div className="claude-tool-row">
+                    <span className="claude-tool-row-label">{item.status === 'running' ? 'RUN' : t('claude.out')}</span>
+                    <span className="claude-tool-row-content">{item.status === 'running' ? 'Generating image...' : String(item.result || '')}</span>
+                  </div>
+                </div>
+              )}
+              {expandedTools.has(item.id) && (
+                <div className="claude-tool-body">
+                  <div className="claude-tool-input">
+                    <div className="claude-tool-label">{t('claude.fullInput')}</div>
+                    <pre>{JSON.stringify(item.input, null, 2)}</pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
       // ExitPlanMode / EnterPlanMode: show plan content in readable view
       if (item.toolName === 'ExitPlanMode' || item.toolName === 'EnterPlanMode') {
         const resultRaw = item.result ? (typeof item.result === 'string' ? item.result : String(item.result)) : ''
@@ -3766,6 +3847,24 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
             ) : (
               <pre className="claude-plan-modal-body">{contentModal.content}</pre>
             )}
+          </div>
+        </div>
+      )}
+
+      {imageModal && (
+        <div className="claude-plan-overlay" onClick={() => setImageModal(null)}>
+          <div className="codex-generated-image-modal" onClick={e => e.stopPropagation()}>
+            <div className="claude-plan-modal-header">
+              <span className="claude-plan-modal-title">{imageModal.prompt || 'Generated image'}</span>
+              <button className="claude-plan-modal-close" onClick={() => setImageModal(null)}>&times;</button>
+            </div>
+            <div className="codex-generated-image-modal-body">
+              <img src={imageModal.dataUrl} alt={imageModal.prompt || 'Generated image'} />
+            </div>
+            <div className="codex-generated-image-modal-actions">
+              <button type="button" onClick={() => handleSaveGeneratedImage(imageModal)}>Save as...</button>
+              <button type="button" onClick={() => setImageModal(null)}>Close</button>
+            </div>
           </div>
         </div>
       )}

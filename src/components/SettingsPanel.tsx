@@ -925,12 +925,10 @@ Reference: https://github.com/ind-igo/cx`
                             github.com/ind-igo/cx
                           </a>
                         </p>
-                        <pre style={{ margin: 0, padding: '8px 10px', background: 'rgba(0,0,0,0.3)', borderRadius: 3, fontSize: 11, fontFamily: 'monospace', maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {cxAgentPrompt}
-                        </pre>
                         <button
                           onClick={() => navigator.clipboard.writeText(cxAgentPrompt)}
-                          style={{ width: 'auto', marginTop: 8, padding: '6px 14px', background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 4, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}
+                          className="settings-btn"
+                          style={{ marginTop: 8 }}
                           title={t('settings.cxInstallCopyPrompt')}
                         >
                           {t('settings.cxInstallCopyPrompt')}

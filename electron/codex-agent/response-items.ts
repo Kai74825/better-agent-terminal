@@ -118,7 +118,38 @@ function toolInputForResponseItem(name: string, args: Record<string, unknown>): 
   return args
 }
 
+function imageGenerationResultFromPayload(payload: Record<string, unknown>): string | undefined {
+  const rawImage = typeof payload.result === 'string' ? payload.result.trim() : ''
+  if (!rawImage) return undefined
+  const dataUrl = rawImage.startsWith('data:')
+    ? rawImage
+    : `data:image/png;base64,${rawImage}`
+  return JSON.stringify({
+    type: 'image_generation',
+    dataUrl,
+    revisedPrompt: typeof payload.revised_prompt === 'string' ? payload.revised_prompt : '',
+    status: typeof payload.status === 'string' ? payload.status : '',
+  })
+}
+
 export function buildToolCallFromResponseItem(sessionId: string, payload: Record<string, unknown>, timestamp: number): ClaudeToolCall | null {
+  if (payload.type === 'image_generation_call') {
+    const id = String(payload.id || payload.call_id || '')
+    if (!id) return null
+    const result = imageGenerationResultFromPayload(payload)
+    return {
+      id,
+      sessionId,
+      toolName: 'image_gen',
+      input: {
+        prompt: typeof payload.revised_prompt === 'string' ? payload.revised_prompt : '',
+      },
+      status: result ? 'completed' : 'running',
+      ...(result ? { result } : {}),
+      timestamp,
+    }
+  }
+
   const callId = String(payload.call_id || payload.id || '')
   const name = String(payload.name || '')
   if (!callId || !name) return null

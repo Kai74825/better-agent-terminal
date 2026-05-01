@@ -45,6 +45,23 @@ function normalizeWebSearchInput(item: Record<string, unknown>): Record<string, 
   return input
 }
 
+function imageGenerationInput(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : '',
+  }
+}
+
+function imageGenerationResult(item: Record<string, unknown>): string | undefined {
+  const rawImage = typeof item.result === 'string' ? item.result.trim() : ''
+  if (!rawImage) return undefined
+  return JSON.stringify({
+    type: 'image_generation',
+    dataUrl: rawImage.startsWith('data:') ? rawImage : `data:image/png;base64,${rawImage}`,
+    revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : '',
+    status: typeof item.status === 'string' ? item.status : '',
+  })
+}
+
 function isThinkingItemType(itemType: string | undefined): boolean {
   return itemType === 'reasoning'
     || itemType === 'agent_reasoning'
@@ -130,6 +147,15 @@ export function handleItemStarted(sessionId: string, item: Record<string, unknow
       sessionId,
       toolName: 'WebSearch',
       input: normalizeWebSearchInput(item),
+      status: 'running',
+      timestamp: Date.now(),
+    })
+  } else if (itemType === 'image_generation_call') {
+    sink.addToolCall({
+      id: state.currentItemId,
+      sessionId,
+      toolName: 'image_gen',
+      input: imageGenerationInput(item),
       status: 'running',
       timestamp: Date.now(),
     })
@@ -233,6 +259,23 @@ export function handleItemUpdated(sessionId: string, item: Record<string, unknow
       input,
       status: 'running',
     })
+  } else if (itemType === 'image_generation_call') {
+    if (!sink.hasToolCall(itemId)) {
+      sink.addToolCall({
+        id: itemId,
+        sessionId,
+        toolName: 'image_gen',
+        input: imageGenerationInput(item),
+        status: 'running',
+        timestamp: Date.now(),
+      })
+    }
+    const result = imageGenerationResult(item)
+    sink.updateToolCall(itemId, {
+      input: imageGenerationInput(item),
+      status: result ? 'completed' : 'running',
+      ...(result ? { result } : {}),
+    })
   } else if (itemType === 'todo_list') {
     const items = item?.items as Array<Record<string, unknown>> | undefined
     if (!sink.hasToolCall(itemId)) {
@@ -258,6 +301,7 @@ export function handleItemCompleted(sessionId: string, item: Record<string, unkn
 
   if (itemType === 'agent_message') {
     const text = (item?.text as string) || (item?.content as string) || state.currentAssistantText
+    if (!text && !state.currentThinkingText) return
     sink.addMessage({
       id: `msg-${Date.now()}`,
       sessionId,
@@ -349,6 +393,23 @@ export function handleItemCompleted(sessionId: string, item: Record<string, unkn
       input,
       status: 'completed',
       result: input.query ? `Search completed: ${String(input.query)}` : 'Search completed',
+    })
+  } else if (itemType === 'image_generation_call') {
+    const result = imageGenerationResult(item)
+    if (!sink.hasToolCall(itemId)) {
+      sink.addToolCall({
+        id: itemId,
+        sessionId,
+        toolName: 'image_gen',
+        input: imageGenerationInput(item),
+        status: 'running',
+        timestamp: Date.now(),
+      })
+    }
+    sink.updateToolCall(itemId, {
+      input: imageGenerationInput(item),
+      status: result ? 'completed' : 'running',
+      ...(result ? { result } : {}),
     })
   } else if (itemType === 'todo_list') {
     const items = item?.items as Array<Record<string, unknown>> | undefined

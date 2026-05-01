@@ -157,7 +157,7 @@ export async function loadSessionHistoryItems(sessionId: string, threadId: strin
           if (payloadType === 'reasoning' || payloadType === 'agent_reasoning' || payloadType === 'reasoning_summary' || payloadType === 'thinking') {
             const thinkingText = extractReasoningTextFromResponseItem(entry.payload)
             if (thinkingText) pendingThinkingText += pendingThinkingText ? `\n\n${thinkingText}` : thinkingText
-          } else if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
+          } else if (payloadType === 'function_call' || payloadType === 'custom_tool_call' || payloadType === 'image_generation_call') {
             const toolCall = buildToolCallFromResponseItem(sessionId, entry.payload, ts)
             if (toolCall) {
               const existingIndex = toolIndexById.get(toolCall.id)

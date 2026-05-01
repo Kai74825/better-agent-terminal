@@ -182,11 +182,15 @@ export class CodexAgentManager {
 
   private handleResponseItemToolEvent(sessionId: string, payload: Record<string, unknown>, timestamp: number): void {
     const payloadType = payload.type
-    if (payloadType === 'function_call' || payloadType === 'custom_tool_call') {
+    if (payloadType === 'function_call' || payloadType === 'custom_tool_call' || payloadType === 'image_generation_call') {
       const toolCall = buildToolCallFromResponseItem(sessionId, payload, timestamp)
       if (!toolCall) return
       if (this.hasToolCall(sessionId, toolCall.id)) {
-        this.updateToolCall(sessionId, toolCall.id, { input: toolCall.input })
+        this.updateToolCall(sessionId, toolCall.id, {
+          input: toolCall.input,
+          status: toolCall.status,
+          ...(toolCall.result ? { result: toolCall.result } : {}),
+        })
       } else {
         this.addToolCall(sessionId, toolCall)
       }

@@ -68,6 +68,7 @@ const electronAPI = {
   },
   image: {
     readAsDataUrl: (filePath: string) => ipcRenderer.invoke('image:read-as-data-url', filePath) as Promise<string>,
+    saveDataUrl: (dataUrl: string, defaultName?: string) => ipcRenderer.invoke('image:save-data-url', dataUrl, defaultName) as Promise<string | null>,
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),

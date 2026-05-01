@@ -1112,6 +1112,33 @@ function registerLocalHandlers() {
     return true
   })
 
+  ipcMain.handle('image:save-data-url', async (event, dataUrl: string, defaultName?: string) => {
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(dataUrl)
+    if (!match) throw new Error('Invalid image data URL')
+    const extensionByMime: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+    }
+    const ext = extensionByMime[match[1].toLowerCase()] || 'png'
+    const safeDefaultName = (defaultName || `generated-image.${ext}`)
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '-')
+      .replace(/\.+$/g, '')
+    const filename = /\.[a-z0-9]+$/i.test(safeDefaultName) ? safeDefaultName : `${safeDefaultName}.${ext}`
+    const parentWin = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showSaveDialog(parentWin!, {
+      defaultPath: filename,
+      filters: [
+        { name: `${ext.toUpperCase()} Image`, extensions: [ext] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || !result.filePath) return null
+    await fs.writeFile(result.filePath, Buffer.from(match[2].replace(/\s/g, ''), 'base64'))
+    return result.filePath
+  })
+
   // Remote server handlers (always local)
   ipcMain.handle('remote:start-server', async (event, options?: { port?: number; token?: string; bindInterface?: 'localhost' | 'tailscale' | 'all' }) => {
     remoteServer.setDefaultWindowId(getWindowIdByWebContents(event.sender))
