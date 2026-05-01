@@ -17,6 +17,10 @@ export interface NotificationEntry {
 }
 
 const MAX_ENTRIES = 50
+const normalizeWorkspaceKey = (cwd: string): string => {
+  const normalized = cwd.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized
+}
 
 class NotificationCenter extends EventEmitter {
   private entries: NotificationEntry[] = []
@@ -52,6 +56,8 @@ class NotificationCenter extends EventEmitter {
       read: false,
       agentKind: input.agentKind,
     }
+    const workspaceKey = normalizeWorkspaceKey(input.cwd)
+    this.entries = this.entries.filter(e => normalizeWorkspaceKey(e.cwd) !== workspaceKey)
     this.entries.unshift(entry)
     if (this.entries.length > MAX_ENTRIES) {
       this.entries = this.entries.slice(0, MAX_ENTRIES)
