@@ -40,6 +40,14 @@ function saveAutoStartPrefs(procfilePath: string, prefs: Record<string, boolean>
   } catch { /* ignore */ }
 }
 
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    try { await window.electronAPI.clipboard.writeText(text) } catch { /* ignore */ }
+  }
+}
+
 function hexToRgb(hex: string): [number, number, number] {
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
   return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255]
@@ -107,6 +115,12 @@ function getProcfileWorkingDirectory(procfilePath: string, fallbackCwd: string):
   const lastSlash = normalized.lastIndexOf('/')
   if (lastSlash <= 0) return fallbackCwd
   return procfilePath.slice(0, lastSlash)
+}
+
+function buildWorkerHeader(procfilePath: string, processCount: number): string {
+  const filename = procfilePath.split(/[\\/]/).pop() || 'Procfile'
+  return ansiColor('#888', `Worker: ${filename} (${processCount} processes)\r\n`) +
+    ansiColor('#555', '\u2500'.repeat(60) + '\r\n')
 }
 
 interface WorkerPanelProps {
@@ -238,6 +252,27 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     }
     reRenderTerminal(entries, map)
   }, [flushToDisk, terminalId, reRenderTerminal])
+
+  const clearLog = useCallback(async () => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current)
+      flushTimerRef.current = null
+    }
+    pendingBatchRef.current = []
+    await window.electronAPI.workerBuffer.clear(terminalId)
+
+    midLineRef.current = new Map()
+    const headerText = buildWorkerHeader(procfilePath, processesRef.current.length)
+    const terminal = terminalRef.current
+    if (terminal) {
+      terminal.clear()
+      terminal.write('\x1b[2J\x1b[H')
+      terminal.write(headerText)
+    }
+
+    pendingBatchRef.current.push({ name: '__header__', color: '', data: headerText })
+    scheduleFlush()
+  }, [procfilePath, scheduleFlush, terminalId])
 
   const toggleAutoStart = useCallback((name: string) => {
     setProcesses(prev => {
@@ -461,22 +496,52 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
 
-      if (event.ctrlKey && event.shiftKey && event.key === 'C') {
-        const selection = terminal.getSelection()
-        if (selection) navigator.clipboard.writeText(selection)
+      if (event.key === 'End') {
+        event.preventDefault()
+        terminal.scrollToBottom()
         return false
       }
 
-      if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === 'c') {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
         const selection = terminal.getSelection()
         if (selection) {
-          navigator.clipboard.writeText(selection)
+          event.preventDefault()
+          void copyText(selection)
           return false
         }
       }
 
       return true
     })
+
+    // disableStdin makes the xterm helper textarea readonly, so it often
+    // doesn't receive focus after a mouse selection — meaning xterm's own
+    // Ctrl+C handler above never fires. Fall back to a document-level
+    // listener that copies the xterm selection whenever this panel is the
+    // active one and there's something selected.
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (!isActiveRef.current) return
+      if (e.key === 'End') {
+        e.preventDefault()
+        e.stopPropagation()
+        terminal.scrollToBottom()
+        return
+      }
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return
+      if (e.key.toLowerCase() !== 'c') return
+      const sel = terminal.getSelection()
+      if (!sel) return
+      e.preventDefault()
+      e.stopPropagation()
+      void copyText(sel)
+    }
+    const onCopyShortcut = () => {
+      if (!isActiveRef.current) return
+      const sel = terminal.getSelection()
+      if (sel) void copyText(sel)
+    }
+    document.addEventListener('keydown', onDocKeyDown, true)
+    const unsubscribeCopyShortcut = window.electronAPI.clipboard.onCopyShortcut(onCopyShortcut)
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
@@ -604,9 +669,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       setProcesses(procs)
 
       // Write header (use __header__ as a virtual name so it's always visible during re-render)
-      const filename = procfilePath.split('/').pop() || 'Procfile'
-      const headerText = ansiColor('#888', `Worker: ${filename} (${procs.length} processes)\r\n`) +
-        ansiColor('#555', '\u2500'.repeat(60) + '\r\n')
+      const headerText = buildWorkerHeader(procfilePath, procs.length)
       writeOutput('__header__', '', headerText)
 
       // Start only processes with autoStart enabled
@@ -622,6 +685,8 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       unsubOutput()
       unsubExit()
       unsubSettings()
+      unsubscribeCopyShortcut()
+      document.removeEventListener('keydown', onDocKeyDown, true)
       if (resizeTimer) clearTimeout(resizeTimer)
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current)
       resizeObserver.disconnect()
@@ -729,6 +794,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
             <button className="worker-btn" onClick={startAll} title="Start All">▶ All</button>
             <button className="worker-btn" onClick={stopAll} title="Stop All">■ All</button>
             <button className="worker-btn" onClick={restartAll} title="Restart All">⟳ All</button>
+            <button className="worker-btn" onClick={clearLog} title="Clear Log">⌫ Log</button>
             <button className="worker-btn" onClick={() => reloadProcfile()} title="Reload Procfile">⟲ Procfile</button>
           </div>
         </div>

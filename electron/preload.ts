@@ -95,6 +95,12 @@ const electronAPI = {
   clipboard: {
     saveImage: () => ipcRenderer.invoke('clipboard:saveImage'),
     writeImage: (filePath: string) => ipcRenderer.invoke('clipboard:writeImage', filePath),
+    writeText: (text: string) => ipcRenderer.invoke('clipboard:writeText', text) as Promise<boolean>,
+    onCopyShortcut: (callback: () => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('app:copy-shortcut', handler)
+      return () => ipcRenderer.removeListener('app:copy-shortcut', handler)
+    },
   },
   claude: {
     startSession: (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string; effort?: string; apiVersion?: 'v1' | 'v2'; useWorktree?: boolean; worktreePath?: string; worktreeBranch?: string; autoCompactWindow?: number; agentPreset?: string; codexSandboxMode?: string; codexApprovalPolicy?: string }) =>

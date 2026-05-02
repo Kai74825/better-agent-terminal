@@ -408,6 +408,16 @@ function buildMenu() {
   Menu.setApplicationMenu(menu)
 }
 
+function setupCopyShortcutForwarding(win: BrowserWindow) {
+  win.webContents.on('before-input-event', (_event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.shift) return
+    if (!(input.control || input.meta)) return
+    if (input.key.toLowerCase() !== 'c') return
+    win.webContents.send('app:copy-shortcut')
+  })
+}
+
 function createWindow(windowId: string, bounds?: { x: number; y: number; width: number; height: number }) {
   const win = new BrowserWindow({
     width: bounds?.width || 1400,
@@ -429,6 +439,7 @@ function createWindow(windowId: string, bounds?: { x: number; y: number; width: 
     icon: nativeImage.createFromPath(path.join(__dirname, process.platform === 'win32' ? '../assets/icon.ico' : '../assets/icon.png'))
   })
 
+  setupCopyShortcutForwarding(win)
   windowMap.set(windowId, win)
 
   if (process.platform === 'darwin') {
@@ -1112,6 +1123,10 @@ function registerLocalHandlers() {
     clipboard.writeImage(image)
     return true
   })
+  ipcMain.handle('clipboard:writeText', async (_event, text: string) => {
+    clipboard.writeText(text)
+    return true
+  })
 
   ipcMain.handle('image:save-data-url', async (event, dataUrl: string, defaultName?: string) => {
     const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/.exec(dataUrl)
@@ -1508,6 +1523,7 @@ function registerLocalHandlers() {
       webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true },
       frame: true, titleBarStyle: 'default', icon: nativeImage.createFromPath(path.join(__dirname, process.platform === 'win32' ? '../assets/icon.ico' : '../assets/icon.png'))
     })
+    setupCopyShortcutForwarding(detachedWin)
     setupResizeThrottle(detachedWin, 'detached')
     detachedWindows.set(workspaceId, detachedWin)
     const urlParam = `?detached=${encodeURIComponent(workspaceId)}`
