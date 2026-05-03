@@ -122,6 +122,19 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const [detectedProcfiles, setDetectedProcfiles] = useState<string[]>([])
   const [showProcfilePicker, setShowProcfilePicker] = useState(false)
   const [showQuickPick, setShowQuickPick] = useState(false)
+  // Preset IDs the host knows how to start. `null` until fetched — fall back
+  // to the local list so menus aren't empty during the brief load window.
+  const [supportedPresetIds, setSupportedPresetIds] = useState<string[] | null>(null)
+
+  // Fetch the host-supported preset list once. Refreshes on profile switch
+  // because workspaces re-mount when the active profile changes.
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI.agent.listPresets()
+      .then(ids => { if (!cancelled) setSupportedPresetIds(ids) })
+      .catch(() => { if (!cancelled) setSupportedPresetIds(null) })
+    return () => { cancelled = true }
+  }, [])
 
   // Detect git repo, GitHub remote, and Procfiles
   useEffect(() => {
@@ -781,7 +794,11 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
         onAddAgent={handleAddAgent}
         onAddWorker={handleAddWorker}
         detectedProcfiles={detectedProcfiles}
-        agentPresets={getVisiblePresets().filter(p => p.id !== 'none' && (!p.needsGitRepo || isGitRepo))}
+        agentPresets={getVisiblePresets().filter(p =>
+          p.id !== 'none'
+          && (!p.needsGitRepo || isGitRepo)
+          && (supportedPresetIds === null || supportedPresetIds.includes(p.id))
+        )}
         onReorder={handleReorderTerminals}
         onCloseTerminal={handleCloseTerminal}
         showAddButton={true}
@@ -813,6 +830,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       {showQuickPick && (
         <NewTerminalQuickPick
           isGitRepo={isGitRepo}
+          supportedPresetIds={supportedPresetIds}
           onSelect={handleQuickPickSelect}
           onClose={() => setShowQuickPick(false)}
         />

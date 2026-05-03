@@ -26,6 +26,7 @@ import { detectCx } from '../semantic-navigation'
 import type { WindowRegistry } from '../window-registry'
 import type { ProfileManager } from '../profile-manager'
 import type { EffortLevel, CreatePtyOptions } from '../../src/types'
+import { AGENT_PRESETS } from '../../src/types/agent-presets'
 import type { PtyManager } from '../pty-manager'
 import { getDataDir } from './data-dir'
 
@@ -200,6 +201,12 @@ export function registerProxiedHandlers(deps: ProxiedHandlersDeps): void {
   })
 
   // Get bundled Claude CLI path for claude-cli preset.
+  // Returns the agent presets this host knows about. The client uses this to
+  // filter its own UI so a remote host running an older BAT version doesn't
+  // show presets it can't actually handle. Local mode answers the same way as
+  // remote, so the client doesn't need to branch on connection state.
+  registerHandler('agent:list-presets', () => AGENT_PRESETS.map(p => p.id))
+
   // Since claude-code v2.1.113, the package ships a native binary placed by
   // postinstall from a per-platform optionalDependency. install.cjs writes
   // it to bin/claude.exe on EVERY platform (the .exe is literal filename on

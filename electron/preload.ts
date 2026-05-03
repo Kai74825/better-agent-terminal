@@ -102,6 +102,12 @@ const electronAPI = {
       return () => ipcRenderer.removeListener('app:copy-shortcut', handler)
     },
   },
+  agent: {
+    // List of preset IDs the host knows how to handle. Used by the renderer
+    // to filter UI menus so an outdated host doesn't surface presets it
+    // can't actually start.
+    listPresets: () => ipcRenderer.invoke('agent:list-presets') as Promise<string[]>,
+  },
   claude: {
     startSession: (sessionId: string, options: { cwd: string; prompt?: string; permissionMode?: string; model?: string; effort?: string; apiVersion?: 'v1' | 'v2'; useWorktree?: boolean; worktreePath?: string; worktreeBranch?: string; autoCompactWindow?: number; agentPreset?: string; codexSandboxMode?: string; codexApprovalPolicy?: string }) =>
       ipcRenderer.invoke('claude:start-session', sessionId, options),

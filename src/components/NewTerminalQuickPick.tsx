@@ -9,6 +9,10 @@ export type QuickPickChoice =
 
 interface NewTerminalQuickPickProps {
   isGitRepo: boolean
+  // Preset IDs the host actually supports. `null` means "still loading" — we
+  // fall back to the local visible list so the picker isn't empty during the
+  // brief fetch window.
+  supportedPresetIds: string[] | null
   onSelect: (choice: QuickPickChoice) => void
   onClose: () => void
 }
@@ -24,7 +28,7 @@ interface Item {
 
 const TERMINAL_PRESET = AGENT_PRESETS.find(p => p.id === 'none')!
 
-function buildItems(isGitRepo: boolean): Item[] {
+function buildItems(isGitRepo: boolean, supportedPresetIds: string[] | null): Item[] {
   const items: Item[] = [
     {
       key: 'terminal',
@@ -46,7 +50,9 @@ function buildItems(isGitRepo: boolean): Item[] {
     })
   }
   const presets = getVisiblePresets().filter((p: AgentPreset) =>
-    p.id !== 'none' && (!p.needsGitRepo || isGitRepo)
+    p.id !== 'none'
+    && (!p.needsGitRepo || isGitRepo)
+    && (supportedPresetIds === null || supportedPresetIds.includes(p.id))
   )
   for (const p of presets) {
     items.push({
@@ -61,14 +67,14 @@ function buildItems(isGitRepo: boolean): Item[] {
   return items
 }
 
-export function NewTerminalQuickPick({ isGitRepo, onSelect, onClose }: Readonly<NewTerminalQuickPickProps>) {
+export function NewTerminalQuickPick({ isGitRepo, supportedPresetIds, onSelect, onClose }: Readonly<NewTerminalQuickPickProps>) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const allItems = useMemo(() => buildItems(isGitRepo), [isGitRepo])
+  const allItems = useMemo(() => buildItems(isGitRepo, supportedPresetIds), [isGitRepo, supportedPresetIds])
   const items = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return allItems
