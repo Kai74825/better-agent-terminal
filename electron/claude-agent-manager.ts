@@ -206,6 +206,7 @@ interface SessionMetadata {
 
 interface PendingRequest {
   resolve: (value: unknown) => void
+  input?: Record<string, unknown>
 }
 
 interface QueuedMessage {
@@ -740,7 +741,7 @@ export class ClaudeAgentManager {
         // Check if this is an AskUserQuestion tool — always show UI
         if (toolName === 'AskUserQuestion') {
           return new Promise((resolve) => {
-            session.pendingAskUser.set(opts.toolUseID, { resolve })
+            session.pendingAskUser.set(opts.toolUseID, { resolve, input: input as Record<string, unknown> })
             this.send('claude:ask-user', sessionId, {
               toolUseId: opts.toolUseID,
               questions: (input as Record<string, unknown>).questions,
@@ -1608,7 +1609,7 @@ export class ClaudeAgentManager {
       const canUseTool: CanUseTool = async (toolName, input, opts) => {
         if (toolName === 'AskUserQuestion') {
           return new Promise((resolve) => {
-            session.pendingAskUser.set(opts.toolUseID, { resolve })
+            session.pendingAskUser.set(opts.toolUseID, { resolve, input: input as Record<string, unknown> })
             this.send('claude:ask-user', sessionId, {
               toolUseId: opts.toolUseID,
               questions: (input as Record<string, unknown>).questions,
@@ -2141,10 +2142,13 @@ export class ClaudeAgentManager {
     if (!session) return false
     const pending = session.pendingAskUser.get(toolUseId)
     if (!pending) return false
-    // AskUserQuestion expects a PermissionResult with behavior 'allow' and updatedInput containing answers
+    // AskUserQuestion expects a PermissionResult with behavior 'allow' and updatedInput
+    // containing the original questions plus answers. The SDK uses updatedInput as the
+    // tool's effective input, so dropping `questions` makes the built-in tool implementation
+    // crash with "undefined is not an object (evaluating 'questions.map')".
     pending.resolve({
       behavior: 'allow',
-      updatedInput: { answers },
+      updatedInput: { ...(pending.input ?? {}), answers },
     })
     session.pendingAskUser.delete(toolUseId)
     // Notify all windows to dismiss the ask-user UI
