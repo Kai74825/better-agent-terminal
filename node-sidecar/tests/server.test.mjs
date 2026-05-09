@@ -2647,6 +2647,95 @@ async function inProcess() {
     }
   }
 
+  // remote-broadcast — trivial EventEmitter multiplexer that the future
+  // WebSocket server consumes via .on('broadcast', ...). Tests cover:
+  // (a) multi-listener receives same args, (b) channel + variadic args
+  // round-trip, (c) reset hook clears subscribers.
+  {
+    const broadcast = await import('../src/lib/remote-broadcast.mjs')
+    broadcast.__resetBroadcastHubForTests()
+    const seen = []
+    const seen2 = []
+    const l1 = (channel, ...args) => seen.push({ channel, args })
+    const l2 = (channel, ...args) => seen2.push({ channel, args })
+    broadcast.broadcastHub.on('broadcast', l1)
+    broadcast.broadcastHub.on('broadcast', l2)
+
+    broadcast.broadcastHub.broadcast('claude:message', { id: 'm1', text: 'hi' })
+    broadcast.broadcastHub.broadcast('pty:output', 'sess-1', 'hello\n')
+
+    assert.equal(seen.length, 2)
+    assert.equal(seen2.length, 2)
+    assert.equal(seen[0].channel, 'claude:message')
+    assert.deepEqual(seen[0].args, [{ id: 'm1', text: 'hi' }])
+    assert.equal(seen[1].channel, 'pty:output')
+    assert.deepEqual(seen[1].args, ['sess-1', 'hello\n'])
+    // Both listeners observed identical sequences.
+    assert.deepEqual(seen, seen2)
+
+    // Reset clears subscribers.
+    broadcast.__resetBroadcastHubForTests()
+    broadcast.broadcastHub.broadcast('claude:message', { ignored: true })
+    assert.equal(seen.length, 2, 'post-reset broadcasts must not reach removed listeners')
+  }
+
+  // remote-fingerprint — pure crypto helpers ported ahead of the
+  // selfsigned cert generation slice. Verify the PEM strip + base64
+  // decode + SHA-256 + colon-grouped uppercase pipeline against a
+  // hand-computed fixture.
+  {
+    const fp = await import('../src/lib/remote-fingerprint.mjs')
+    const { createHash } = await import('node:crypto')
+
+    // Fake "PEM" — content is just the base64 of a known string. The
+    // fingerprint helper doesn't validate ASN.1, only base64-decodes
+    // the body, so this exercises the full pipeline.
+    const bodyBytes = Buffer.from('better-agent-terminal test certificate body', 'utf-8')
+    const bodyB64 = bodyBytes.toString('base64')
+    const pem = `-----BEGIN CERTIFICATE-----\n${bodyB64}\n-----END CERTIFICATE-----`
+
+    const expectedHex = createHash('sha256').update(bodyBytes).digest('hex').toUpperCase()
+    const expected = expectedHex.match(/.{2}/g).join(':')
+
+    const actual = fp.computeFingerprint(pem)
+    assert.equal(actual, expected)
+
+    // Format invariants: 64 hex chars + 31 colons = length 95.
+    assert.equal(actual.length, 95)
+    assert.match(actual, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/)
+
+    // Whitespace + linebreak inside body is stripped.
+    const pemWithBreaks = `-----BEGIN CERTIFICATE-----\n${bodyB64.slice(0, 20)}\n  ${bodyB64.slice(20)}\r\n-----END CERTIFICATE-----`
+    assert.equal(fp.computeFingerprint(pemWithBreaks), expected)
+
+    // fingerprintOfPem alias — same function reference.
+    assert.equal(fp.fingerprintOfPem, fp.computeFingerprint)
+
+    // normalizeFingerprint: strip colons/spaces, uppercase. Idempotent
+    // on already-normalized input. Non-string → ''.
+    assert.equal(fp.normalizeFingerprint('ab:cd:EF: 12 \t 34'), 'ABCDEF1234')
+    assert.equal(fp.normalizeFingerprint('ABCDEF1234'), 'ABCDEF1234')
+    assert.equal(fp.normalizeFingerprint(fp.normalizeFingerprint('ab:cd')), 'ABCD')
+    assert.equal(fp.normalizeFingerprint(null), '')
+    assert.equal(fp.normalizeFingerprint(undefined), '')
+    assert.equal(fp.normalizeFingerprint(42), '')
+
+    // Empty / non-string PEM rejected.
+    assert.throws(() => fp.computeFingerprint(''), /non-empty PEM/)
+    assert.throws(() => fp.computeFingerprint(null), /non-empty PEM/)
+    // PEM with only headers (no base64 body) rejected.
+    assert.throws(
+      () => fp.computeFingerprint('-----BEGIN CERTIFICATE-----\n\n-----END CERTIFICATE-----'),
+      /no base64 body/,
+    )
+
+    // Pin-comparison contract: normalize both sides and check equality.
+    // This is what a remote client will do when verifying the host's
+    // self-signed cert against a user-pasted pin.
+    const userPasted = `${actual.toLowerCase()}` // pasted in lowercase
+    assert.equal(fp.normalizeFingerprint(actual), fp.normalizeFingerprint(userPasted))
+  }
+
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
   const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod
