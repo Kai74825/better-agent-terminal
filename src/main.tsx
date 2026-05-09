@@ -28,6 +28,34 @@ const t0 = (window as unknown as { __t0?: number }).__t0 || Date.now()
 dlog(`[startup] ── renderer ──────────────────────────────`)
 dlog(`[startup] main.tsx top-level: +${Date.now() - t0}ms from HTML <script>`)
 
+// Surface unhandled rejections with their actual contents. Tauri invoke
+// rejects with a plain object (BridgeError → `{ message }`) which the
+// browser console renders as `[object Object]` — useless for debugging.
+// Stringify the reason so the message and any stack are visible in the
+// log file, and re-print to console in a readable shape.
+window.addEventListener('unhandledrejection', (ev) => {
+  const r = ev.reason as unknown
+  let detail: string
+  try {
+    if (r && typeof r === 'object') {
+      const obj = r as Record<string, unknown>
+      detail = JSON.stringify({
+        message: obj.message,
+        name: obj.name,
+        code: obj.code,
+        stack: typeof obj.stack === 'string' ? obj.stack.split('\n').slice(0, 6).join(' | ') : undefined,
+        keys: Object.keys(obj),
+      })
+    } else {
+      detail = String(r)
+    }
+  } catch {
+    detail = '[unstringifiable rejection]'
+  }
+  dlog(`[unhandledrejection] ${detail}`)
+  console.error('[unhandledrejection]', r, '→', detail)
+})
+
 // Keep splash visible — React root is hidden behind it.
 // Splash will be removed once React has painted (see rAF below).
 const splash = document.getElementById('splash')

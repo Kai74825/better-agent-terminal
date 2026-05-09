@@ -610,6 +610,70 @@ async function inProcess() {
   mod.sessions.delete('live-meta')
   __resetMetadataCacheForTests()
 
+  // Workspace-with-2-panels-each-pings smoke. The reported repro is:
+  // open a workspace, mount Claude + Codex agent panels, type "ping" in
+  // each. The renderer surfaces failures as `[object Object]` unhandled
+  // promise rejections because `await window.batAppAPI.claude.sendMessage`
+  // (ClaudeAgentPanel:1809, CodexAgentPanel:1829) is bare — if any of
+  // the RPCs in this sequence rejects, the panel onClick chain explodes.
+  // This test pins the contract: every RPC the renderer fires during
+  // panel mount + ping must return `.result`, never `.error`. A new
+  // breakage in any of the 7 metadata reads / 1 sendMessage shows up as
+  // an immediate red here, with the failing method named.
+  const pingFakeSdk = {
+    query() {
+      return (async function* () {
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-ping-1', cwd: '/x' }
+        yield { type: 'result', subtype: 'success', session_id: 'sdk-ping-1', result: 'pong', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1, usage: {} }
+      })()
+    },
+  }
+  __setSdkOverrideForTests(pingFakeSdk)
+  __resetMetadataCacheForTests()
+  try {
+    // Two sessions, mirroring the user's two-panel workspace.
+    for (const sessionId of ['ws-claude-1', 'ws-codex-1']) {
+      // Panel mount RPC fan-out (ClaudeAgentPanel.tsx:1120-1180 effects
+      // + CodexAgentPanel.tsx:1120-1180 — same code). All metadata reads
+      // are .then().catch() in the renderer, so any reject would be
+      // swallowed silently — but we want them to never reject in the
+      // first place, since the underlying handlers must be panic-free.
+      await dispatch({ jsonrpc: '2.0', id: 700, method: 'claude.startSession',
+        params: { sessionId, options: { cwd: '/x', model: 'claude-sonnet-4-6' } } })
+      const mountRpcs = [
+        { method: 'claude.getSessionMeta', params: { sessionId } },
+        { method: 'claude.getSupportedModels', params: { sessionId } },
+        { method: 'claude.getAccountInfo', params: { sessionId } },
+        { method: 'claude.getSupportedCommands', params: { sessionId } },
+        { method: 'claude.getSupportedAgents', params: { sessionId } },
+        { method: 'claude.getSessionState', params: { sessionId } },
+        { method: 'claude.getContextUsage', params: { sessionId } },
+      ]
+      for (const [i, rpc] of mountRpcs.entries()) {
+        const reply = await dispatch({ jsonrpc: '2.0', id: 710 + i, ...rpc })
+        assert.ok(reply.error === undefined,
+          `panel mount RPC ${rpc.method} for ${sessionId} returned error: ${JSON.stringify(reply.error)}`)
+        assert.ok('result' in reply,
+          `panel mount RPC ${rpc.method} for ${sessionId} missing result key`)
+      }
+      // ping send. ClaudeAgentPanel:1809 is `await sendMessage(...)`
+      // with NO try/catch — if this rejects, the user sees an
+      // unhandled promise rejection. Pin: it must resolve.
+      const sendReply = await dispatch({ jsonrpc: '2.0', id: 720,
+        method: 'claude.sendMessage', params: { sessionId, prompt: 'ping' } })
+      assert.ok(sendReply.error === undefined,
+        `claude.sendMessage('${sessionId}','ping') errored: ${JSON.stringify(sendReply.error)}`)
+      assert.ok(sendReply.result?.ok === true,
+        `claude.sendMessage('${sessionId}','ping') did not resolve {ok:true}; got ${JSON.stringify(sendReply.result)}`)
+    }
+    // Cleanup the two synthetic sessions.
+    mod.sessions.delete('ws-claude-1')
+    mod.sessions.delete('ws-codex-1')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
+  }
+
   // Per-session state round-trip via dispatch. Verifies setters mutate
   // the session map and getters read back exactly what was written.
   // This is the "stub stays consistent" contract — when SDK lands the
