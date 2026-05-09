@@ -419,6 +419,12 @@ function createTauriHost(): BatAppAPI {
           return (sessionId: string) =>
             getInvoke()<unknown>('claude_abort_session', { sessionId })
         }
+        // rewindToPrompt: cut the SDK session transcript at the given
+        // user-prompt index and rebuild as a new SDK session id.
+        if (key === 'rewindToPrompt') {
+          return (sessionId: string, promptIndex: number) =>
+            getInvoke()<unknown>('claude_rewind_to_prompt', { sessionId, promptIndex })
+        }
         // resumeSession: rehydrate an existing SDK session id so the next
         // sendMessage continues that conversation instead of starting
         // fresh. Renderer panels call this on remount when they have a

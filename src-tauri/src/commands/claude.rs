@@ -364,6 +364,19 @@ pub fn claude_reset_session(
 }
 
 #[tauri::command]
+pub fn claude_rewind_to_prompt(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    session_id: String,
+    prompt_index: u32,
+) -> Result<Value, BridgeError> {
+    call(&app, &state, "claude.rewindToPrompt", json!({
+        "sessionId": session_id,
+        "promptIndex": prompt_index,
+    }))
+}
+
+#[tauri::command]
 pub fn claude_resume_session(
     app: AppHandle,
     state: State<'_, SidecarState>,

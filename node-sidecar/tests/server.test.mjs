@@ -627,6 +627,101 @@ async function inProcess() {
     restoreResumeSend()
   }
 
+  // claude.rewindToPrompt: cut the SDK transcript at a given user-prompt
+  // index and write a fresh transcript under a new SDK session id.
+  // Test drives the on-disk projects dir via a tmpdir override, builds
+  // a synthetic JSONL transcript with 3 user prompts + assistant
+  // responses interleaved, then asserts the cut wrote a new file with
+  // only the lines before the index, removedPromptCount is correct,
+  // and session.sdkSessionId points at the new id.
+  const { __setProjectsDirOverrideForTests } = mod
+  const projTmp = mkdtempSync(join(tmpdir(), 'sidecar-rewind-'))
+  __setProjectsDirOverrideForTests(projTmp)
+  try {
+    // The CLI encodes cwd into the project dir name by replacing any
+    // non-alphanumeric char with '-'. Use a path with slashes so the
+    // encoded name actually exercises the encoding.
+    const cwd = '/projects/alpha'
+    const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+    const projDir = join(projTmp, encoded)
+    mkdirSync(projDir, { recursive: true })
+    const sdkId = '0000-aaaa-bbbb-historic'
+    const txtMsg = (text) => ({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] }, sessionId: sdkId })
+    const asstMsg = (text) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, sessionId: sdkId })
+    // Note: the second 'user' line below has tool_result content — it
+    // must NOT count toward userPromptCount.
+    const transcript = [
+      txtMsg('first prompt'),
+      asstMsg('first reply'),
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] }, sessionId: sdkId },
+      txtMsg('second prompt'),
+      asstMsg('second reply'),
+      txtMsg('third prompt'),
+      asstMsg('third reply'),
+    ]
+    writeFileSync(
+      join(projDir, `${sdkId}.jsonl`),
+      transcript.map(o => JSON.stringify(o)).join('\n') + '\n',
+    )
+
+    // Bring up a session that points at this sdkId.
+    await dispatch({ jsonrpc: '2.0', id: 350, method: 'claude.resumeSession',
+      params: { sessionId: 'rw-1', sdkSessionId: sdkId, options: { cwd } } })
+
+    // Rewind to prompt index 1 (the second text-bearing user prompt).
+    // Cutoff line should be the index-3 line (txtMsg('second prompt')).
+    const reply = await dispatch({ jsonrpc: '2.0', id: 351, method: 'claude.rewindToPrompt',
+      params: { sessionId: 'rw-1', promptIndex: 1 } })
+    assert.ok(reply.result, `expected result, got ${JSON.stringify(reply)}`)
+    assert.equal(typeof reply.result.newSdkSessionId, 'string')
+    assert.notEqual(reply.result.newSdkSessionId, sdkId)
+    // Lines kept = indexes 0..2 = 3 lines. removed = 7 - 3 = 4.
+    assert.equal(reply.result.removedPromptCount, 4)
+    // The new transcript file exists with the kept lines and the
+    // sessionId field rewritten.
+    const newFile = join(projDir, `${reply.result.newSdkSessionId}.jsonl`)
+    const newRaw = await readFile(newFile, 'utf-8')
+    const newLines = newRaw.split('\n').filter(l => l.trim())
+    assert.equal(newLines.length, 3)
+    for (const line of newLines) {
+      const obj = JSON.parse(line)
+      assert.equal(obj.sessionId, reply.result.newSdkSessionId,
+        'kept lines must have their sessionId rewritten to the new id')
+    }
+    // Session state was rewired.
+    assert.equal(mod.sessions.get('rw-1').sdkSessionId, reply.result.newSdkSessionId)
+
+    // Out-of-range promptIndex returns an error message.
+    const oobReply = await dispatch({ jsonrpc: '2.0', id: 352, method: 'claude.rewindToPrompt',
+      params: { sessionId: 'rw-1', promptIndex: 99 } })
+    assert.ok(oobReply.result.error, `expected error, got ${JSON.stringify(oobReply)}`)
+    assert.match(oobReply.result.error, /not found|user prompt/)
+
+    // Streaming session refuses rewind (the renderer must stop the turn first).
+    const streamingSession = mod.sessions.get('rw-1')
+    streamingSession.streaming = true
+    const busyReply = await dispatch({ jsonrpc: '2.0', id: 353, method: 'claude.rewindToPrompt',
+      params: { sessionId: 'rw-1', promptIndex: 0 } })
+    assert.match(busyReply.result.error || '', /Claude is responding/)
+    streamingSession.streaming = false
+
+    // Missing/invalid params surface clear error messages (not throws).
+    const missingSidReply = await dispatch({ jsonrpc: '2.0', id: 354, method: 'claude.rewindToPrompt',
+      params: { promptIndex: 0 } })
+    assert.match(missingSidReply.result.error || '', /missing sessionId/)
+    const negIdxReply = await dispatch({ jsonrpc: '2.0', id: 355, method: 'claude.rewindToPrompt',
+      params: { sessionId: 'rw-1', promptIndex: -1 } })
+    assert.match(negIdxReply.result.error || '', /non-negative number/)
+
+    // Unknown sessionId.
+    const unknownReply = await dispatch({ jsonrpc: '2.0', id: 356, method: 'claude.rewindToPrompt',
+      params: { sessionId: 'never-started', promptIndex: 0 } })
+    assert.equal(unknownReply.result.error, 'Session not found')
+  } finally {
+    __setProjectsDirOverrideForTests(null)
+    rmSync(projTmp, { recursive: true, force: true })
+  }
+
   // Parity test: queryOptions must include the same keys Electron sets.
   // Without these, the sidecar session loses the claude_code system
   // prompt + tool preset → no Bash/Read/Edit etc. Capture the raw

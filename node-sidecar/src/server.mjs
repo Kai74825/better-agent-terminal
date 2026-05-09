@@ -174,6 +174,116 @@ registerHandler('claude.resumeSession', async (params) => {
   return { ok: true, sessionId, sdkSessionId: sdkSessionIdToResume }
 })
 
+// claude.rewindToPrompt: cut the SDK session's JSONL transcript at a
+// given user-prompt index, write a fresh transcript under a new
+// SDK session id, and rewire the in-memory session to the new id so
+// the next sendMessage continues from the truncated history. Mirror
+// of electron/claude-agent-manager.ts:2647. Pure file-system + JSON
+// surgery — no SDK call, no network — so it stays fast and
+// deterministic in tests. Cwd-name encoding matches the Claude CLI's
+// scheme: replace anything not [a-zA-Z0-9] with '-'.
+//
+// Override hook for tests: __setProjectsDirOverrideForTests(path)
+// swaps `~/.claude/projects` for a tmpdir.
+let _projectsDirOverrideForTests = null
+function __setProjectsDirOverrideForTests(p) { _projectsDirOverrideForTests = p }
+function __resolveProjectsDir() {
+  return _projectsDirOverrideForTests || join(homedir(), '.claude', 'projects')
+}
+registerHandler('claude.rewindToPrompt', async (params) => {
+  const sessionId = params?.sessionId
+  const promptIndex = params?.promptIndex
+  if (typeof sessionId !== 'string' || !sessionId) {
+    return { error: 'rewindToPrompt: missing sessionId' }
+  }
+  if (typeof promptIndex !== 'number' || promptIndex < 0) {
+    return { error: 'rewindToPrompt: promptIndex must be a non-negative number' }
+  }
+  const session = sessions.get(sessionId)
+  if (!session) return { error: 'Session not found' }
+  if (session.streaming) {
+    return { error: 'Cannot rewind while Claude is responding — stop the current turn first.' }
+  }
+  const currentSdkId = session.sdkSessionId
+  if (!currentSdkId) return { error: 'No SDK session to rewind' }
+  const cwd = (session.options && typeof session.options === 'object' && typeof session.options.cwd === 'string')
+    ? session.options.cwd
+    : null
+  if (!cwd) return { error: 'rewindToPrompt: session has no cwd' }
+  const encoded = cwd.replace(/[^a-zA-Z0-9]/g, '-')
+  const projectDir = join(__resolveProjectsDir(), encoded)
+  const filePath = join(projectDir, `${currentSdkId}.jsonl`)
+
+  let raw
+  try {
+    raw = await readFile(filePath, 'utf-8')
+  } catch {
+    return { error: `Session history file not found: ${filePath}` }
+  }
+  const lines = raw.split('\n').filter(l => l.trim())
+
+  // Find cutoff: the (promptIndex)-th text-bearing user prompt.
+  let userPromptCount = 0
+  let cutoffIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    let obj
+    try { obj = JSON.parse(lines[i]) } catch { continue }
+    if (obj?.type !== 'user' || obj?.message?.role !== 'user') continue
+    const msgContent = obj.message.content
+    let hasText = false
+    if (typeof msgContent === 'string' && msgContent.length > 0) {
+      hasText = true
+    } else if (Array.isArray(msgContent)) {
+      hasText = msgContent.some(b => b && b.type === 'text')
+    }
+    if (!hasText) continue
+    if (userPromptCount === promptIndex) { cutoffIdx = i; break }
+    userPromptCount++
+  }
+  if (cutoffIdx === -1) {
+    return { error: `Prompt index ${promptIndex} not found (only ${userPromptCount} user prompt(s) in history)` }
+  }
+
+  const keptLines = lines.slice(0, cutoffIdx)
+  const { randomUUID } = await import('node:crypto')
+  const { writeFile } = await import('node:fs/promises')
+  const newSdkSessionId = randomUUID()
+
+  // Rewrite each line so any embedded sessionId points to the new id.
+  // The Claude CLI looks for sessionId fields keyed in the message
+  // metadata; rewrite defensively (no-op when the key is absent).
+  const rewritten = keptLines.map((line) => {
+    try {
+      const obj = JSON.parse(line)
+      if (obj && typeof obj.sessionId === 'string') obj.sessionId = newSdkSessionId
+      return JSON.stringify(obj)
+    } catch {
+      return line
+    }
+  })
+  const newFilePath = join(projectDir, `${newSdkSessionId}.jsonl`)
+  await writeFile(
+    newFilePath,
+    rewritten.join('\n') + (rewritten.length > 0 ? '\n' : ''),
+    'utf-8',
+  )
+
+  // Wire the in-memory session to the new transcript so the next
+  // sendMessage's `resume:` picks it up.
+  if (session.abortController) {
+    try { session.abortController.abort() } catch { /* already aborted */ }
+  }
+  session.abortController = null
+  session.sdkSessionId = newSdkSessionId
+  // Best-effort: notify renderers that the session metadata changed.
+  sendEvent('claude:status', {
+    sessionId,
+    meta: { sdkSessionId: newSdkSessionId, cwd, model: session.model, permissionMode: session.permissionMode },
+  })
+  const removedPromptCount = lines.length - cutoffIdx
+  return { newSdkSessionId, removedPromptCount }
+})
+
 // Real SDK-driven sendMessage. Each call kicks off a fresh single-shot
 // query() with `resume: <previousSdkSessionId>` so the SDK preserves
 // context across turns. Streaming-input mode + control methods
@@ -1154,7 +1264,7 @@ function dataUrlToContentBlock(dataUrl) {
   return { type: 'image', source: { type: 'base64', media_type: m[1], data: base64 } }
 }
 
-export { CLAUDE_BUILTIN_MODELS, CLAUDE_BUILTIN_DEDUP_KEYS, CLAUDE_MODEL_CONTEXT_WINDOWS, expectedContextWindowForModel, sdkModelForClaudeSelection, dataUrlToContentBlock, loadInstalledPlugins, __setPluginsPathOverrideForTests }
+export { CLAUDE_BUILTIN_MODELS, CLAUDE_BUILTIN_DEDUP_KEYS, CLAUDE_MODEL_CONTEXT_WINDOWS, expectedContextWindowForModel, sdkModelForClaudeSelection, dataUrlToContentBlock, loadInstalledPlugins, __setPluginsPathOverrideForTests, __setProjectsDirOverrideForTests }
 
 // --- remote.* / tunnel.* stubs --------------------------------------------
 //
