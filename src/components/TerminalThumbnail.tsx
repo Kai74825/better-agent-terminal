@@ -72,7 +72,7 @@ const setupGlobalListener = () => {
   }
 
   // PTY output for regular terminals
-  window.electronAPI.pty.onOutput((id, data) => {
+  window.batAppAPI.pty.onOutput((id, data) => {
     const prev = previewCache.get(id) || ''
     const combined = prev + data
     // Keep last 8 lines, clean all ANSI escape sequences for readability
@@ -83,7 +83,7 @@ const setupGlobalListener = () => {
   })
 
   // Claude agent messages for agent terminal previews
-  window.electronAPI.claude.onMessage((sessionId, message) => {
+  window.batAppAPI.claude.onMessage((sessionId, message) => {
     const msg = message as { role?: string; content?: string }
     if (msg.role === 'assistant' && msg.content) {
       const lines = msg.content.split('\n').slice(-8)
@@ -92,7 +92,7 @@ const setupGlobalListener = () => {
   })
 
   // Claude agent streaming text for live preview
-  window.electronAPI.claude.onStream((sessionId, data) => {
+  window.batAppAPI.claude.onStream((sessionId, data) => {
     const stream = data as { text?: string }
     if (stream.text) {
       const prev = previewCache.get(sessionId) || ''
@@ -109,7 +109,7 @@ interface TerminalThumbnailProps {
   onClick: () => void
 }
 
-const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
 let thumbRenderCount = 0
 export const TerminalThumbnail = memo(function TerminalThumbnail({ terminal, isActive, onClick }: TerminalThumbnailProps) {
   thumbRenderCount++

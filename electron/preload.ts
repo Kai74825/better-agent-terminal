@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { CreatePtyOptions } from '../src/types'
 import type { NotificationEntry } from './notification-center'
 
-const electronAPI = {
+const batAppAPI = {
   platform: process.platform as 'win32' | 'darwin' | 'linux',
   systemVersion: typeof process.getSystemVersion === 'function' ? process.getSystemVersion() : '',
   pty: {
@@ -466,12 +466,12 @@ const electronAPI = {
   },
 }
 
-contextBridge.exposeInMainWorld('electronAPI', electronAPI)
+contextBridge.exposeInMainWorld('batAppAPI', batAppAPI)
 
-export type ElectronAPI = typeof electronAPI
+export type BatAppAPI = typeof batAppAPI
 
 declare global {
   interface Window {
-    electronAPI: ElectronAPI
+    batAppAPI: BatAppAPI
   }
 }

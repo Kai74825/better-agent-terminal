@@ -16,7 +16,7 @@ import './styles/prompt-box.css'
 import './styles/claude-agent.css'
 import './styles/skills-panel.css'
 
-const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
 const t0 = (window as unknown as { __t0?: number }).__t0 || Date.now()
 dlog(`[startup] ── renderer ──────────────────────────────`)
 dlog(`[startup] main.tsx top-level: +${Date.now() - t0}ms from HTML <script>`)

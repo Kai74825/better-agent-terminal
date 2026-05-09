@@ -304,7 +304,7 @@ export function ThumbnailBar({
                       </div>
                       <div
                         className="thumbnail-add-menu-hint"
-                        onClick={() => window.electronAPI.shell.openExternal('https://github.com/DarthSim/overmind')}
+                        onClick={() => window.batAppAPI.shell.openExternal('https://github.com/DarthSim/overmind')}
                       >
                         What is a Procfile?
                       </div>

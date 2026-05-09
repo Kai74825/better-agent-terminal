@@ -67,10 +67,10 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   const [remoteActiveByLocalId, setRemoteActiveByLocalId] = useState<Record<string, boolean>>({})
 
   const loadProfiles = useCallback(async () => {
-    const result = await window.electronAPI.profile.listLocal()
+    const result = await window.batAppAPI.profile.listLocal()
     setProfiles(result.profiles)
     setActiveProfileIds(result.activeProfileIds)
-    const wpId = await window.electronAPI.app.getWindowProfile()
+    const wpId = await window.batAppAPI.app.getWindowProfile()
     setWindowProfileId(wpId)
 
     // Fan out: query each unique remote target for its active profile ids,
@@ -97,7 +97,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     }
     const settled = await Promise.allSettled(
       Array.from(targetMap.values()).map(async target => {
-        const res = await window.electronAPI.remote.listProfiles(target.host, target.port, target.token, target.fingerprint)
+        const res = await window.batAppAPI.remote.listProfiles(target.host, target.port, target.token, target.fingerprint)
         if ('error' in res) return { profiles: target.profiles, activeIds: [] as string[] }
         return { profiles: target.profiles, activeIds: res.activeProfileIds }
       })
@@ -148,7 +148,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   }, [creating, editingId, confirmDelete, siblingSourceId, onClose])
 
   const fetchRemoteProfileList = async (host: string, port: number, token: string, fingerprint: string): Promise<RemoteProfileOption[]> => {
-    const result = await window.electronAPI.remote.listProfiles(host, port, token, fingerprint)
+    const result = await window.batAppAPI.remote.listProfiles(host, port, token, fingerprint)
     if ('error' in result) throw new Error(result.error)
     return result.profiles
   }
@@ -177,7 +177,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     if (creating === 'remote') {
       if (!remoteHost.trim() || !remoteToken.trim() || !remoteFingerprint.trim()) return
       if (!selectedRemoteProfileId) return
-      await window.electronAPI.profile.create(trimmed, {
+      await window.batAppAPI.profile.create(trimmed, {
         type: 'remote',
         remoteHost: remoteHost.trim(),
         remotePort: parseInt(remotePort) || 9876,
@@ -186,7 +186,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
         remoteProfileId: selectedRemoteProfileId,
       })
     } else {
-      await window.electronAPI.profile.create(trimmed)
+      await window.batAppAPI.profile.create(trimmed)
     }
     setCreating(false)
     setNewName('')
@@ -202,7 +202,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   const handleRename = async (profileId: string) => {
     const trimmed = editValue.trim()
     if (!trimmed) { setEditingId(null); return }
-    await window.electronAPI.profile.rename(profileId, trimmed)
+    await window.batAppAPI.profile.rename(profileId, trimmed)
     setEditingId(null)
     setEditValue('')
     loadProfiles()
@@ -242,7 +242,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     const token = editRemoteToken.trim()
     const fingerprint = editRemoteFingerprint.trim()
     if (!host || !token || !fingerprint) return
-    await window.electronAPI.profile.update(profileId, {
+    await window.batAppAPI.profile.update(profileId, {
       remoteHost: host,
       remotePort: parseInt(editRemotePort) || 9876,
       remoteToken: token,
@@ -255,7 +255,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   }
 
   const handleDelete = async (profileId: string) => {
-    await window.electronAPI.profile.delete(profileId)
+    await window.batAppAPI.profile.delete(profileId)
     setConfirmDelete(null)
     loadProfiles()
   }
@@ -263,7 +263,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   const handleDuplicate = async (profileId: string) => {
     const source = profiles.find(p => p.id === profileId)
     if (!source) return
-    await window.electronAPI.profile.duplicate(profileId, `${source.name} (Copy)`)
+    await window.batAppAPI.profile.duplicate(profileId, `${source.name} (Copy)`)
     loadProfiles()
   }
 
@@ -272,7 +272,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     setTestingId(profile.id)
     setTestResult(prev => ({ ...prev, [profile.id]: 'testing' }))
     try {
-      const result = await window.electronAPI.remote.testConnection(
+      const result = await window.batAppAPI.remote.testConnection(
         profile.remoteHost,
         profile.remotePort || 9876,
         profile.remoteToken,
@@ -323,10 +323,10 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     let targetProfileId = existing?.id
     if (existing) {
       if (existing.remoteToken !== source.remoteToken) {
-        await window.electronAPI.profile.update(existing.id, { remoteToken: source.remoteToken })
+        await window.batAppAPI.profile.update(existing.id, { remoteToken: source.remoteToken })
       }
     } else {
-      const entry = await window.electronAPI.profile.create(`${remoteProfile.name} @ ${source.remoteHost}`, {
+      const entry = await window.batAppAPI.profile.create(`${remoteProfile.name} @ ${source.remoteHost}`, {
         type: 'remote',
         remoteHost: source.remoteHost,
         remotePort: port,
@@ -346,7 +346,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
 
   const handleSaveCurrent = async () => {
     if (windowProfileId) {
-      await window.electronAPI.profile.save(windowProfileId)
+      await window.batAppAPI.profile.save(windowProfileId)
       loadProfiles()
     }
   }

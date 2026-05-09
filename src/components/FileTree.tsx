@@ -61,7 +61,7 @@ function FileTreeNode({
       if (children === null) {
         setLoading(true)
         try {
-          const entries = await window.electronAPI.fs.readdir(entry.path)
+          const entries = await window.batAppAPI.fs.readdir(entry.path)
           setChildren(entries)
         } catch {
           setChildren([])
@@ -214,7 +214,7 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
 
     const type = canPreview(fileName)
     if (type === 'text') {
-      window.electronAPI.fs.readFile(filePath).then(result => {
+      window.batAppAPI.fs.readFile(filePath).then(result => {
         if (cancelled) return
         if (result.error) {
           setError(result.error === 'File too large' ? `File too large (${Math.round((result.size || 0) / 1024)}KB)` : result.error)
@@ -224,7 +224,7 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
         setLoading(false)
       })
     } else if (type === 'image') {
-      window.electronAPI.image.readAsDataUrl(filePath).then(url => {
+      window.batAppAPI.image.readAsDataUrl(filePath).then(url => {
         if (cancelled) return
         setImageUrl(url)
         setLoading(false)
@@ -400,7 +400,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
   const loadRoot = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await window.electronAPI.fs.readdir(rootPath)
+      const result = await window.batAppAPI.fs.readdir(rootPath)
       setEntries(result)
     } catch {
       setEntries([])
@@ -446,8 +446,8 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
 
   // Watch for file system changes and auto-refresh
   useEffect(() => {
-    window.electronAPI.fs.watch(rootPath)
-    const unsubscribe = window.electronAPI.fs.onChanged((changedPath: string) => {
+    window.batAppAPI.fs.watch(rootPath)
+    const unsubscribe = window.batAppAPI.fs.onChanged((changedPath: string) => {
       if (changedPath === rootPath) {
         setRefreshKey(k => k + 1)
         loadRoot()
@@ -455,7 +455,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     })
     return () => {
       unsubscribe()
-      window.electronAPI.fs.unwatch(rootPath)
+      window.batAppAPI.fs.unwatch(rootPath)
     }
   }, [rootPath, loadRoot])
 
@@ -483,7 +483,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     setSearching(true)
     searchTimerRef.current = setTimeout(async () => {
       try {
-        const results = await window.electronAPI.fs.search(rootPath, q)
+        const results = await window.batAppAPI.fs.search(rootPath, q)
         setSearchResults(results)
       } catch {
         setSearchResults([])
@@ -503,7 +503,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     try {
       const { path, name } = JSON.parse(saved)
       // Check if file still exists
-      window.electronAPI.fs.readFile(path).then(result => {
+      window.batAppAPI.fs.readFile(path).then(result => {
         if (!result.error) {
           setSelectedFile({ path, name, isDirectory: false })
         } else {
@@ -550,7 +550,7 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     const target = contextMenu.entry.isDirectory
       ? contextMenu.entry.path
       : contextMenu.entry.path.replace(/[\\/][^\\/]+$/, '') // parent dir
-    window.electronAPI.shell.openPath(target)
+    window.batAppAPI.shell.openPath(target)
     setContextMenu(null)
   }, [contextMenu])
 

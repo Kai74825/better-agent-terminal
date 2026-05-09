@@ -26,7 +26,8 @@
     "diagnose:ctrl-o:quick": "electron tests/diagnose-ctrl-o.js --quick",
     "diagnose:ctrl-o:verbose": "electron tests/diagnose-ctrl-o.js --verbose",
     "test:node-resolver": "tsx tests/node-resolver.test.ts",
-    "test:codex-resume": "tsx tests/codex-resume-fallback.test.ts"
+    "test:codex-resume": "tsx tests/codex-resume-fallback.test.ts",
+    "test:host-api": "tsx tests/host-api.test.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.58",

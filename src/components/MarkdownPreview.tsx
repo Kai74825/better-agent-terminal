@@ -103,7 +103,7 @@ export function MarkdownPreview({ content }: { content: string }) {
         const link = target.closest('a[data-external-link]') as HTMLAnchorElement | null
         if (link) {
           e.preventDefault()
-          window.electronAPI.shell.openExternal(link.href)
+          window.batAppAPI.shell.openExternal(link.href)
         }
       }}
     />

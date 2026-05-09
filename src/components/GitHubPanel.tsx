@@ -107,8 +107,8 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
     setError(null)
     try {
       const [prResult, issueResult] = await Promise.all([
-        window.electronAPI.github.listPRs(workspaceFolderPath),
-        window.electronAPI.github.listIssues(workspaceFolderPath),
+        window.batAppAPI.github.listPRs(workspaceFolderPath),
+        window.batAppAPI.github.listIssues(workspaceFolderPath),
       ])
       if (prResult && 'error' in prResult) {
         setError(prResult.error as string)
@@ -130,7 +130,7 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
   // Check CLI and load data on consent
   useEffect(() => {
     if (!consentGiven) return
-    window.electronAPI.github.checkCli().then(status => {
+    window.batAppAPI.github.checkCli().then(status => {
       setCliStatus(status)
       if (status.installed && status.authenticated) {
         loadData()
@@ -144,8 +144,8 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
     setCommentBody('')
     setDetailLoading(true)
     const promise = selectedItem.type === 'pr'
-      ? window.electronAPI.github.viewPR(workspaceFolderPath, selectedItem.number)
-      : window.electronAPI.github.viewIssue(workspaceFolderPath, selectedItem.number)
+      ? window.batAppAPI.github.viewPR(workspaceFolderPath, selectedItem.number)
+      : window.batAppAPI.github.viewIssue(workspaceFolderPath, selectedItem.number)
     promise.then(result => {
       if (result && 'error' in result) {
         setDetail(null)
@@ -203,7 +203,7 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
   }
 
   const getItemUrl = async (item: GitHubPR | GitHubIssue) => {
-    const repoUrl = await window.electronAPI.git.getGithubUrl(workspaceFolderPath)
+    const repoUrl = await window.batAppAPI.git.getGithubUrl(workspaceFolderPath)
     if (!repoUrl) return null
     const type = 'isDraft' in item ? 'pull' : 'issues'
     return `${repoUrl}/${type}/${item.number}`
@@ -214,8 +214,8 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
     setCommentPosting(true)
     try {
       const fn = selectedItem.type === 'pr'
-        ? window.electronAPI.github.commentPR
-        : window.electronAPI.github.commentIssue
+        ? window.batAppAPI.github.commentPR
+        : window.batAppAPI.github.commentIssue
       const result = await fn(workspaceFolderPath, selectedItem.number, commentBody.trim())
       if (result && 'error' in result) {
         setCommentStatus(t('github.commentError'))
@@ -275,7 +275,7 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
             style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y, zIndex: 1000 }}
           >
             <div className="context-menu-item" onClick={() => {
-              getItemUrl(contextMenu.item).then(url => { if (url) window.electronAPI.shell.openExternal(url) })
+              getItemUrl(contextMenu.item).then(url => { if (url) window.batAppAPI.shell.openExternal(url) })
               setContextMenu(null)
             }}>{t('github.openInGitHub')}</div>
             <div className="context-menu-item" onClick={() => {

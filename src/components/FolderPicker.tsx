@@ -50,7 +50,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
     setError(null)
     try {
       if (mode === 'files') {
-        const entries = await window.electronAPI.fs.readdir(dirPath)
+        const entries = await window.batAppAPI.fs.readdir(dirPath)
         const visible = entries
           .filter(e => showHidden || !e.name.startsWith('.'))
           .filter(e => e.isDirectory || isProcfileName(e.name))
@@ -68,7 +68,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
         setSelected(new Set())
         return
       }
-      const result = await window.electronAPI.fs.listDirs(dirPath, showHidden)
+      const result = await window.batAppAPI.fs.listDirs(dirPath, showHidden)
       if ('error' in result) {
         setError(result.error)
         return
@@ -88,19 +88,19 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
     const init = async () => {
       let start = initialPath || ''
       if (!start) {
-        try { start = await window.electronAPI.fs.home() }
+        try { start = await window.batAppAPI.fs.home() }
         catch { start = '/' }
       }
       try {
-        const qls = await window.electronAPI.fs.quickLocations()
+        const qls = await window.batAppAPI.fs.quickLocations()
         setQuickLocations(qls)
         if (!qls || qls.length === 0) {
           setQuickError('quickLocations returned empty')
-          window.electronAPI?.debug?.log?.('[FolderPicker] quickLocations returned empty array')
+          window.batAppAPI?.debug?.log?.('[FolderPicker] quickLocations returned empty array')
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        window.electronAPI?.debug?.log?.('[FolderPicker] quickLocations failed:', msg)
+        window.batAppAPI?.debug?.log?.('[FolderPicker] quickLocations failed:', msg)
         setQuickLocations([])
         setQuickError(msg)
       }
@@ -125,7 +125,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
   const handleDeleteSelected = useCallback(async () => {
     if (!canDeleteSelected) return
 
-    const confirmed = await window.electronAPI.dialog.confirm(
+    const confirmed = await window.batAppAPI.dialog.confirm(
       deletableEntries.length === 1
         ? t('folderPicker.deleteConfirmSingle', { name: deletableEntries[0].name })
         : t('folderPicker.deleteConfirmMulti', { count: deletableEntries.length }),
@@ -135,7 +135,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
 
     setError(null)
     for (const entry of deletableEntries) {
-      const result = await window.electronAPI.fs.deletePath(entry.path)
+      const result = await window.batAppAPI.fs.deletePath(entry.path)
       if ('error' in result) {
         setError(result.error)
         return
@@ -207,7 +207,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
     const name = newFolderName.trim()
     if (!name) return
     setCreateError(null)
-    const result = await window.electronAPI.fs.mkdir(currentPath, name)
+    const result = await window.batAppAPI.fs.mkdir(currentPath, name)
     if ('error' in result) {
       setCreateError(result.error)
       return

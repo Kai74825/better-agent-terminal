@@ -137,5 +137,5 @@ export function openChatMarkdownLink(href: string): void {
       // fall through to openExternal
     }
   }
-  window.electronAPI.shell.openExternal(href)
+  window.batAppAPI.shell.openExternal(href)
 }

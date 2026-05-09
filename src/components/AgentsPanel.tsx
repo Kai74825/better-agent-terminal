@@ -27,7 +27,7 @@ export function AgentsPanel({ isVisible, activeSessionId }: AgentsPanelProps) {
     }
 
     const fetchAgents = () => {
-      window.electronAPI.claude.getSupportedAgents(activeSessionId).then(result => {
+      window.batAppAPI.claude.getSupportedAgents(activeSessionId).then(result => {
         if (result?.length) {
           setAgents(result)
           if (retryRef.current) { clearInterval(retryRef.current); retryRef.current = null }

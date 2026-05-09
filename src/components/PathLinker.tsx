@@ -228,14 +228,14 @@ export function FilePreviewModal({ filePath: rawFilePath, onClose }: FilePreview
     setLoading(true)
     const ext = getExt(filePath)
     if (IMAGE_EXTS.has(ext)) {
-      window.electronAPI.image.readAsDataUrl(filePath).then(url => {
+      window.batAppAPI.image.readAsDataUrl(filePath).then(url => {
         if (!cancelled) { setImageUrl(url); setLoading(false) }
       }).catch(() => {
         if (!cancelled) { setError('Failed to load image'); setLoading(false) }
       })
     } else {
       // Read as text — works for known and unknown text extensions
-      window.electronAPI.fs.readFile(filePath).then(result => {
+      window.batAppAPI.fs.readFile(filePath).then(result => {
         if (cancelled) return
         if (result.error) {
           setError(result.error === 'File too large' ? `File too large (${Math.round((result.size || 0) / 1024)}KB)` : result.error)
@@ -357,7 +357,7 @@ export function FilePreviewModal({ filePath: rawFilePath, onClose }: FilePreview
           </button>
           <button
             className="path-preview-btn"
-            onClick={() => window.electronAPI.shell.openPath(filePath)}
+            onClick={() => window.batAppAPI.shell.openPath(filePath)}
             title="Open with system default app"
           >
             &#8599;
@@ -425,7 +425,7 @@ export function LinkedText({ text }: LinkedTextProps) {
   const handleUrl = useCallback((url: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    window.electronAPI.shell.openExternal(url)
+    window.batAppAPI.shell.openExternal(url)
   }, [])
 
   if (typeof text !== 'string') return <>{text}</>

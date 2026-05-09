@@ -100,7 +100,7 @@ export default function App() {
   // Panel settings for resizable panels
   const [panelSettings, setPanelSettings] = useState<PanelSettings>(loadPanelSettings)
   // Detached workspace support
-  const [detachedWorkspaceId] = useState(() => window.electronAPI.workspace.getDetachedId())
+  const [detachedWorkspaceId] = useState(() => window.batAppAPI.workspace.getDetachedId())
   const [detachedIds, setDetachedIds] = useState<Set<string>>(new Set())
   // Track workspaces that have been visited (for lazy mounting)
   const [mountedWorkspaces, setMountedWorkspaces] = useState<Set<string>>(new Set())
@@ -109,11 +109,11 @@ export default function App() {
   const [windowIndex, setWindowIndex] = useState<number>(1)
   const [authInfo, setAuthInfo] = useState<{ email?: string; subscriptionType?: string } | null>(null)
   useEffect(() => {
-    window.electronAPI.app.getWindowIndex().then(setWindowIndex)
+    window.batAppAPI.app.getWindowIndex().then(setWindowIndex)
   }, [])
   useEffect(() => {
     const fetchAuth = () => {
-      window.electronAPI.claude.authStatus().then(info => {
+      window.batAppAPI.claude.authStatus().then(info => {
         if (info) setAuthInfo({ email: info.email, subscriptionType: info.subscriptionType })
       }).catch(() => {})
     }
@@ -229,7 +229,7 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        window.electronAPI.app.newWindow()
+        window.batAppAPI.app.newWindow()
       }
     }
     window.addEventListener('keydown', handler)
@@ -248,16 +248,16 @@ export default function App() {
       const isBackquote = e.key === '`' || e.code === 'Backquote'
 
       // Windows: Ctrl+` cycles between BAT app windows.
-      if (window.electronAPI.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
+      if (window.batAppAPI.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
         e.preventDefault()
-        window.electronAPI.app.focusNextWindow()
+        window.batAppAPI.app.focusNextWindow()
         return
       }
 
       // Ctrl+Tab (Win + Mac): jump to window with most recent unread notification.
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'Tab' || e.code === 'Tab')) {
         e.preventDefault()
-        window.electronAPI.notification.focusLatestUnread()
+        window.batAppAPI.notification.focusLatestUnread()
         return
       }
 
@@ -350,30 +350,30 @@ export default function App() {
 
     // Global listener for all terminal output - updates activity for ALL terminals
     // This is needed because WorkspaceView only renders terminals for the active workspace
-    const unsubscribeOutput = window.electronAPI.pty.onOutput((id) => {
+    const unsubscribeOutput = window.batAppAPI.pty.onOutput((id) => {
       workspaceStore.updateTerminalActivity(id)
     })
 
     // Load saved workspaces and settings on startup
     // If launched with --profile, use that profile instead of the stored active one
-    const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+    const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
     const htmlT0 = (window as unknown as { __t0?: number }).__t0 || Date.now()
     dlog(`[startup] App useEffect fired: +${Date.now() - htmlT0}ms from HTML`)
     const initProfile = async () => {
       const t0 = performance.now()
       try {
-        const launchProfileId = await window.electronAPI.app.getLaunchProfile()
+        const launchProfileId = await window.batAppAPI.app.getLaunchProfile()
         dlog(`[init] getLaunchProfile: ${(performance.now() - t0).toFixed(0)}ms`)
 
         const t1 = performance.now()
-        const result = await window.electronAPI.profile.list()
+        const result = await window.batAppAPI.profile.list()
         dlog(`[init] profile.list: ${(performance.now() - t1).toFixed(0)}ms`)
 
         // Determine which profile this window should use:
         // 1. Launch profile (--profile= argument) takes priority
         // 2. Window registry's profileId (per-window binding)
         // 3. First active profile as fallback
-        const windowProfileId = await window.electronAPI.app.getWindowProfile()
+        const windowProfileId = await window.batAppAPI.app.getWindowProfile()
         const profileId = launchProfileId || windowProfileId || result.activeProfileIds[0]
         let active = result.profiles.find(p => p.id === profileId)
 
@@ -384,7 +384,7 @@ export default function App() {
         // connection (e.g. launched with --profile=<local-remote-alias>).
         if (!active && profileId) {
           try {
-            const localResult = await window.electronAPI.profile.listLocal()
+            const localResult = await window.batAppAPI.profile.listLocal()
             active = localResult.profiles.find(p => p.id === profileId)
           } catch {
             // listLocal may not exist on older builds — fall through
@@ -394,7 +394,7 @@ export default function App() {
         if (active?.type === 'remote' && active.remoteHost && active.remoteToken && active.remoteFingerprint) {
           // Try connecting to remote
           const tRemote = performance.now()
-          const connectResult = await window.electronAPI.remote.connect(
+          const connectResult = await window.batAppAPI.remote.connect(
             active.remoteHost,
             active.remotePort || 9876,
             active.remoteToken,
@@ -411,12 +411,12 @@ export default function App() {
             // Main window: fall back to first local profile
             const localProfile = result.profiles.find(p => p.type !== 'remote')
             if (localProfile) {
-              await window.electronAPI.profile.load(localProfile.id)
-              const winIdx = await window.electronAPI.app.getWindowIndex()
+              await window.batAppAPI.profile.load(localProfile.id)
+              const winIdx = await window.batAppAPI.app.getWindowIndex()
               setActiveProfileName(`${localProfile.name}:${winIdx}`)
             }
           } else {
-            const winIdx = await window.electronAPI.app.getWindowIndex()
+            const winIdx = await window.batAppAPI.app.getWindowIndex()
             setActiveProfileName(`${active.name}:${winIdx}`)
             setIsRemoteConnected(true)
           }
@@ -429,27 +429,27 @@ export default function App() {
           }
           const localProfile = result.profiles.find(p => p.type !== 'remote')
           if (localProfile) {
-            await window.electronAPI.profile.load(localProfile.id)
-            const winIdx = await window.electronAPI.app.getWindowIndex()
+            await window.batAppAPI.profile.load(localProfile.id)
+            const winIdx = await window.batAppAPI.app.getWindowIndex()
             setActiveProfileName(`${localProfile.name}:${winIdx}`)
           }
         } else if (active) {
           // For local profiles opened in a new window, load the profile snapshot
           // so workspaces.json reflects this profile's data (not the previous profile's)
           if (launchProfileId) {
-            await window.electronAPI.profile.load(active.id)
+            await window.batAppAPI.profile.load(active.id)
           }
-          const winIdx = await window.electronAPI.app.getWindowIndex()
+          const winIdx = await window.batAppAPI.app.getWindowIndex()
           setActiveProfileName(`${active.name}:${winIdx}`)
         } else if (result.profiles.length > 0) {
           // Fallback: activeProfileId didn't match any profile — use first local profile
           const fallback = result.profiles.find(p => p.type !== 'remote') || result.profiles[0]
-          const winIdx = await window.electronAPI.app.getWindowIndex()
+          const winIdx = await window.batAppAPI.app.getWindowIndex()
           setActiveProfileName(`${fallback.name}:${winIdx}`)
         }
 
         // Store windowId for cross-window workspace drag
-        const winId = await window.electronAPI.app.getWindowId()
+        const winId = await window.batAppAPI.app.getWindowId()
         if (winId) workspaceStore.setWindowId(winId)
 
         const tLoad = performance.now()
@@ -478,18 +478,18 @@ export default function App() {
     initProfile()
 
     // Listen for system resume from sleep/hibernate — refresh remote connection status
-    const unsubSystemResume = window.electronAPI.system.onResume(() => {
-      window.electronAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+    const unsubSystemResume = window.batAppAPI.system.onResume(() => {
+      window.batAppAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     })
 
     // Listen for cross-window workspace reload
     const unsubReload = workspaceStore.listenForReload()
 
     // Listen for workspace detach/reattach events (main window only)
-    const unsubDetach = window.electronAPI.workspace.onDetached((wsId) => {
+    const unsubDetach = window.batAppAPI.workspace.onDetached((wsId) => {
       setDetachedIds(prev => new Set(prev).add(wsId))
     })
-    const unsubReattach = window.electronAPI.workspace.onReattached((wsId) => {
+    const unsubReattach = window.batAppAPI.workspace.onReattached((wsId) => {
       setDetachedIds(prev => {
         const next = new Set(prev)
         next.delete(wsId)
@@ -510,7 +510,7 @@ export default function App() {
   // Poll remote client connection status
   useEffect(() => {
     const check = () => {
-      window.electronAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+      window.batAppAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     }
     check()
     const interval = setInterval(check, 3000)
@@ -535,7 +535,7 @@ export default function App() {
 
 
   const handleDetachWorkspace = useCallback(async (workspaceId: string) => {
-    await window.electronAPI.workspace.detach(workspaceId)
+    await window.batAppAPI.workspace.detach(workspaceId)
   }, [])
 
   // Paste content to focused PTY terminal
@@ -551,7 +551,7 @@ export default function App() {
     }
 
     if (terminalId) {
-      window.electronAPI.pty.write(terminalId, content)
+      window.batAppAPI.pty.write(terminalId, content)
     } else {
       console.warn('No terminal available to paste to')
     }
@@ -580,7 +580,7 @@ export default function App() {
     }
 
     if (terminalId) {
-      window.electronAPI.claude.sendMessage(terminalId, content)
+      window.batAppAPI.claude.sendMessage(terminalId, content)
     } else {
       console.warn('No Claude agent session available')
     }
@@ -588,7 +588,7 @@ export default function App() {
 
   // Open profile in a new app instance (or focus if already open)
   const handleProfileNewWindow = useCallback(async (profileId: string) => {
-    const result = await window.electronAPI.app.openNewInstance(profileId)
+    const result = await window.batAppAPI.app.openNewInstance(profileId)
     if (result?.alreadyOpen) {
       setAppNotification(t('profiles.alreadyOpen'))
     }
@@ -816,9 +816,9 @@ export default function App() {
           onClose={() => setShowProfiles(false)}
           onSwitchNewWindow={handleProfileNewWindow}
           onProfileRenamed={async (profileId, newName) => {
-            const wpId = await window.electronAPI.app.getWindowProfile()
+            const wpId = await window.batAppAPI.app.getWindowProfile()
             if (wpId === profileId) {
-              const winIdx = await window.electronAPI.app.getWindowIndex()
+              const winIdx = await window.batAppAPI.app.getWindowIndex()
               setActiveProfileName(`${newName}:${winIdx}`)
             }
           }}

@@ -103,11 +103,11 @@ export function Sidebar({
     if (!contextMenu) { setGithubUrl(null); setAgentResting(false); return }
     const ws = workspaces.find(w => w.id === contextMenu.workspaceId)
     if (!ws) return
-    window.electronAPI.git.getGithubUrl(ws.folderPath).then(url => setGithubUrl(url))
+    window.batAppAPI.git.getGithubUrl(ws.folderPath).then(url => setGithubUrl(url))
     // Check if agent session is resting
     const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)
     if (agent) {
-      window.electronAPI.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
+      window.batAppAPI.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
     }
   }, [contextMenu, workspaces])
 
@@ -125,7 +125,7 @@ export function Sidebar({
   }, [contextMenu])
 
   const moveWorkspaceToWindow = useCallback(async (sourceWindowId: string, targetWindowId: string, workspaceId: string, insertIndex: number) => {
-    const ok = await window.electronAPI.workspace.moveToWindow(sourceWindowId, targetWindowId, workspaceId, insertIndex)
+    const ok = await window.batAppAPI.workspace.moveToWindow(sourceWindowId, targetWindowId, workspaceId, insertIndex)
     if (!ok) window.alert('Workspace moves only work between host windows, or between remote windows on the same remote.')
   }, [])
 
@@ -383,7 +383,7 @@ export function Sidebar({
           const files = Array.from(e.dataTransfer.files)
           let added = 0
           for (const file of files) {
-            const filePath = window.electronAPI.shell.getPathForFile(file)
+            const filePath = window.batAppAPI.shell.getPathForFile(file)
             if (filePath) {
               const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
               workspaceStore.addWorkspace(name, filePath)
@@ -499,7 +499,7 @@ export function Sidebar({
             className="context-menu-item"
             onClick={() => {
               const ws = workspaces.find(w => w.id === contextMenu.workspaceId)
-              if (ws) window.electronAPI.shell.openPath(ws.folderPath)
+              if (ws) window.batAppAPI.shell.openPath(ws.folderPath)
               setContextMenu(null)
             }}
           >
@@ -527,7 +527,7 @@ export function Sidebar({
             <div
               className="context-menu-item"
               onClick={() => {
-                window.electronAPI.shell.openExternal(githubUrl)
+                window.batAppAPI.shell.openExternal(githubUrl)
                 setContextMenu(null)
               }}
             >
@@ -622,9 +622,9 @@ export function Sidebar({
                 className="context-menu-item"
                 onClick={async () => {
                   if (agentResting) {
-                    await window.electronAPI.claude.wakeSession(agent.id)
+                    await window.batAppAPI.claude.wakeSession(agent.id)
                   } else {
-                    await window.electronAPI.claude.restSession(agent.id)
+                    await window.batAppAPI.claude.restSession(agent.id)
                   }
                   setContextMenu(null)
                 }}

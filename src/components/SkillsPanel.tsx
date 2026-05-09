@@ -44,7 +44,7 @@ export function SkillsPanel({ isVisible, activeCwd, activeSessionId }: SkillsPan
     }
 
     const fetchCommands = () => {
-      window.electronAPI.claude.getSupportedCommands(activeSessionId).then(cmds => {
+      window.batAppAPI.claude.getSupportedCommands(activeSessionId).then(cmds => {
         if (cmds?.length) {
           setSdkCommands(cmds.map(c => ({
             name: c.name,
@@ -87,7 +87,7 @@ export function SkillsPanel({ isVisible, activeCwd, activeSessionId }: SkillsPan
       setFsCommands([])
       return
     }
-    window.electronAPI.claude.scanSkills(activeCwd).then(results => {
+    window.batAppAPI.claude.scanSkills(activeCwd).then(results => {
       setFsCommands(results)
     }).catch(() => setFsCommands([]))
   }, [activeCwd])

@@ -8,7 +8,7 @@ import { settingsStore } from '../stores/settings-store'
 import type { AgentPresetId } from '../types/agent-presets'
 import '@xterm/xterm/css/xterm.css'
 
-const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
 
 interface TerminalPanelProps {
   terminalId: string
@@ -25,8 +25,8 @@ interface ContextMenu {
 }
 
 function getWindowsBuildNumber(): number | undefined {
-  if (window.electronAPI.platform !== 'win32') return undefined
-  const version = window.electronAPI.systemVersion
+  if (window.batAppAPI.platform !== 'win32') return undefined
+  const version = window.batAppAPI.systemVersion
   const build = Number(version.split('.').pop())
   return Number.isFinite(build) ? build : undefined
 }
@@ -69,7 +69,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       }
       const chunk = text.slice(offset, offset + CHUNK_SIZE)
       offset += CHUNK_SIZE
-      window.electronAPI.pty.write(terminalId, chunk)
+      window.batAppAPI.pty.write(terminalId, chunk)
       setTimeout(sendNext, DELAY)
     }
     sendNext()
@@ -92,7 +92,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       const sizeLabel = text.length > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`
       const lines = text.split('\n').length
 
-      const confirmed = await window.electronAPI.dialog.confirm(
+      const confirmed = await window.batAppAPI.dialog.confirm(
         `About to paste a large text:\n\n• Size: ${sizeLabel} (${text.length.toLocaleString()} chars)\n• Lines: ${lines.toLocaleString()}\n\nThis may take a moment. Continue?`,
         'Large Paste Warning'
       )
@@ -102,16 +102,16 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
     if (text.length > 4000) {
       writeChunked(text)
     } else {
-      window.electronAPI.pty.write(terminalId, text)
+      window.batAppAPI.pty.write(terminalId, text)
     }
   }
 
   const handlePasteImage = async () => {
-    const filePath = await window.electronAPI.clipboard.saveImage()
+    const filePath = await window.batAppAPI.clipboard.saveImage()
     if (!filePath) return false
-    const written = await window.electronAPI.clipboard.writeImage(filePath)
+    const written = await window.batAppAPI.clipboard.writeImage(filePath)
     if (!written) return false
-    window.electronAPI.pty.write(terminalId, '\x1bv')
+    window.batAppAPI.pty.write(terminalId, '\x1bv')
     return true
   }
 
@@ -190,7 +190,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
                 setTimeout(() => {
                   const currentTerminal = workspaceStore.getState().terminals.find(t => t.id === terminalId)
                   if (isActiveRef.current && currentTerminal && !currentTerminal.hasUserInput && !currentTerminal.agentCommandSent) {
-                    window.electronAPI.pty.write(terminalId, agentCommand + '\r')
+                    window.batAppAPI.pty.write(terminalId, agentCommand + '\r')
                     workspaceStore.markAgentCommandSent(terminalId)
                   }
                 }, 3000)
@@ -266,7 +266,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       convertEol: true,
       allowProposedApi: true,
       allowTransparency: true,
-      windowsPty: window.electronAPI.platform === 'win32'
+      windowsPty: window.batAppAPI.platform === 'win32'
         ? {
             backend: 'conpty',
             buildNumber: windowsBuildNumber
@@ -278,7 +278,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
     const unicode11Addon = new Unicode11Addon()
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       // Open URL in default browser
-      window.electronAPI.shell.openExternal(uri)
+      window.batAppAPI.shell.openExternal(uri)
     })
     terminal.loadAddon(fitAddon)
     terminal.loadAddon(webLinksAddon)
@@ -306,7 +306,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
               end: { x: endX, y: bufferLineNumber }
             },
             activate(_event, text) {
-              window.electronAPI.shell.openExternal(text)
+              window.batAppAPI.shell.openExternal(text)
             }
           })
         }
@@ -324,7 +324,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
         lastSentCols = cols
         lastSentRows = rows
         dlog(`[resize] pty.resize cols=${cols} rows=${rows} terminal=${terminalId}`)
-        window.electronAPI.pty.resize(terminalId, cols, rows)
+        window.batAppAPI.pty.resize(terminalId, cols, rows)
       }
     }
     doResizeRef.current = doResize
@@ -366,7 +366,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
 
     // Handle terminal input
     terminal.onData((data) => {
-      window.electronAPI.pty.write(terminalId, data)
+      window.batAppAPI.pty.write(terminalId, data)
       // Mark terminal as having user input (for agent command tracking)
       if (terminalType === 'code-agent') {
         workspaceStore.markHasUserInput(terminalId)
@@ -401,7 +401,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       if (event.shiftKey && event.key === 'Enter') {
         event.preventDefault()
         // Send newline character to allow multiline input
-        window.electronAPI.pty.write(terminalId, '\n')
+        window.batAppAPI.pty.write(terminalId, '\n')
         return false
       }
       // Ctrl+Shift+C for copy
@@ -450,7 +450,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
     containerEl.addEventListener('contextmenu', onContextMenu)
 
     // Handle terminal output
-    const unsubscribeOutput = window.electronAPI.pty.onOutput((id, data) => {
+    const unsubscribeOutput = window.batAppAPI.pty.onOutput((id, data) => {
       if (id === terminalId) {
         terminal.write(data)
         // Update activity time when there's output
@@ -459,7 +459,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
     })
 
     // Handle terminal exit
-    const unsubscribeExit = window.electronAPI.pty.onExit((id, exitCode) => {
+    const unsubscribeExit = window.batAppAPI.pty.onExit((id, exitCode) => {
       if (id === terminalId) {
         terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`)
         if (settingsStore.getCloseTerminalAfterProcessExit()) {

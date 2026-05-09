@@ -42,10 +42,10 @@ class NotificationStore {
     if (this.subscribed) return
     this.subscribed = true
     try {
-      this.entries = await window.electronAPI.notification.list()
+      this.entries = await window.batAppAPI.notification.list()
       this.emit()
     } catch { /* ignore */ }
-    this.unsubscribePush = window.electronAPI.notification.onUpdate((entries) => {
+    this.unsubscribePush = window.batAppAPI.notification.onUpdate((entries) => {
       this.entries = entries
       this.emit()
     })
@@ -58,23 +58,23 @@ class NotificationStore {
   }
 
   async markRead(id: string): Promise<void> {
-    await window.electronAPI.notification.markRead(id)
+    await window.batAppAPI.notification.markRead(id)
   }
 
   async markAllRead(): Promise<void> {
-    await window.electronAPI.notification.markAllRead()
+    await window.batAppAPI.notification.markAllRead()
   }
 
   async clear(): Promise<void> {
-    await window.electronAPI.notification.clear()
+    await window.batAppAPI.notification.clear()
   }
 
   async focusEntry(id: string): Promise<void> {
-    await window.electronAPI.notification.focusEntry(id)
+    await window.batAppAPI.notification.focusEntry(id)
   }
 
   async focusLatestUnread(): Promise<{ id: string; windowId: string } | null> {
-    return window.electronAPI.notification.focusLatestUnread()
+    return window.batAppAPI.notification.focusLatestUnread()
   }
 }
 

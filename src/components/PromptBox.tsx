@@ -45,18 +45,18 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
 
     // Order: text first (no Enter) → attach image → Enter to submit
     if (content) {
-      await window.electronAPI.pty.write(terminalId, content)
+      await window.batAppAPI.pty.write(terminalId, content)
       await new Promise(resolve => setTimeout(resolve, 100))
     }
 
     if (imagePath) {
-      await window.electronAPI.clipboard.writeImage(imagePath)
+      await window.batAppAPI.clipboard.writeImage(imagePath)
       await new Promise(resolve => setTimeout(resolve, 100))
-      await window.electronAPI.pty.write(terminalId, '\x1bv')
+      await window.batAppAPI.pty.write(terminalId, '\x1bv')
       await new Promise(resolve => setTimeout(resolve, 800))
     }
 
-    await window.electronAPI.pty.write(terminalId, '\r')
+    await window.batAppAPI.pty.write(terminalId, '\r')
 
     setText('')
     setImagePath(null)
@@ -130,7 +130,7 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault()
-        const filePath = await window.electronAPI.clipboard.saveImage()
+        const filePath = await window.batAppAPI.clipboard.saveImage()
         if (filePath) {
           setImagePath(filePath)
         }

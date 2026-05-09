@@ -7,7 +7,7 @@ import { settingsStore } from '../stores/settings-store'
 import { parseProcfile } from '../utils/procfile-parser'
 import '@xterm/xterm/css/xterm.css'
 
-const dlog = (...args: unknown[]) => window.electronAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
 
 const WORKER_COLORS = [
   '#61afef', '#98c379', '#e5c07b', '#c678dd',
@@ -44,7 +44,7 @@ async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
   } catch {
-    try { await window.electronAPI.clipboard.writeText(text) } catch { /* ignore */ }
+    try { await window.batAppAPI.clipboard.writeText(text) } catch { /* ignore */ }
   }
 }
 
@@ -180,7 +180,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     if (batch.length === 0) return
     pendingBatchRef.current = []
     const lines = batch.map(e => JSON.stringify(e)).join('\n') + '\n'
-    await window.electronAPI.workerBuffer.append(terminalId, lines)
+    await window.batAppAPI.workerBuffer.append(terminalId, lines)
   }, [terminalId])
 
   // Schedule a flush (debounced 500ms)
@@ -235,7 +235,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     }
     await flushToDisk()
 
-    const raw = await window.electronAPI.workerBuffer.readAll(terminalId)
+    const raw = await window.batAppAPI.workerBuffer.readAll(terminalId)
     const entries: Array<{ name: string; color: string; data: string }> = raw
       ? raw.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
       : []
@@ -254,7 +254,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     }
     await flushToDisk()
 
-    const raw = await window.electronAPI.workerBuffer.readAll(terminalId)
+    const raw = await window.batAppAPI.workerBuffer.readAll(terminalId)
     const entries: Array<{ name: string; color: string; data: string }> = raw
       ? raw.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
       : []
@@ -273,7 +273,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       flushTimerRef.current = null
     }
     pendingBatchRef.current = []
-    await window.electronAPI.workerBuffer.clear(terminalId)
+    await window.batAppAPI.workerBuffer.clear(terminalId)
 
     midLineRef.current = new Map()
     const headerText = buildWorkerHeader(procfilePath, processesRef.current.length)
@@ -339,7 +339,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     ))
 
     ptyIdsRef.current.add(proc.ptyId)
-    await window.electronAPI.pty.create({
+    await window.batAppAPI.pty.create({
       id: proc.ptyId,
       cwd: processCwd,
       type: 'terminal',
@@ -350,7 +350,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     // Use exec to replace the shell — pty exits when command exits
     const launch = buildLaunchCommand(shellRef.current, proc.command)
     setTimeout(() => {
-      window.electronAPI.pty.write(proc.ptyId, launch)
+      window.batAppAPI.pty.write(proc.ptyId, launch)
       setProcesses(prev => prev.map(p =>
         p.ptyId === proc.ptyId && p.status === 'starting' ? { ...p, status: 'running' as const } : p
       ))
@@ -359,7 +359,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
 
   // Re-read Procfile and sync process list (add new, remove deleted, update commands)
   const reloadProcfile = useCallback(async () => {
-    const result = await window.electronAPI.fs.readFile(procfilePath)
+    const result = await window.batAppAPI.fs.readFile(procfilePath)
     if (result.error || !result.content) return
     const entries = parseProcfile(result.content)
     if (entries.length === 0) return
@@ -373,7 +373,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     for (const proc of current) {
       if (!newNames.has(proc.name)) {
         if (proc.status === 'running' || proc.status === 'starting') {
-          window.electronAPI.pty.kill(proc.ptyId)
+          window.batAppAPI.pty.kill(proc.ptyId)
           ptyIdsRef.current.delete(proc.ptyId)
         }
         writeOutput(proc.name, proc.color, `\n\x1b[90mRemoved from Procfile\x1b[0m\n`)
@@ -414,7 +414,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     const fresh = processesRef.current.find(p => p.name === proc.name)
     if (!fresh) return
     dlog(`[worker] stopping process: ${fresh.name}`)
-    window.electronAPI.pty.kill(fresh.ptyId)
+    window.batAppAPI.pty.kill(fresh.ptyId)
     ptyIdsRef.current.delete(fresh.ptyId)
   }, [reloadProcfile])
 
@@ -425,7 +425,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     if (!fresh) return // process was removed from Procfile
 
     dlog(`[worker] restarting process: ${fresh.name}`)
-    await window.electronAPI.pty.kill(fresh.ptyId)
+    await window.batAppAPI.pty.kill(fresh.ptyId)
     ptyIdsRef.current.delete(fresh.ptyId)
 
     midLineRef.current.set(fresh.name, false)
@@ -446,7 +446,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     for (const p of processesRef.current) {
       if (p.status === 'running' || p.status === 'starting') {
         dlog(`[worker] stopping process: ${p.name}`)
-        window.electronAPI.pty.kill(p.ptyId)
+        window.batAppAPI.pty.kill(p.ptyId)
         ptyIdsRef.current.delete(p.ptyId)
       }
     }
@@ -458,7 +458,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     for (const p of procs) {
       dlog(`[worker] restarting process: ${p.name}`)
       if (p.status === 'running' || p.status === 'starting') {
-        await window.electronAPI.pty.kill(p.ptyId)
+        await window.batAppAPI.pty.kill(p.ptyId)
         ptyIdsRef.current.delete(p.ptyId)
       }
       midLineRef.current.set(p.name, false)
@@ -501,7 +501,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     const fitAddon = new FitAddon()
     const unicode11Addon = new Unicode11Addon()
     const webLinksAddon = new WebLinksAddon((_, uri) => {
-      window.electronAPI.shell.openExternal(uri)
+      window.batAppAPI.shell.openExternal(uri)
     })
     terminal.loadAddon(fitAddon)
     terminal.loadAddon(webLinksAddon)
@@ -556,7 +556,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       if (sel) void copyText(sel)
     }
     document.addEventListener('keydown', onDocKeyDown, true)
-    const unsubscribeCopyShortcut = window.electronAPI.clipboard.onCopyShortcut(onCopyShortcut)
+    const unsubscribeCopyShortcut = window.batAppAPI.clipboard.onCopyShortcut(onCopyShortcut)
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
@@ -570,7 +570,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
         lastCols = cols
         lastRows = rows
         for (const id of ptyIdsRef.current) {
-          window.electronAPI.pty.resize(id, cols, rows)
+          window.batAppAPI.pty.resize(id, cols, rows)
         }
       }
     }
@@ -589,7 +589,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     setTimeout(() => doResize(), 100)
 
     // Event listeners
-    const unsubOutput = window.electronAPI.pty.onOutput((id, data) => {
+    const unsubOutput = window.batAppAPI.pty.onOutput((id, data) => {
       const proc = processesRef.current.find(p => p.ptyId === id)
       if (proc) {
         if (proc.status !== 'running') {
@@ -601,7 +601,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       }
     })
 
-    const unsubExit = window.electronAPI.pty.onExit((id, exitCode) => {
+    const unsubExit = window.batAppAPI.pty.onExit((id, exitCode) => {
       const proc = processesRef.current.find(p => p.ptyId === id)
       if (!proc) return
       ptyIdsRef.current.delete(id)
@@ -632,9 +632,9 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     // --- Async: read Procfile and start processes ---
     ;(async () => {
       // Init worker buffer file on disk
-      await window.electronAPI.workerBuffer.init(terminalId)
+      await window.batAppAPI.workerBuffer.init(terminalId)
 
-      const remoteStatus = await window.electronAPI.remote.clientStatus().catch(() => ({ connected: false }))
+      const remoteStatus = await window.batAppAPI.remote.clientStatus().catch(() => ({ connected: false }))
       const isRemoteClient = remoteStatus.connected === true
       isRemoteClientRef.current = isRemoteClient
 
@@ -642,11 +642,11 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       if (settings.shell === 'custom' && settings.customShellPath) {
         shellRef.current = settings.customShellPath
       } else {
-        shellRef.current = await window.electronAPI.settings.getShellPath(settings.shell)
+        shellRef.current = await window.batAppAPI.settings.getShellPath(settings.shell)
       }
 
       // Read Procfile
-      const result = await window.electronAPI.fs.readFile(procfilePath)
+      const result = await window.batAppAPI.fs.readFile(procfilePath)
       if (disposed) return
       if (result.error || !result.content) {
         setError(result.error || 'Empty Procfile')
@@ -671,7 +671,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       }))
 
       for (const proc of procs) {
-        const existingCwd = await window.electronAPI.pty.getCwd(proc.ptyId).catch(() => null)
+        const existingCwd = await window.batAppAPI.pty.getCwd(proc.ptyId).catch(() => null)
         if (existingCwd) {
           proc.status = 'running'
           ptyIdsRef.current.add(proc.ptyId)
@@ -709,7 +709,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       terminal.dispose()
       terminalRef.current = null
       fitAddonRef.current = null
-      window.electronAPI.workerBuffer.clear(terminalId)
+      window.batAppAPI.workerBuffer.clear(terminalId)
       if (isRemoteClientRef.current) return
       const idsToKill = new Set([
         ...ptyIdsRef.current,
@@ -717,7 +717,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       ])
       ptyIdsRef.current.clear()
       for (const id of idsToKill) {
-        window.electronAPI.pty.kill(id)
+        window.batAppAPI.pty.kill(id)
       }
     }
   }, [terminalId, procfilePath, processCwd, writeOutput, startProcess])

@@ -557,7 +557,7 @@ class WorkspaceStore {
     const settings = settingsStore.getSettings()
     if (settings.showDockBadge === false) return
     const count = this.state.terminals.filter(t => t.hasPendingAction).length
-    window.electronAPI?.app?.setDockBadge?.(count)
+    window.batAppAPI?.app?.setDockBadge?.(count)
   }
 
   getWorkspaceLastActivity(workspaceId: string): number | null {
@@ -574,7 +574,7 @@ class WorkspaceStore {
   getWindowId(): string | null { return this.windowId }
 
   listenForReload(): () => void {
-    return window.electronAPI.workspace.onReload((data?: string) => {
+    return window.batAppAPI.workspace.onReload((data?: string) => {
       if (data) {
         this.applySerializedData(data, { preserveActiveSelection: true })
         return
@@ -619,7 +619,7 @@ class WorkspaceStore {
         terminals: savedTerminals,
         activeTerminalId: this.state.activeTerminalId,
       })
-      await window.electronAPI.workspace.save(data)
+      await window.batAppAPI.workspace.save(data)
     }).catch(e => {
       console.error('Failed to save workspace data:', e)
     })
@@ -628,7 +628,7 @@ class WorkspaceStore {
   }
 
   async load(): Promise<void> {
-    const data = await window.electronAPI.workspace.load()
+    const data = await window.batAppAPI.workspace.load()
     if (data) {
       this.applySerializedData(data)
     }
@@ -643,7 +643,7 @@ class WorkspaceStore {
       const terminals = (parsed.terminals || []).map((t: Partial<TerminalInstance>): TerminalInstance | null => {
         const ws = t.workspaceId ? workspaceMap.get(t.workspaceId) : undefined
         if (!ws?.folderPath) {
-          window.electronAPI?.debug?.log?.(`[workspace-store] Warning: terminal ${t.id} has no valid workspace, skipping`)
+          window.batAppAPI?.debug?.log?.(`[workspace-store] Warning: terminal ${t.id} has no valid workspace, skipping`)
           return null
         }
         const cwd = ws.folderPath
@@ -697,7 +697,7 @@ class WorkspaceStore {
       this.activeGroup = parsed.activeGroup || null
       this.notify()
     } catch (e) {
-      window.electronAPI?.debug?.log?.(`Failed to parse workspace data: ${e}`)
+      window.batAppAPI?.debug?.log?.(`Failed to parse workspace data: ${e}`)
       console.error('Failed to parse workspace data:', e)
     }
   }

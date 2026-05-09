@@ -24,7 +24,7 @@ export function MarkdownPreviewPanel({ filePath, onClose }: MarkdownPreviewPanel
   const fileName = filePath.split(/[/\\]/).pop() || filePath
 
   const loadContent = useCallback(() => {
-    window.electronAPI.fs.readFile(filePath).then(result => {
+    window.batAppAPI.fs.readFile(filePath).then(result => {
       if (result.error) {
         setError(result.error)
         setContent(null)
@@ -176,10 +176,10 @@ export function MarkdownPreviewPanel({ filePath, onClose }: MarkdownPreviewPanel
     const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
     const dir = lastSlash > 0 ? filePath.substring(0, lastSlash) : filePath
 
-    window.electronAPI.fs.watch(dir)
+    window.batAppAPI.fs.watch(dir)
     watchingDir.current = dir
 
-    const unsub = window.electronAPI.fs.onChanged((changedDir: string) => {
+    const unsub = window.batAppAPI.fs.onChanged((changedDir: string) => {
       if (filePath.startsWith(changedDir)) {
         loadContent()
       }
@@ -187,7 +187,7 @@ export function MarkdownPreviewPanel({ filePath, onClose }: MarkdownPreviewPanel
 
     return () => {
       if (watchingDir.current) {
-        window.electronAPI.fs.unwatch(watchingDir.current)
+        window.batAppAPI.fs.unwatch(watchingDir.current)
         watchingDir.current = null
       }
       unsub()
@@ -208,7 +208,7 @@ export function MarkdownPreviewPanel({ filePath, onClose }: MarkdownPreviewPanel
           </button>
           <button
             className="md-preview-action-btn"
-            onClick={() => window.electronAPI.shell.openPath(filePath)}
+            onClick={() => window.batAppAPI.shell.openPath(filePath)}
             title={t('sidebar.openInExplorer')}
           >
             &#x2197;

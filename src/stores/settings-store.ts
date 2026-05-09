@@ -305,7 +305,7 @@ class SettingsStore {
     this.settings = { ...this.settings, showDockBadge: show }
     this.notify()
     this.save()
-    if (!show) window.electronAPI?.app?.setDockBadge?.(0)
+    if (!show) window.batAppAPI?.app?.setDockBadge?.(0)
   }
 
   setNotifyOnComplete(enabled: boolean): void {
@@ -411,11 +411,11 @@ class SettingsStore {
 
   async save(): Promise<void> {
     const data = JSON.stringify(this.settings)
-    await window.electronAPI.settings.save(data)
+    await window.batAppAPI.settings.save(data)
   }
 
   async load(): Promise<void> {
-    const data = await window.electronAPI.settings.load()
+    const data = await window.batAppAPI.settings.load()
     if (data) {
       try {
         const parsed = JSON.parse(data)
