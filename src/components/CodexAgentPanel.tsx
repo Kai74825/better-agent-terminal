@@ -431,7 +431,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const tasks = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent') && m.status === 'running') as ClaudeToolCall[]
     const allTaskTools = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent')) as ClaudeToolCall[]
     if (allTaskTools.length > 0) {
-      window.batAppAPI.debug.log(`[renderer] activeTasks: ${tasks.length} running / ${allTaskTools.length} total Task/Agent tools (statuses: ${allTaskTools.map(t => `${t.id?.slice(0,8)}=${t.status}`).join(', ')})`)
+      host.debug.log(`[renderer] activeTasks: ${tasks.length} running / ${allTaskTools.length} total Task/Agent tools (statuses: ${allTaskTools.map(t => `${t.id?.slice(0,8)}=${t.status}`).join(', ')})`)
     }
     return tasks
   }, [allMessages])
@@ -518,7 +518,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     setHasMoreArchived(true)
     window.batAppAPI.claude.archiveMessages(sessionId, toArchive)
       .catch((err) => {
-        window.batAppAPI?.debug?.log?.('[CodexAgentPanel] archiveMessages failed:', String(err))
+        host.debug.log?.('[CodexAgentPanel] archiveMessages failed:', String(err))
       })
       .finally(() => { archivingRef.current = false })
   }, [messages.length, sessionId])
@@ -571,7 +571,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   useEffect(() => {
     const api = window.batAppAPI.claude
     const tag = `[Claude:${sessionId.slice(0, 8)}]`
-    window.batAppAPI?.debug?.log(`${tag} subscribing to IPC events`)
+    host.debug.log(`${tag} subscribing to IPC events`)
 
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
@@ -585,7 +585,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         // On restart, sys-init message arrives again — reset messages
         // But skip reset if history will be loaded (resume flow)
         if (message.id === `sys-init-${sessionId}`) {
-          window.batAppAPI?.debug?.log(`${tag} sys-init historyLoaded=${historyLoadedRef.current}`)
+          host.debug.log(`${tag} sys-init historyLoaded=${historyLoadedRef.current}`)
           if (!historyLoadedRef.current) {
             setMessages([message])
             // Clear archive on fresh session start
@@ -672,7 +672,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         if (sid !== sessionId) return
         workspaceStore.updateTerminalActivity(sessionId)
         const toolCall = tool as ClaudeToolCall
-        window.batAppAPI.debug.log(`[renderer] onToolUse name=${toolCall.toolName} id=${toolCall.id?.slice(0, 12)} status=${toolCall.status} parentToolUseId=${toolCall.parentToolUseId || 'none'}`)
+        host.debug.log(`[renderer] onToolUse name=${toolCall.toolName} id=${toolCall.id?.slice(0, 12)} status=${toolCall.status} parentToolUseId=${toolCall.parentToolUseId || 'none'}`)
         // Route subagent tool calls to separate bucket
         if (toolCall.parentToolUseId) {
           const bucket = subagentMessagesRef.current.get(toolCall.parentToolUseId) || []
@@ -707,9 +707,9 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         if (sid !== sessionId) return
         workspaceStore.updateTerminalActivity(sessionId)
         const { id, ...updates } = result as { id: string; status: string; result?: string; description?: string }
-        window.batAppAPI.debug.log(`[renderer] onToolResult id=${id?.slice(0, 24)} status=${updates.status || 'unknown'} hasResult=${updates.result ? 'yes' : 'no'}`)
+        host.debug.log(`[renderer] onToolResult id=${id?.slice(0, 24)} status=${updates.status || 'unknown'} hasResult=${updates.result ? 'yes' : 'no'}`)
         if ((updates as { description?: string }).description) {
-          window.batAppAPI.debug.log(`[renderer] onToolResult description update id=${id} desc=${(updates as { description?: string }).description}`)
+          host.debug.log(`[renderer] onToolResult description update id=${id} desc=${(updates as { description?: string }).description}`)
         }
         // Check if tool exists in any subagent bucket
         let foundInSubagent = false
@@ -833,7 +833,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       }),
 
       api.onStatus((sid: string, meta: unknown) => {
-        const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+        const dlog = (...args: unknown[]) => host.debug.log(...args)
         if (sid !== sessionId) {
           dlog(`${tag} SKIP onStatus sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
           return
@@ -944,7 +944,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           console.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
           return
         }
-        const dlog2 = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+        const dlog2 = (...args: unknown[]) => host.debug.log(...args)
         dlog2(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
         historyLoadedRef.current = true
         setIsResumingHistory(false)
@@ -994,7 +994,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           const prompt = t.pendingPrompt || ''
           const images = t.pendingImages
           workspaceStore.setTerminalPendingPrompt(sessionId, '')
-          window.batAppAPI?.debug?.log(`${tag} onHistory AUTO-SENDING pending prompt: "${prompt}" images=${images?.length ?? 0}`)
+          host.debug.log(`${tag} onHistory AUTO-SENDING pending prompt: "${prompt}" images=${images?.length ?? 0}`)
           // Set history + user message together so it doesn't get overwritten
           setMessages([...historyItems, {
             id: `user-fork-${Date.now()}`,
@@ -1046,7 +1046,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   // If a saved sdkSessionId exists (from a previous /resume), auto-resume that session
   useEffect(() => {
     const stag = `[Claude:${sessionId.slice(0, 8)}]`
-    const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+    const dlog = (...args: unknown[]) => host.debug.log(...args)
     let cancelled = false
     dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
@@ -1352,7 +1352,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   }, [sessionId, cwd, isV2Session])
 
   const handleForkSession = useCallback(async () => {
-    const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+    const dlog = (...args: unknown[]) => host.debug.log(...args)
     const tag = `[Fork:${sessionId.slice(0, 8)}]`
     dlog(`${tag} start hasSdkSession=${hasSdkSession} workspaceId=${workspaceId}`)
     if (!hasSdkSession || !workspaceId) return
@@ -3597,7 +3597,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       )}
 
       {/* Plan file bar — debug only */}
-      {window.batAppAPI?.debug?.isDebugMode && activePlanFile && dismissedPlanFileRef.current !== activePlanFile && (
+      {host.debug.isDebugMode && activePlanFile && dismissedPlanFileRef.current !== activePlanFile && (
         <div className="claude-plan-file-bar">
           <span className="claude-plan-file-label" style={{ cursor: 'pointer' }} onClick={() => {
             host.fs.readFile(activePlanFile).then(r => {

@@ -7,10 +7,12 @@
 // edit at this layer plus the adapter route.
 
 pub mod clipboard;
+pub mod debug;
 pub mod dialog;
 pub mod fs;
 pub mod image;
 pub mod pty;
 pub mod settings;
 pub mod shell;
+pub mod update;
 pub mod workspace;

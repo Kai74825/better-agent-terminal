@@ -110,7 +110,7 @@ interface TerminalThumbnailProps {
   onClick: () => void
 }
 
-const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => host.debug.log(...args)
 let thumbRenderCount = 0
 export const TerminalThumbnail = memo(function TerminalThumbnail({ terminal, isActive, onClick }: TerminalThumbnailProps) {
   thumbRenderCount++

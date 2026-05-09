@@ -26,7 +26,7 @@ export function UpdateNotification() {
   useEffect(() => {
     const checkUpdate = async () => {
       try {
-        const result = await window.batAppAPI.update.check()
+        const result = await host.update.check()
         setUpdateInfo(result)
       } catch (error) {
         console.error('Failed to check for updates:', error)

@@ -9,8 +9,9 @@ mod commands;
 mod path_guard;
 
 use commands::{
-    clipboard as clipboard_cmd, dialog as dialog_cmd, fs as fs_cmd, image as image_cmd,
-    pty as pty_cmd, settings, shell as shell_cmd, workspace as workspace_cmd,
+    clipboard as clipboard_cmd, debug as debug_cmd, dialog as dialog_cmd, fs as fs_cmd,
+    image as image_cmd, pty as pty_cmd, settings, shell as shell_cmd, update as update_cmd,
+    workspace as workspace_cmd,
 };
 
 pub fn run() {
@@ -45,6 +46,8 @@ pub fn run() {
             pty_cmd::pty_kill,
             workspace_cmd::workspace_load,
             workspace_cmd::workspace_save,
+            update_cmd::update_get_version,
+            debug_cmd::debug_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running better-agent-terminal");

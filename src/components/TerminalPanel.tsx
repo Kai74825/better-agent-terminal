@@ -9,7 +9,7 @@ import { settingsStore } from '../stores/settings-store'
 import type { AgentPresetId } from '../types/agent-presets'
 import '@xterm/xterm/css/xterm.css'
 
-const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => host.debug.log(...args)
 
 interface TerminalPanelProps {
   terminalId: string

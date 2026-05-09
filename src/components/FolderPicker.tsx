@@ -97,11 +97,11 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
         setQuickLocations(qls)
         if (!qls || qls.length === 0) {
           setQuickError('quickLocations returned empty')
-          window.batAppAPI?.debug?.log?.('[FolderPicker] quickLocations returned empty array')
+          host.debug.log?.('[FolderPicker] quickLocations returned empty array')
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        window.batAppAPI?.debug?.log?.('[FolderPicker] quickLocations failed:', msg)
+        host.debug.log?.('[FolderPicker] quickLocations failed:', msg)
         setQuickLocations([])
         setQuickError(msg)
       }

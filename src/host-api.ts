@@ -217,6 +217,19 @@ function createTauriHost(): BatAppAPI {
       unwatch: () => notImplemented('fs.unwatch'),
       onChanged: () => notImplemented('fs.onChanged'),
     },
+    update: {
+      getVersion: () => getInvoke()<string>('update_get_version'),
+      // GitHub release polling lives in Phase 3 (packaging) — until the
+      // signing pipeline is rebuilt under Tauri there's no point checking.
+      check: () => notImplemented('update.check'),
+    },
+    debug: {
+      // Renderer logs forward to the Rust side, which currently writes to
+      // stderr. A future commit can route this into <app-data>/logs/.
+      log: (...args: unknown[]) => getInvoke()<void>('debug_log', { args }),
+      // The renderer reads this synchronously during render.
+      isDebugMode: false,
+    },
     workspace: {
       load: () => getInvoke()<string | null>('workspace_load'),
       save: (data: string) => getInvoke()<boolean>('workspace_save', { data }),
@@ -307,7 +320,10 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 
 // Namespaces whose methods are routed through Tauri invoke. Listed here so
 // the permissive shim can prefer the real impl when present.
-const PORTED_NAMESPACES = new Set(['settings', 'shell', 'dialog', 'fs', 'clipboard', 'image', 'pty', 'workspace'])
+const PORTED_NAMESPACES = new Set([
+  'settings', 'shell', 'dialog', 'fs', 'clipboard', 'image',
+  'pty', 'workspace', 'update', 'debug',
+])
 
 export function installTauriShim(): void {
   if (getHostKind() !== 'tauri') return

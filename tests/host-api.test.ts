@@ -87,6 +87,8 @@ async function run() {
       if (cmd === 'pty_kill') return undefined as unknown as T
       if (cmd === 'workspace_load') return null as unknown as T
       if (cmd === 'workspace_save') return true as unknown as T
+      if (cmd === 'update_get_version') return '0.1.0' as unknown as T
+      if (cmd === 'debug_log') return undefined as unknown as T
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -155,6 +157,11 @@ async function run() {
     // workspace.getDetachedId is synchronous and always null under Tauri.
     assert.equal(mod.host.workspace.getDetachedId(), null)
 
+    const version = await mod.host.update.getVersion()
+    assert.equal(version, '0.1.0')
+    // Renderer log forwarding takes any arg shape and packs into `args`.
+    await mod.host.debug.log('boot', { phase: 1 }, 42)
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -182,6 +189,8 @@ async function run() {
       { cmd: 'pty_kill', args: { id: 'term-1' } },
       { cmd: 'workspace_load', args: undefined },
       { cmd: 'workspace_save', args: { data: '{"workspaces":[]}' } },
+      { cmd: 'update_get_version', args: undefined },
+      { cmd: 'debug_log', args: { args: ['boot', { phase: 1 }, 42] } },
     ])
   }
 

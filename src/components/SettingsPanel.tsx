@@ -111,7 +111,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   // Get current platform for filtering shell options
   const platform = window.batAppAPI?.platform || 'darwin'
   const platformShellOptions = SHELL_OPTIONS.filter(opt => opt.platforms.includes(platform))
-  const isDebugMode = window.batAppAPI?.debug?.isDebugMode === true
+  const isDebugMode = host.debug.isDebugMode === true
   const visibleAgentPresets = getVisiblePresets().filter(p => p.id !== 'none')
   const defaultAgentValue = visibleAgentPresets.some(p => p.id === settings.defaultAgent)
     ? settings.defaultAgent
@@ -185,7 +185,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         }
       }
     } catch (e) {
-      window.batAppAPI?.debug?.log?.(`[SettingsPanel] Failed to load accounts: ${e}`)
+      host.debug.log?.(`[SettingsPanel] Failed to load accounts: ${e}`)
     }
     setAccountsLoading(false)
   }, [])
@@ -232,7 +232,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         setAccountStatusMsg(`Login failed: ${result.error || 'unknown error'}`)
       }
     } catch (e) {
-      window.batAppAPI?.debug?.log?.(`[SettingsPanel] Account login failed: ${e}`)
+      host.debug.log?.(`[SettingsPanel] Account login failed: ${e}`)
       setAccountStatusMsg(`Error: ${e instanceof Error ? e.message : 'unknown error'}`)
     }
     setAccountLoginLoading(false)

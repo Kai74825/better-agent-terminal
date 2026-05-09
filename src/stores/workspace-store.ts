@@ -644,7 +644,7 @@ class WorkspaceStore {
       const terminals = (parsed.terminals || []).map((t: Partial<TerminalInstance>): TerminalInstance | null => {
         const ws = t.workspaceId ? workspaceMap.get(t.workspaceId) : undefined
         if (!ws?.folderPath) {
-          window.batAppAPI?.debug?.log?.(`[workspace-store] Warning: terminal ${t.id} has no valid workspace, skipping`)
+          host.debug.log?.(`[workspace-store] Warning: terminal ${t.id} has no valid workspace, skipping`)
           return null
         }
         const cwd = ws.folderPath
@@ -698,7 +698,7 @@ class WorkspaceStore {
       this.activeGroup = parsed.activeGroup || null
       this.notify()
     } catch (e) {
-      window.batAppAPI?.debug?.log?.(`Failed to parse workspace data: ${e}`)
+      host.debug.log?.(`Failed to parse workspace data: ${e}`)
       console.error('Failed to parse workspace data:', e)
     }
   }

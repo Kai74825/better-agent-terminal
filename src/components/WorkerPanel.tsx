@@ -8,7 +8,7 @@ import { settingsStore } from '../stores/settings-store'
 import { parseProcfile } from '../utils/procfile-parser'
 import '@xterm/xterm/css/xterm.css'
 
-const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+const dlog = (...args: unknown[]) => host.debug.log(...args)
 
 const WORKER_COLORS = [
   '#61afef', '#98c379', '#e5c07b', '#c678dd',

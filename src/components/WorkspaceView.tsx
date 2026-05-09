@@ -245,7 +245,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     initializedWorkspaces.add(workspace.id)
 
     const initTerminals = async () => {
-      const dlog = (...args: unknown[]) => window.batAppAPI?.debug?.log(...args)
+      const dlog = (...args: unknown[]) => host.debug.log(...args)
       const htmlT0 = (window as unknown as { __t0?: number }).__t0 || Date.now()
       dlog(`[startup] initTerminals start: +${Date.now() - htmlT0}ms from HTML`)
       const t0 = performance.now()
@@ -560,7 +560,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     }
   }, [handleAddTerminal, handleAddWorktreeTerminal, handleAddAgent])
 
-  const isDebugMode = window.batAppAPI?.debug?.isDebugMode
+  const isDebugMode = host.debug.isDebugMode
 
   const handleCloseTerminal = useCallback((id: string) => {
     const terminal = terminals.find(t => t.id === id)
