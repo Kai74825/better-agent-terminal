@@ -1250,7 +1250,7 @@ export function OpenAIAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   useEffect(() => {
     let disposed = false
     const refreshGitBranch = () => {
-      window.batAppAPI.git.getBranch(cwd)
+      host.git.getBranch(cwd)
         .then(branch => { if (!disposed) setGitBranch(branch) })
         .catch(() => { if (!disposed) setGitBranch(null) })
     }

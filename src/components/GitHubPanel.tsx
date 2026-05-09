@@ -204,7 +204,7 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
   }
 
   const getItemUrl = async (item: GitHubPR | GitHubIssue) => {
-    const repoUrl = await window.batAppAPI.git.getGithubUrl(workspaceFolderPath)
+    const repoUrl = await host.git.getGithubUrl(workspaceFolderPath)
     if (!repoUrl) return null
     const type = 'isDraft' in item ? 'pull' : 'issues'
     return `${repoUrl}/${type}/${item.number}`

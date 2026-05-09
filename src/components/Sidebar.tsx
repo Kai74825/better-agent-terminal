@@ -104,7 +104,7 @@ export function Sidebar({
     if (!contextMenu) { setGithubUrl(null); setAgentResting(false); return }
     const ws = workspaces.find(w => w.id === contextMenu.workspaceId)
     if (!ws) return
-    window.batAppAPI.git.getGithubUrl(ws.folderPath).then(url => setGithubUrl(url))
+    host.git.getGithubUrl(ws.folderPath).then(url => setGithubUrl(url))
     // Check if agent session is resting
     const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)
     if (agent) {

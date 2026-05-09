@@ -125,10 +125,10 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
     setDiff('')
     try {
       const [logResult, statusResult, branch, root] = await Promise.all([
-        window.batAppAPI.git.getLog(activePath),
-        window.batAppAPI.git.getStatus(activePath),
-        window.batAppAPI.git.getBranch(activePath),
-        window.batAppAPI.git.getRoot(activePath),
+        host.git.getLog(activePath),
+        host.git.getStatus(activePath),
+        host.git.getBranch(activePath),
+        host.git.getRoot(activePath),
       ])
       setIsGitRepo(branch !== null)
       setGitRoot(root)
@@ -153,7 +153,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
       if (hash === 'working') {
         setChangedFiles(status)
       } else {
-        const files = await window.batAppAPI.git.getDiffFiles(activePath, hash)
+        const files = await host.git.getDiffFiles(activePath, hash)
         setChangedFiles(files)
       }
     } catch {
@@ -168,7 +168,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
     setFileContent(null)
     setDiffLoading(true)
     try {
-      const d = await window.batAppAPI.git.getDiff(activePath, selectedCommit || undefined, filePath)
+      const d = await host.git.getDiff(activePath, selectedCommit || undefined, filePath)
       if (d.trim()) {
         setDiff(d)
       } else {

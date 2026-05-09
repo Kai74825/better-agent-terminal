@@ -139,10 +139,10 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
 
   // Detect git repo, GitHub remote, and Procfiles
   useEffect(() => {
-    window.batAppAPI.git.getGithubUrl(workspace.folderPath).then(url => {
+    host.git.getGithubUrl(workspace.folderPath).then(url => {
       setHasGithubRemote(!!url)
     }).catch(() => setHasGithubRemote(false))
-    window.batAppAPI.git.getRoot(workspace.folderPath).then(root => {
+    host.git.getRoot(workspace.folderPath).then(root => {
       setIsGitRepo(!!root)
     }).catch(() => setIsGitRepo(false))
     // Detect Procfiles in workspace folder

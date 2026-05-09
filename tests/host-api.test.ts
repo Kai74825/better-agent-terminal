@@ -89,6 +89,19 @@ async function run() {
       if (cmd === 'workspace_save') return true as unknown as T
       if (cmd === 'update_get_version') return '0.1.0' as unknown as T
       if (cmd === 'debug_log') return undefined as unknown as T
+      if (cmd === 'git_get_github_url') return 'https://github.com/owner/repo' as unknown as T
+      if (cmd === 'git_get_branch') return 'main' as unknown as T
+      if (cmd === 'git_get_log') {
+        return [{ hash: 'h1', author: 'a', date: 'd', message: 'm' }] as unknown as T
+      }
+      if (cmd === 'git_get_diff') return 'diff --git a/x b/x\n' as unknown as T
+      if (cmd === 'git_get_diff_files') {
+        return [{ status: 'M', file: 'a.ts' }] as unknown as T
+      }
+      if (cmd === 'git_get_root') return '/repo' as unknown as T
+      if (cmd === 'git_get_status') {
+        return [{ status: 'M', file: 'a.ts' }] as unknown as T
+      }
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -162,6 +175,27 @@ async function run() {
     // Renderer log forwarding takes any arg shape and packs into `args`.
     await mod.host.debug.log('boot', { phase: 1 }, 42)
 
+    // git.* — read-only ops mirroring the Electron handlers.
+    const ghUrl = await mod.host.git.getGithubUrl('/repo')
+    assert.equal(ghUrl, 'https://github.com/owner/repo')
+    const branch = await mod.host.git.getBranch('/repo')
+    assert.equal(branch, 'main')
+    const log = await mod.host.git.getLog('/repo', 25)
+    assert.deepEqual(log, [{ hash: 'h1', author: 'a', date: 'd', message: 'm' }])
+    // count is optional — undefined still flows through to invoke
+    await mod.host.git.getLog('/repo')
+    const diff = await mod.host.git.getDiff('/repo', 'abc', 'a.ts')
+    assert.equal(diff, 'diff --git a/x b/x\n')
+    // commit + filePath both optional
+    await mod.host.git.getDiff('/repo')
+    const diffFiles = await mod.host.git.getDiffFiles('/repo', 'abc')
+    assert.deepEqual(diffFiles, [{ status: 'M', file: 'a.ts' }])
+    await mod.host.git.getDiffFiles('/repo')
+    const root = await mod.host.git.getRoot('/repo')
+    assert.equal(root, '/repo')
+    const status = await mod.host.git.getStatus('/repo')
+    assert.deepEqual(status, [{ status: 'M', file: 'a.ts' }])
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -191,6 +225,16 @@ async function run() {
       { cmd: 'workspace_save', args: { data: '{"workspaces":[]}' } },
       { cmd: 'update_get_version', args: undefined },
       { cmd: 'debug_log', args: { args: ['boot', { phase: 1 }, 42] } },
+      { cmd: 'git_get_github_url', args: { folderPath: '/repo' } },
+      { cmd: 'git_get_branch', args: { cwd: '/repo' } },
+      { cmd: 'git_get_log', args: { cwd: '/repo', count: 25 } },
+      { cmd: 'git_get_log', args: { cwd: '/repo', count: undefined } },
+      { cmd: 'git_get_diff', args: { cwd: '/repo', commitHash: 'abc', filePath: 'a.ts' } },
+      { cmd: 'git_get_diff', args: { cwd: '/repo', commitHash: undefined, filePath: undefined } },
+      { cmd: 'git_get_diff_files', args: { cwd: '/repo', commitHash: 'abc' } },
+      { cmd: 'git_get_diff_files', args: { cwd: '/repo', commitHash: undefined } },
+      { cmd: 'git_get_root', args: { cwd: '/repo' } },
+      { cmd: 'git_get_status', args: { cwd: '/repo' } },
     ])
   }
 
@@ -199,10 +243,10 @@ async function run() {
     const invoke: TauriInvoke = async () => undefined as unknown as never
     setWindow({ __TAURI_INTERNALS__: { invoke } })
     const mod = await loadFreshAdapter()
-    // git is still unported — use it as the canary for "namespace
-    // not yet implemented" behaviour.
-    assert.throws(() => (mod.host as { git: { status: () => unknown } }).git.status(),
-      /git\.status is not yet implemented under Tauri/)
+    // notification is still unported — use it as the canary for
+    // "namespace not yet implemented" behaviour.
+    assert.throws(() => (mod.host as { notification: { show: () => unknown } }).notification.show(),
+      /notification\.show is not yet implemented under Tauri/)
     // Within a ported namespace, individually unported entries (e.g.
     // pty.restart) still throw the same way.
     assert.throws(() => (mod.host as { pty: { restart: () => unknown } }).pty.restart(),

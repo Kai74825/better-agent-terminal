@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod debug;
 pub mod dialog;
 pub mod fs;
+pub mod git;
 pub mod image;
 pub mod pty;
 pub mod settings;

@@ -10,8 +10,8 @@ mod path_guard;
 
 use commands::{
     clipboard as clipboard_cmd, debug as debug_cmd, dialog as dialog_cmd, fs as fs_cmd,
-    image as image_cmd, pty as pty_cmd, settings, shell as shell_cmd, update as update_cmd,
-    workspace as workspace_cmd,
+    git as git_cmd, image as image_cmd, pty as pty_cmd, settings, shell as shell_cmd,
+    update as update_cmd, workspace as workspace_cmd,
 };
 
 pub fn run() {
@@ -48,6 +48,13 @@ pub fn run() {
             workspace_cmd::workspace_save,
             update_cmd::update_get_version,
             debug_cmd::debug_log,
+            git_cmd::git_get_github_url,
+            git_cmd::git_get_branch,
+            git_cmd::git_get_log,
+            git_cmd::git_get_diff,
+            git_cmd::git_get_diff_files,
+            git_cmd::git_get_root,
+            git_cmd::git_get_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running better-agent-terminal");

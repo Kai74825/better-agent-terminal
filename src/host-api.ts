@@ -244,6 +244,31 @@ function createTauriHost(): BatAppAPI {
       onDetached: () => () => {},
       onReattached: () => () => {},
     },
+    git: {
+      // Read-only git wrappers — see src-tauri/src/commands/git.rs.
+      // The Rust side returns safe defaults (None / empty Vec / empty String)
+      // when git fails or the cwd isn't a repo, mirroring the Electron handlers.
+      getGithubUrl: (folderPath: string) =>
+        getInvoke()<string | null>('git_get_github_url', { folderPath }),
+      getBranch: (cwd: string) =>
+        getInvoke()<string | null>('git_get_branch', { cwd }),
+      getLog: (cwd: string, count?: number) =>
+        getInvoke()<{ hash: string; author: string; date: string; message: string }[]>(
+          'git_get_log',
+          { cwd, count },
+        ),
+      getDiff: (cwd: string, commitHash?: string, filePath?: string) =>
+        getInvoke()<string>('git_get_diff', { cwd, commitHash, filePath }),
+      getDiffFiles: (cwd: string, commitHash?: string) =>
+        getInvoke()<{ status: string; file: string }[]>(
+          'git_get_diff_files',
+          { cwd, commitHash },
+        ),
+      getRoot: (cwd: string) =>
+        getInvoke()<string | null>('git_get_root', { cwd }),
+      getStatus: (cwd: string) =>
+        getInvoke()<{ status: string; file: string }[]>('git_get_status', { cwd }),
+    },
     pty: {
       create: (options: unknown) =>
         getInvoke()<string>('pty_create', { options: options as Record<string, unknown> }),
@@ -322,7 +347,7 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 // the permissive shim can prefer the real impl when present.
 const PORTED_NAMESPACES = new Set([
   'settings', 'shell', 'dialog', 'fs', 'clipboard', 'image',
-  'pty', 'workspace', 'update', 'debug',
+  'pty', 'workspace', 'update', 'debug', 'git',
 ])
 
 export function installTauriShim(): void {
