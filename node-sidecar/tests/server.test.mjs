@@ -1850,6 +1850,51 @@ async function inProcess() {
     restoreStreamEmit()
   }
 
+  // rate_limit_event mapping. The SDK emits a top-level message of
+  // type 'rate_limit_event' when the API throttles us; the sidecar
+  // must convert that into a claude:rate-limit notification with
+  // resetsAt expanded from seconds to ms (renderer does Date math
+  // on it). A second event missing required fields must NOT emit —
+  // the SDK occasionally produces partial rate_limit_event during
+  // transient slowdowns we don't want to surface.
+  const rateLimitCaptured = []
+  const restoreRateLimitEmit = mod.__setSendEventForTests((n, p) => rateLimitCaptured.push({ name: n, payload: p }))
+  const fakeSdkWithRateLimit = {
+    query() {
+      const messages = [
+        { type: 'system', subtype: 'init', session_id: 's-rl', cwd: '/x' },
+        // Full rate-limit event — should emit.
+        { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'primary', resetsAt: 1700000000, utilization: 0.92, isUsingOverage: false } },
+        // Missing resetsAt — must NOT emit.
+        { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'primary', utilization: 0.5 } },
+        // utilization optional — emit but utilization=null.
+        { type: 'rate_limit_event', rate_limit_info: { rateLimitType: 'fallback', resetsAt: 1700001000, isUsingOverage: true } },
+        { type: 'result', subtype: 'success', session_id: 's-rl', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 },
+      ]
+      return (async function*() { for (const m of messages) yield m })()
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkWithRateLimit)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 290, method: 'claude.startSession', params: { sessionId: 'rl-1', options: { cwd: '/x' } } })
+    await dispatch({ jsonrpc: '2.0', id: 291, method: 'claude.sendMessage', params: { sessionId: 'rl-1', prompt: 'hi' } })
+    const rl = rateLimitCaptured.filter(e => e.name === 'claude:rate-limit')
+    assert.equal(rl.length, 2, `expected 2 rate-limit emits (one full, one no-utilization), got ${rl.length}`)
+    // First emit — full info, resetsAt converted to ms.
+    assert.equal(rl[0].payload.sessionId, 'rl-1')
+    assert.equal(rl[0].payload.info.rateLimitType, 'primary')
+    assert.equal(rl[0].payload.info.resetsAt, 1700000000 * 1000)
+    assert.equal(rl[0].payload.info.utilization, 0.92)
+    assert.equal(rl[0].payload.info.isUsingOverage, false)
+    // Second emit — utilization omitted → null, isUsingOverage=true.
+    assert.equal(rl[1].payload.info.rateLimitType, 'fallback')
+    assert.equal(rl[1].payload.info.utilization, null)
+    assert.equal(rl[1].payload.info.isUsingOverage, true)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreRateLimitEmit()
+  }
+
   // Abort path: while a query is mid-stream (fake SDK yields slowly),
   // claude.abortSession must propagate to the AbortController so the
   // SDK's iterator terminates promptly. Verifies the renderer's stop

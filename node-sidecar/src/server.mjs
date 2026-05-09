@@ -726,6 +726,25 @@ registerHandler('claude.sendMessage', async (params) => {
         const meta = buildSessionMeta(s)
         if (typeof msg.cwd === 'string' && meta) meta.cwd = msg.cwd
         sendEvent('claude:status', { sessionId, meta })
+      } else if (t === 'rate_limit_event') {
+        // SDK reports rate-limit state via a dedicated message type.
+        // Mirror electron/claude-agent-manager.ts:1030 — only emit when
+        // both rateLimitType and resetsAt are present (the SDK can
+        // produce partial events during transient slowdowns we don't
+        // want to surface as a banner). resetsAt arrives in seconds;
+        // multiply to ms so the renderer's Date math just works.
+        const info = msg.rate_limit_info
+        if (info && typeof info.rateLimitType === 'string' && typeof info.resetsAt === 'number') {
+          sendEvent('claude:rate-limit', {
+            sessionId,
+            info: {
+              rateLimitType: info.rateLimitType,
+              resetsAt: info.resetsAt * 1000,
+              utilization: typeof info.utilization === 'number' ? info.utilization : null,
+              isUsingOverage: info.isUsingOverage ?? false,
+            },
+          })
+        }
       } else if (t === 'stream_event') {
         // Real-time text/thinking deltas from the model stream. The
         // renderer's onStream listener uses payload.data to drive
