@@ -9,18 +9,18 @@
 - [x] **Host API adapter** — `src/host-api.ts` 提供 `host` proxy，由 `getHostKind()` 判斷 Electron/Tauri/unknown，全部命名空間預設 throw 「not yet implemented」避免靜默失敗。
 - [x] **Renamed `window.electronAPI` → `window.batAppAPI`** — preload 和 31 個 callsite 一起改名，TS type 由 `BatAppAPI = Window['batAppAPI']` 取得，不再依賴跨 project reference 編譯。`AboutPanel`、`UpdateNotification` 兩個 callsite 已切到 adapter 作為示範。
 - [x] **Tauri 2 scaffolding** — `src-tauri/`、`vite.tauri.config.ts`、`pnpm tauri:dev|build` 指令。
-- [x] **首批 Rust commands** — `settings_load` / `settings_save`（讀寫 `<app-data>/settings.json`）、`settings_get_shell_path`（純函式 + 平台分支，可單元測試 `exists` 注入）、`shell_open_external`（透過 `tauri-plugin-opener`，拒絕 `file://`）、`shell_open_path`（同樣走 opener，拒絕空字串）、`dialog_confirm`（透過 `tauri-plugin-dialog`，OK/Cancel modal）、`fs_read_file`（512 KiB 上限 + `path_guard::is_sensitive_path` 的 deny-list）。
-- [x] **Adapter Tauri routing** — `host.settings.{load,save,getShellPath}`、`host.shell.{openExternal,openPath}`、`host.dialog.confirm`、`host.fs.readFile` 在 Tauri 下走 `invoke`；其餘命名空間仍 throw。
+- [x] **首批 Rust commands** — `settings_load` / `settings_save`（讀寫 `<app-data>/settings.json`）、`settings_get_shell_path`（純函式 + 平台分支，可單元測試 `exists` 注入）、`shell_open_external`（透過 `tauri-plugin-opener`，拒絕 `file://`）、`shell_open_path`（同樣走 opener，拒絕空字串）、`dialog_confirm`（透過 `tauri-plugin-dialog`，OK/Cancel modal）、`dialog_select_folder` / `dialog_select_files` / `dialog_select_images`（native picker，spawn_blocking + 預設 home 目錄 + 圖片副檔名 filter）、`fs_read_file`（512 KiB 上限 + `path_guard::is_sensitive_path` 的 deny-list）、`clipboard_write_text`（透過 `tauri-plugin-clipboard-manager`）。
+- [x] **Adapter Tauri routing** — `host.settings.{load,save,getShellPath}`、`host.shell.{openExternal,openPath}`、`host.dialog.{confirm,selectFolder,selectFiles,selectImages}`、`host.fs.readFile`、`host.clipboard.writeText` 在 Tauri 下走 `invoke`；其餘命名空間仍 throw。
 - [x] **Tests**
-  - `tests/host-api.test.ts`：8 個情境涵蓋偵測、Electron 委派、Tauri invoke routing（含 `shell_open_path`、`dialog_confirm`、`fs_read_file`、`settings_get_shell_path`、optional title）、legacy `__TAURI__` marker、衝突優先序、permissive shim。
+  - `tests/host-api.test.ts`：8 個情境，第 3 個 invoke 情境涵蓋 12 條 cmd（settings、shell、dialog、fs、clipboard），含 optional title、camelCase shellType、undefined args（picker no-arg invokes）。
   - `tests/tauri-launch.test.ts`：啟動 release exe 3 秒，斷言沒提前崩。
-  - `cargo test`（17 tests）：`settings::tests`（路徑 + `resolve_shell_path` 的 unix/windows 分支）、`shell::tests::{file_urls_are_rejected,empty_paths_are_rejected}`、`dialog::tests::defaults_title_to_confirm`、`fs::tests`（讀檔、>512 KiB cap、不存在路徑）、`path_guard::tests`（deny-list 命中、目錄包含、白名單）。
+  - `cargo test`（19 tests）：`settings::tests`（路徑 + `resolve_shell_path` 的 unix/windows 分支）、`shell::tests::{file_urls_are_rejected,empty_paths_are_rejected}`、`dialog::tests::{defaults_title_to_confirm,paths_to_strings_filters_invalid_entries}`、`fs::tests`（讀檔、>512 KiB cap、不存在路徑）、`path_guard::tests`（deny-list 命中、目錄包含、白名單）、`clipboard::tests::command_error_serializes_message`。
 - [x] **Release build verified on Windows** — `pnpm exec tauri build` 產生 12.8 MB exe + 5.2 MB MSI + 3.7 MB NSIS installer，smoke test 通過。
 - [x] npm scripts：`test:host-api`、`test:tauri-launch`、`test:tauri-rust`、`tauri:*`。
 
 ### 進行中 / 下一步
 
-- [ ] 把更多 Electron preload 命名空間 port 到 Rust（依風險排序：~~`shell.openPath`~~ ✅、~~`dialog.confirm`~~ ✅、~~`fs.readFile`~~ ✅、~~`settings.getShellPath`~~ ✅、`dialog.selectFolder`/`selectFiles`/`selectImages`、`clipboard.*`、`fs.home`/`fs.readdir`、`image:read-as-data-url`）。
+- [ ] 把更多 Electron preload 命名空間 port 到 Rust（已完成：`shell.openPath` ✅、`dialog.confirm` ✅、`dialog.selectFolder` ✅、`dialog.selectFiles` ✅、`dialog.selectImages` ✅、`fs.readFile` ✅、`settings.getShellPath` ✅、`clipboard.writeText` ✅；待辦：`clipboard.{saveImage,writeImage}`、`fs.home`/`fs.readdir`/`fs.search`/`fs.listDirs`/`fs.mkdir`/`fs.deletePath`、`image:read-as-data-url`、`update:check`、`debug.log` 接到 Rust logger）。
 - [ ] 規劃 PTY 路線（Phase 2）：Rust PTY vs Node sidecar prototype。
 - [ ] Agent SDK Node sidecar 設計（Phase 2）。
 - [ ] 把全部 `window.batAppAPI.*` 直呼換成 `host.*`，讓 renderer 完全不直讀全域。

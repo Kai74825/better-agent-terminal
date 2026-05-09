@@ -69,6 +69,10 @@ async function run() {
       if (cmd === 'dialog_confirm') return true as unknown as T
       if (cmd === 'fs_read_file') return { content: 'hello' } as unknown as T
       if (cmd === 'settings_get_shell_path') return '/bin/zsh' as unknown as T
+      if (cmd === 'dialog_select_folder') return ['C:/picked/folder'] as unknown as T
+      if (cmd === 'dialog_select_files') return ['C:/picked/a.txt', 'C:/picked/b.txt'] as unknown as T
+      if (cmd === 'dialog_select_images') return ['C:/picked/a.png'] as unknown as T
+      if (cmd === 'clipboard_write_text') return true as unknown as T
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -94,6 +98,16 @@ async function run() {
     const shellPath = await mod.host.settings.getShellPath('zsh')
     assert.equal(shellPath, '/bin/zsh')
 
+    const folder = await mod.host.dialog.selectFolder()
+    assert.deepEqual(folder, ['C:/picked/folder'])
+    const files = await mod.host.dialog.selectFiles()
+    assert.deepEqual(files, ['C:/picked/a.txt', 'C:/picked/b.txt'])
+    const images = await mod.host.dialog.selectImages()
+    assert.deepEqual(images, ['C:/picked/a.png'])
+
+    const wrote = await mod.host.clipboard.writeText('hello clipboard')
+    assert.equal(wrote, true)
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -103,6 +117,10 @@ async function run() {
       { cmd: 'dialog_confirm', args: { message: 'Just a message', title: undefined } },
       { cmd: 'fs_read_file', args: { path: 'C:/Users/me/notes.txt' } },
       { cmd: 'settings_get_shell_path', args: { shellType: 'zsh' } },
+      { cmd: 'dialog_select_folder', args: undefined },
+      { cmd: 'dialog_select_files', args: undefined },
+      { cmd: 'dialog_select_images', args: undefined },
+      { cmd: 'clipboard_write_text', args: { text: 'hello clipboard' } },
     ])
   }
 

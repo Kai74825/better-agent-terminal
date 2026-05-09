@@ -9,6 +9,9 @@
     "opener:allow-open-url",
     "opener:allow-open-path",
     "dialog:default",
-    "dialog:allow-message"
+    "dialog:allow-message",
+    "dialog:allow-open",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

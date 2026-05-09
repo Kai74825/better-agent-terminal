@@ -112,11 +112,16 @@ function createTauriHost(): BatAppAPI {
     dialog: {
       confirm: (message: string, title?: string) =>
         getInvoke()<boolean>('dialog_confirm', { message, title }),
-      // Not yet ported — picker dialogs require additional Tauri permission
-      // wiring and per-platform UX testing.
-      selectFolder: () => notImplemented('dialog.selectFolder'),
-      selectImages: () => notImplemented('dialog.selectImages'),
-      selectFiles: () => notImplemented('dialog.selectFiles'),
+      selectFolder: () => getInvoke()<string[] | null>('dialog_select_folder'),
+      selectImages: () => getInvoke()<string[]>('dialog_select_images'),
+      selectFiles: () => getInvoke()<string[]>('dialog_select_files'),
+    },
+    clipboard: {
+      writeText: (text: string) => getInvoke()<boolean>('clipboard_write_text', { text }),
+      // Image clipboard requires a separate raw-bytes bridge; not ported yet.
+      saveImage: () => notImplemented('clipboard.saveImage'),
+      writeImage: () => notImplemented('clipboard.writeImage'),
+      onCopyShortcut: () => notImplemented('clipboard.onCopyShortcut'),
     },
     fs: {
       readFile: (filePath: string) =>
@@ -199,7 +204,7 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 
 // Namespaces whose methods are routed through Tauri invoke. Listed here so
 // the permissive shim can prefer the real impl when present.
-const PORTED_NAMESPACES = new Set(['settings', 'shell', 'dialog', 'fs'])
+const PORTED_NAMESPACES = new Set(['settings', 'shell', 'dialog', 'fs', 'clipboard'])
 
 export function installTauriShim(): void {
   if (getHostKind() !== 'tauri') return
