@@ -232,6 +232,38 @@ async function inProcess() {
     if (savedDataDir2 === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
     else process.env.BAT_SIDECAR_DATA_DIR = savedDataDir2
   }
+
+  // listOpenAISessions — fabricate a fake openai-sessions tree under the
+  // real ~/.better-agent-terminal/openai-sessions root with a unique date
+  // path so we don't collide with real sessions. Clean up after.
+  const { listOpenAISessions, OPENAI_SESSIONS_ROOT } = mod
+  // Use a year far in the future so it sorts first and can't conflict
+  // with a real session on disk.
+  const fakeYear = '9999'
+  const fakeDayDir = join(OPENAI_SESSIONS_ROOT, fakeYear, '01', '01')
+  mkdirSync(fakeDayDir, { recursive: true })
+  try {
+    const sessId = `test-${Date.now()}`
+    const file = join(fakeDayDir, `${sessId}.jsonl`)
+    const lines = [
+      JSON.stringify({ type: 'system', payload: { content: 'init' } }),
+      JSON.stringify({ type: 'user', payload: { content: 'first user prompt\nsecond line ignored' } }),
+      JSON.stringify({ type: 'assistant', payload: { content: 'reply' } }),
+      '',
+      'malformed-line',
+    ]
+    writeFileSync(file, lines.join('\n') + '\n')
+    const sessions = await listOpenAISessions()
+    const ours = sessions.find(s => s.sdkSessionId === sessId)
+    assert.ok(ours, `expected fixture session in result; got ${sessions.length} sessions`)
+    assert.equal(ours.preview, 'first user prompt')
+    // 4 non-empty lines, but one is malformed JSON; impl counts them all
+    // as message lines (matches Electron's behaviour) — assert >= 3.
+    assert.ok(ours.messageCount >= 3, `unexpected count: ${ours.messageCount}`)
+    assert.equal(typeof ours.timestamp, 'number')
+  } finally {
+    rmSync(join(OPENAI_SESSIONS_ROOT, fakeYear), { recursive: true, force: true })
+  }
 }
 
 // End-to-end: spawn `node server.mjs`, send a few requests, assert replies.
