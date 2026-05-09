@@ -324,6 +324,46 @@ async function inProcess() {
   assert.ok(presetsReply.result.length > 0, 'agent.listPresets returned empty list')
   assert.ok(presetsReply.result.includes('claude-cli'))
 
+  // CLAUDE_BUILTIN_MODELS in the sidecar must mirror the renderer-side
+  // src/utils/claude-model-presets.ts constant. Re-read the TS file and
+  // diff the `value:` literals so a renderer-only addition fails here.
+  const { CLAUDE_BUILTIN_MODELS } = mod
+  const presetsFile = await readFile(
+    new URL('../../src/utils/claude-model-presets.ts', import.meta.url), 'utf-8',
+  )
+  // Pull only entries inside the CLAUDE_BUILTIN_MODELS array literal.
+  const arrayMatch = presetsFile.match(/CLAUDE_BUILTIN_MODELS:[^=]*=\s*\[([\s\S]*?)\n\]/m)
+  assert.ok(arrayMatch, 'could not locate CLAUDE_BUILTIN_MODELS array in source')
+  const arrayBody = arrayMatch[1]
+  const tsValues = [...arrayBody.matchAll(/value:\s*(?:CLAUDE_OPUS_47_(\w+)|'([^']+)')/g)]
+    .map(m => {
+      if (m[1]) {
+        // Resolve the symbolic constant via a regex-extracted assignment.
+        const constMatch = presetsFile.match(new RegExp(`CLAUDE_OPUS_47_${m[1]}\\s*=\\s*'([^']+)'`))
+        return constMatch ? constMatch[1] : null
+      }
+      return m[2]
+    })
+    .filter(Boolean)
+  const sidecarValues = CLAUDE_BUILTIN_MODELS.map(m => m.value)
+  assert.deepEqual(
+    [...sidecarValues].sort(),
+    [...tsValues].sort(),
+    `sidecar CLAUDE_BUILTIN_MODELS drifted from src/utils/claude-model-presets.ts (sidecar=${sidecarValues}, ts=${tsValues})`,
+  )
+  // Round-trip the handler: source: 'builtin' must be tagged on every entry.
+  const modelsReply = await dispatch({
+    jsonrpc: '2.0', id: 60, method: 'claude.getSupportedModels',
+    params: { sessionId: 'irrelevant' },
+  })
+  assert.ok(Array.isArray(modelsReply.result))
+  assert.equal(modelsReply.result.length, CLAUDE_BUILTIN_MODELS.length)
+  for (const m of modelsReply.result) {
+    assert.equal(m.source, 'builtin', `expected source=builtin for ${m.value}`)
+    assert.equal(typeof m.displayName, 'string')
+    assert.equal(typeof m.description, 'string')
+  }
+
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
   const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod

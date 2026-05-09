@@ -148,7 +148,15 @@ registerHandler('claude.listSessions', async (params) => {
   if (!cwd) return []
   return listSessionsFallback(cwd)
 })
-registerHandler('claude.getSupportedModels', async () => [])
+// Returns the builtin claude model list. Mirrors the renderer-side
+// CLAUDE_BUILTIN_MODELS constant from src/utils/claude-model-presets.ts;
+// a drift-guard test re-reads the TS file and asserts these stay in
+// sync. The Electron version augments this with SDK-discovered models —
+// that lands when @anthropic-ai/claude-agent-sdk moves into the sidecar.
+// For now returning builtins keeps the renderer's model picker populated.
+registerHandler('claude.getSupportedModels', async () =>
+  CLAUDE_BUILTIN_MODELS.map(m => ({ ...m, source: 'builtin' }))
+)
 registerHandler('claude.getSupportedCommands', async () => [])
 registerHandler('claude.getSupportedAgents', async () => [])
 registerHandler('claude.getAccountInfo', async () => null)
@@ -284,6 +292,19 @@ const AGENT_PRESET_IDS = [
 ]
 registerHandler('agent.listPresets', async () => AGENT_PRESET_IDS)
 export { AGENT_PRESET_IDS }
+
+// Mirror of src/utils/claude-model-presets.ts CLAUDE_BUILTIN_MODELS.
+// Drift guard: see node-sidecar/tests/server.test.mjs.
+const CLAUDE_BUILTIN_MODELS = [
+  { value: 'claude-opus-4-7:auto-compact-200k', displayName: 'Opus 4.7 · 200K Auto-Compact', description: 'claude-opus-4-7 · compact at 200K tokens' },
+  { value: 'claude-opus-4-7:auto-compact-300k', displayName: 'Opus 4.7 · 300K Auto-Compact', description: 'claude-opus-4-7 · compact at 300K tokens' },
+  { value: 'claude-opus-4-7:auto-compact-400k', displayName: 'Opus 4.7 · 400K Auto-Compact', description: 'claude-opus-4-7 · compact at 400K tokens' },
+  { value: 'claude-opus-4-7:1m', displayName: 'Opus 4.7 · 1M', description: 'claude-opus-4-7 · no early auto-compact' },
+  { value: 'claude-opus-4-6', displayName: 'Opus 4.6 (1M)', description: 'claude-opus-4-6 · 1M context' },
+  { value: 'claude-sonnet-4-6', displayName: 'Sonnet 4.6 (1M)', description: 'claude-sonnet-4-6 · 1M context' },
+  { value: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', description: 'claude-haiku-4-5 · fast & lightweight' },
+]
+export { CLAUDE_BUILTIN_MODELS }
 
 // --- remote.* / tunnel.* stubs --------------------------------------------
 //
