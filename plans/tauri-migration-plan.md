@@ -2,7 +2,7 @@
 
 ## 進度紀錄（持續更新）
 
-最近一次更新：2026-05-09 (#5)。（Phase 1 + Phase 2 已切四刀：(slice 1-3) claude 起手 → lifecycle → metadata + accounts；(slice 4) 補完 openai/worktree/agent/workerBuffer 四個命名空間，把 claude.* 預設改成 permissive (warn-once + Promise.resolve(null) for async, no-op for on*)，避免任何 panel 因為呼叫未 port 的 claude 方法而崩。新增 5 + 5 + 1 + 4 = 15 個 Tauri commands；workerBuffer 直接用 Rust `Mutex<HashMap<String,String>>` 加 1 MiB-per-panel cap (line-aligned trim)，不走 sidecar。剩下 remote/tunnel 兩個 namespace（Phase 3）+ claude 內 ~15 個 setters/session ops 仍仰賴 permissive default + 真實 SDK 接管。cargo test 104 例 (+4 worker_buffer 單元)、host-api scenario 3 涵蓋 100+ invoke、scenario 4 改用 `remote.startServer` 當 namespace canary、claude/openai 未 port 路徑改成回 null 而非 throw、Tauri release build & smoke 全綠。）
+最近一次更新：2026-05-09 (#6)。（Phase 1 + Phase 2 全綠。Phase 3 起步：tauri.conf.json 加 `bundle.resources` 把 `node-sidecar/src/server.mjs` 抓進 bundle，已驗證 release 輸出有 `target/release/node-sidecar/src/server.mjs`。所以 NSIS / MSI 產出帶 sidecar，使用者只要 PATH 上有 node 就能跑（Node binary 自帶仍待 Phase 3 後續工作）。剩下 remote/tunnel namespace、實打 Anthropic SDK 的 Claude session 邏輯、Node binary 自帶（pkg / bun --compile / sea）、`update.check` 都列為 Phase 3 後續任務。cargo test 104、host-api 8 情境、sidecar e2e、Tauri release build & smoke 全綠。）
 
 ### 已完成
 
@@ -55,7 +55,7 @@
 - [x] **Phase 1 完成** — 17 個非-agent 命名空間（settings、shell、dialog、fs、clipboard、image、pty、workspace、update、debug、git、app、notification、system、github、snippet、profile）全 port 到 Rust，renderer 對應 callsite 全切到 `host.*`。Tauri release build green、cargo test 89 例綠、host-api.test.ts 8 情境綠、tauri-launch smoke test 綠。
 - [x] **PTY 路線決定**：採用 Rust PTY（`portable-pty` 0.8）而非 Node sidecar，理由：(1) Tauri release 不需要再帶一個 Node runtime，bundle 體積維持在 12.x MB 等級；(2) `portable-pty` 同時支援 Unix forkpty / Windows ConPTY，單一介面；(3) 事件通道直接走 Tauri `Emitter::emit("pty:output"|"pty:exit")`，跟 Electron 的 `webContents.send` 對應，renderer adapter 用 `@tauri-apps/api/event::listen` 包成同步 unsubscribe 風格 → 與 preload 完全相容。**首批 commands**：`pty_create` / `pty_write` / `pty_resize` / `pty_kill`；reader thread 推 `pty:output`；exit watcher polling `try_wait()` 推 `pty:exit`。MVP 暫不 port `pty_restart` / `pty_get_cwd`（需要跨平台 child process tracking，下一個迭代再做）。
 - [~] **Phase 2：Agent SDK Node sidecar**（見下方 [Phase 2 設計筆記] 章節）。已切完四刀，covers `host.{claude,openai,worktree,agent,workerBuffer}.*`：claude 顯式 port 29 條 + permissive 預設兜底 ~15 條剩餘方法、openai 5 條、worktree 5 條、agent.listPresets、workerBuffer 4 條（Rust 直管）。剩下 remote/tunnel 兩個 namespace 與真實 agent SDK 實作邏輯（startSession/sendMessage 真要打 `@anthropic-ai/claude-agent-sdk`）綁定 Phase 3 / 之後。
-- [ ] **Phase 3：packaging + remote/tunnel + update.check**（見下方原 Phase 3 章節 + Phase 2 章節末端關於 remote/tunnel 共用 sidecar 的討論）。
+- [~] **Phase 3：packaging + remote/tunnel + update.check**：sidecar 已透過 `bundle.resources` 進 NSIS/MSI 包，但 Node runtime 仍仰賴使用者 PATH（待自帶 Node binary，可選 pkg / bun --compile / Node SEA）。`update.check`、`remote.*`、`tunnel.*` 仍待開發。
 - [~] 把全部 `window.batAppAPI.*` 直呼換成 `host.*`：Phase 1 已 port 命名空間（settings、shell、dialog、fs、clipboard、image、pty、workspace、update、debug、git、app、notification、system、github、snippet、profile）都已切到 `host.*`；Phase 2 後 host.{claude, openai, worktree, agent, workerBuffer}.* 也都路由到 sidecar / Rust。剩下純 Phase 3 的 remote / tunnel namespace 仍走 `window.batAppAPI`，受 `installTauriShim()` 保護回 `Promise.resolve(null)`，等該命名空間有 Rust 對應或 Node sidecar 接管再切換。
 
 ### 計畫調整
