@@ -689,6 +689,95 @@ async function inProcess() {
     restoreImageSend()
   }
 
+  // Plugin loading: when ~/.claude/plugins/installed_plugins.json
+  // exists with valid entries, queryOptions.plugins is set to
+  // [{ type: 'local', path }] for each installPath.
+  const { __setPluginsPathOverrideForTests, loadInstalledPlugins } = mod
+  // Empty / missing file -> empty array (graceful).
+  const tmpRoot = mkdtempSync(join(tmpdir(), 'sidecar-plugins-'))
+  try {
+    const missingPath = join(tmpRoot, 'does-not-exist.json')
+    __setPluginsPathOverrideForTests(missingPath)
+    const empty = await loadInstalledPlugins()
+    assert.deepEqual(empty, [], 'missing file -> []')
+
+    // Malformed JSON -> empty.
+    const badPath = join(tmpRoot, 'bad.json')
+    writeFileSync(badPath, '{ not valid json')
+    __setPluginsPathOverrideForTests(badPath)
+    const malformed = await loadInstalledPlugins()
+    assert.deepEqual(malformed, [], 'malformed json -> []')
+
+    // Real shape: pluginsData.plugins is an object whose values are
+    // arrays of {installPath} entries. Mirrors the on-disk format
+    // Claude CLI writes when running `/plugin install`.
+    const goodPath = join(tmpRoot, 'good.json')
+    writeFileSync(goodPath, JSON.stringify({
+      plugins: {
+        'official': [
+          { installPath: '/home/u/.claude/plugins/official/some-plugin' },
+          { installPath: '/home/u/.claude/plugins/official/other-plugin' },
+        ],
+        'community': [
+          { installPath: '/home/u/.claude/plugins/community/extra' },
+        ],
+        'malformed': [
+          { /* no installPath */ },
+          'string-not-object',
+          null,
+        ],
+      },
+    }))
+    __setPluginsPathOverrideForTests(goodPath)
+    const loaded = await loadInstalledPlugins()
+    assert.equal(loaded.length, 3, 'expected 3 plugins (malformed entries skipped)')
+    for (const p of loaded) {
+      assert.equal(p.type, 'local')
+      assert.match(p.path, /^\/home\/u\/\.claude\/plugins\//)
+    }
+
+    // Now verify sendMessage actually wires the plugins into queryOptions.
+    const pluginCaptured = []
+    const restoreSend = mod.__setSendEventForTests(() => {})
+    const fakeSdkPlugin = {
+      query({ options }) {
+        pluginCaptured.push({ options })
+        const messages = [
+          { type: 'system', subtype: 'init', session_id: 'pl-sdk', cwd: '/p' },
+          { type: 'result', subtype: 'success', session_id: 'pl-sdk', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 },
+        ]
+        return (async function*() { for (const m of messages) yield m })()
+      },
+    }
+    __setSdkOverrideForTests(fakeSdkPlugin)
+    try {
+      await dispatch({ jsonrpc: '2.0', id: 250, method: 'claude.startSession',
+        params: { sessionId: 'pl-1', options: { cwd: '/p' } } })
+      await dispatch({ jsonrpc: '2.0', id: 251, method: 'claude.sendMessage',
+        params: { sessionId: 'pl-1', prompt: 'hi' } })
+      assert.equal(pluginCaptured.length, 1)
+      const opts = pluginCaptured[0].options
+      assert.ok(Array.isArray(opts.plugins), 'expected plugins on queryOptions')
+      assert.equal(opts.plugins.length, 3)
+      assert.equal(opts.plugins[0].type, 'local')
+
+      // No plugins file -> queryOptions.plugins absent (not [] — Electron
+      // spreads conditionally).
+      __setPluginsPathOverrideForTests(missingPath)
+      await dispatch({ jsonrpc: '2.0', id: 252, method: 'claude.sendMessage',
+        params: { sessionId: 'pl-1', prompt: 'again' } })
+      assert.equal(pluginCaptured.length, 2)
+      assert.equal(pluginCaptured[1].options.plugins, undefined,
+        'plugins option must be absent when no plugins are installed')
+    } finally {
+      __setSdkOverrideForTests(undefined)
+      restoreSend()
+    }
+  } finally {
+    __setPluginsPathOverrideForTests(null)
+    rmSync(tmpRoot, { recursive: true, force: true })
+  }
+
   // Helpers (sdkModelForClaudeSelection + dataUrlToContentBlock) sanity.
   const { sdkModelForClaudeSelection, dataUrlToContentBlock } = mod
   assert.equal(sdkModelForClaudeSelection(undefined), undefined)
