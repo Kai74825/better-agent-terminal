@@ -523,6 +523,11 @@ async function inProcess() {
   }
 
   // resetSession drops the entry; subsequent getSessionState returns null.
+  // Wrap with sendEvent override so we can assert the claude:session-reset
+  // notification fires for an existing session but NOT for an unknown id —
+  // renderer panels rely on this event to clear UI state.
+  const resetCaptured = []
+  const restoreResetSend = mod.__setSendEventForTests((name, payload) => resetCaptured.push({ name, payload }))
   const reset = await dispatch({ jsonrpc: '2.0', id: 209, method: 'claude.resetSession', params: { sessionId: 'state-1' } })
   assert.equal(reset.result, true)
   const after = await dispatch({ jsonrpc: '2.0', id: 210, method: 'claude.getSessionState', params: { sessionId: 'state-1' } })
@@ -530,6 +535,13 @@ async function inProcess() {
   // Reset of unknown session id returns false (not an error).
   const reset2 = await dispatch({ jsonrpc: '2.0', id: 211, method: 'claude.resetSession', params: { sessionId: 'nope' } })
   assert.equal(reset2.result, false)
+  restoreResetSend()
+  const sessionResetEvents = resetCaptured.filter(e => e.name === 'claude:session-reset')
+  assert.equal(sessionResetEvents.length, 1, 'exactly one claude:session-reset emit for the existing session')
+  assert.equal(sessionResetEvents[0].payload.sessionId, 'state-1')
+  // Unknown-session reset must NOT emit (panel for that id likely doesn't exist).
+  const otherResets = resetCaptured.filter(e => e.name === 'claude:session-reset' && e.payload.sessionId === 'nope')
+  assert.equal(otherResets.length, 0, 'unknown sessionId reset should not emit')
 
   // Setters with bad params return false rather than throwing.
   const bad1 = await dispatch({ jsonrpc: '2.0', id: 212, method: 'claude.setAutoContinue', params: { opts: {} } })

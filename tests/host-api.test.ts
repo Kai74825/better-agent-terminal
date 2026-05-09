@@ -420,6 +420,18 @@ async function run() {
     mod.host.claude.onStream(() => {})()
     mod.host.claude.onStatus(() => {})()
     mod.host.claude.onModeChange(() => {})()
+    // Slice #38: 6 panel-state lifecycle listeners. They're in the
+    // explicit eventListeners map (not the permissive fallback), so
+    // each must register a real Tauri listen() and return a function
+    // unsubscriber.
+    for (const name of [
+      'onHistory', 'onResumeLoading', 'onSessionReset',
+      'onRateLimit', 'onWorktreeInfo', 'onPromptSuggestion',
+    ] as const) {
+      const unsub = (mod.host.claude as Record<string, (cb: unknown) => unknown>)[name](() => {})
+      assert.equal(typeof unsub, 'function', `${name} should return an unsubscriber`)
+      ;(unsub as () => void)()
+    }
     // Account / auth ops.
     assert.deepEqual(await mod.host.claude.authLogin(), { success: false, error: 'stub' })
     assert.deepEqual(await mod.host.claude.authLogout(), { success: true })

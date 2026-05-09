@@ -1067,7 +1067,11 @@ registerHandler('claude.resetSession', async (params) => {
   const sessionId = params?.sessionId
   if (typeof sessionId !== 'string' || !sessionId) return false
   // Drop the session record entirely. Next startSession recreates it.
-  return sessions.delete(sessionId)
+  const existed = sessions.delete(sessionId)
+  // Mirror Electron's claude:session-reset notification so renderer
+  // panels can clear messages / status without polling.
+  if (existed) sendEvent('claude:session-reset', { sessionId })
+  return existed
 })
 
 // Auth + account stubs. The renderer's auth UI calls these on every panel

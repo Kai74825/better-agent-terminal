@@ -621,6 +621,17 @@ function createTauriHost(): BatAppAPI {
           onAskUser: 'claude:ask-user',
           onPermissionResolved: 'claude:permission-resolved',
           onAskUserResolved: 'claude:ask-user-resolved',
+          // Panel-state lifecycle events. onSessionReset fires when the
+          // sidecar drops a session; renderer panels clear their UI. The
+          // others (history, resume-loading, rate-limit, worktree-info,
+          // prompt-suggestion) are emitted by feature-specific paths in
+          // sendMessage / resumeSession / SDK stream handling.
+          onHistory: 'claude:history',
+          onResumeLoading: 'claude:resume-loading',
+          onSessionReset: 'claude:session-reset',
+          onRateLimit: 'claude:rate-limit',
+          onWorktreeInfo: 'claude:worktree-info',
+          onPromptSuggestion: 'claude:prompt-suggestion',
         }
         if (eventListeners[key]) {
           const evName = eventListeners[key]
@@ -643,8 +654,20 @@ function createTauriHost(): BatAppAPI {
                 : key === 'onAskUser' ? 'data'
                 : key === 'onPermissionResolved' ? 'toolUseId'
                 : key === 'onAskUserResolved' ? 'toolUseId'
+                : key === 'onHistory' ? 'items'
+                : key === 'onResumeLoading' ? 'loading'
+                : key === 'onSessionReset' ? '__none__'
+                : key === 'onRateLimit' ? 'info'
+                : key === 'onWorktreeInfo' ? 'payload'
+                : key === 'onPromptSuggestion' ? 'suggestion'
                 : 'payload'
-              cb(p.sessionId, (p as Record<string, unknown>)[payloadKey])
+              // onSessionReset's Electron contract is `(sessionId)` only —
+              // the second arg is undefined. Sentinel '__none__' bypasses
+              // the lookup so we don't accidentally surface a key.
+              const second = payloadKey === '__none__'
+                ? undefined
+                : (p as Record<string, unknown>)[payloadKey]
+              cb(p.sessionId, second)
             })
         }
         // Unported claude.* methods get a permissive default rather than
