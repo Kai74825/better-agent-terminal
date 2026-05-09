@@ -643,6 +643,45 @@ async function inProcess() {
     __setSdkOverrideForTests(undefined)
   }
 
+  // stream_event → claude:stream mapping for real-time text/thinking
+  // deltas. Only content_block_delta with text or thinking forwards;
+  // other stream event variants (message_start, message_delta usage,
+  // ping, etc.) are dropped at this layer. Verifies the contract.
+  const streamCaptured = []
+  const restoreStreamEmit = mod.__setSendEventForTests((n, p) => streamCaptured.push({ name: n, payload: p }))
+  const fakeSdkWithStream = {
+    query() {
+      const messages = [
+        { type: 'system', subtype: 'init', session_id: 's-stream', cwd: '/x' },
+        { type: 'stream_event', session_id: 's-stream', parent_tool_use_id: null, event: { type: 'message_start', message: { usage: { input_tokens: 10 } } } },
+        { type: 'stream_event', session_id: 's-stream', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { text: 'Hel' } } },
+        { type: 'stream_event', session_id: 's-stream', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { text: 'lo' } } },
+        { type: 'stream_event', session_id: 's-stream', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { thinking: 'pondering' } } },
+        { type: 'stream_event', session_id: 's-stream', parent_tool_use_id: null, event: { type: 'ping' } },
+        { type: 'assistant', session_id: 's-stream', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } },
+        { type: 'result', subtype: 'success', session_id: 's-stream', result: 'Hello', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 },
+      ]
+      return (async function*() { for (const m of messages) yield m })()
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkWithStream)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 280, method: 'claude.startSession', params: { sessionId: 'stream-1', options: { cwd: '/x' } } })
+    await dispatch({ jsonrpc: '2.0', id: 281, method: 'claude.sendMessage', params: { sessionId: 'stream-1', prompt: 'hi' } })
+    const streamEvents = streamCaptured.filter(e => e.name === 'claude:stream')
+    // 2 text deltas + 1 thinking delta = 3 stream events. message_start
+    // and ping must NOT produce a stream event.
+    assert.equal(streamEvents.length, 3, `expected 3 stream events, got ${streamEvents.length}`)
+    assert.equal(streamEvents[0].payload.data.text, 'Hel')
+    assert.equal(streamEvents[1].payload.data.text, 'lo')
+    assert.equal(streamEvents[2].payload.data.thinking, 'pondering')
+    // parentToolUseId field present (null for top-level stream).
+    for (const ev of streamEvents) assert.equal(ev.payload.data.parentToolUseId, null)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreStreamEmit()
+  }
+
   // Abort path: while a query is mid-stream (fake SDK yields slowly),
   // claude.abortSession must propagate to the AbortController so the
   // SDK's iterator terminates promptly. Verifies the renderer's stop

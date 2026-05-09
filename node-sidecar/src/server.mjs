@@ -196,6 +196,24 @@ registerHandler('claude.sendMessage', async (params) => {
             permissionMode: msg.permissionMode ?? s.permissionMode,
           },
         })
+      } else if (t === 'stream_event') {
+        // Real-time text/thinking deltas from the model stream. The
+        // renderer's onStream listener uses payload.data to drive
+        // per-character append before the full assistant message lands.
+        // We mirror Electron's filter: only content_block_delta blocks
+        // with text/thinking deltas get forwarded; other stream events
+        // (message_start / message_delta usage updates / etc) are
+        // ignored at this layer for now.
+        const ev = msg.event
+        if (ev && ev.type === 'content_block_delta') {
+          const d = ev.delta
+          if (d?.text) {
+            sendEvent('claude:stream', { sessionId, data: { text: d.text, parentToolUseId: msg.parent_tool_use_id ?? null } })
+          }
+          if (d?.thinking) {
+            sendEvent('claude:stream', { sessionId, data: { thinking: d.thinking, parentToolUseId: msg.parent_tool_use_id ?? null } })
+          }
+        }
       } else if (t === 'assistant') {
         sendEvent('claude:message', { sessionId, message: msg })
         // Mirror Electron's processMessage: also fire dedicated
