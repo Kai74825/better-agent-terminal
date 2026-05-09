@@ -1178,10 +1178,32 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     }
   }, [sessionId, sessionMeta?.sdkSessionId, availableModels.length, isCodexSession])
 
-  // Fetch git branch on mount and when cwd changes
+  // Fetch git branch on mount/cwd changes, and keep active sessions fresh when
+  // the branch changes outside the running renderer session.
   useEffect(() => {
-    window.electronAPI.git.getBranch(cwd).then(branch => setGitBranch(branch)).catch(() => setGitBranch(null))
-  }, [cwd])
+    let disposed = false
+    const refreshGitBranch = () => {
+      window.electronAPI.git.getBranch(cwd)
+        .then(branch => { if (!disposed) setGitBranch(branch) })
+        .catch(() => { if (!disposed) setGitBranch(null) })
+    }
+    refreshGitBranch()
+    if (!isActive) return () => { disposed = true }
+
+    const interval = window.setInterval(refreshGitBranch, 5000)
+    const handleFocus = () => refreshGitBranch()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshGitBranch()
+    }
+    window.addEventListener('focus', handleFocus)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+      window.removeEventListener('focus', handleFocus)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [cwd, isActive])
 
   // Fetch subagent messages from SDK when task modal opens (for completed tasks with no streamed messages)
   useEffect(() => {
