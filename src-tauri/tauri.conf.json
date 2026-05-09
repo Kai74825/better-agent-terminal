@@ -32,6 +32,8 @@
     ],
     "resources": {
       "../node-sidecar/src/server.mjs": "node-sidecar/src/server.mjs",
+      "../node-sidecar/package.json": "node-sidecar/package.json",
+      "../node-sidecar/node_modules/": "node-sidecar/node_modules/",
       "../node-sidecar/runtime/": "node-runtime/"
     }
   }

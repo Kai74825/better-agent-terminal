@@ -637,6 +637,42 @@ mod tests {
     }
 
     #[test]
+    fn end_to_end_bundled_sdk_loads_through_bundled_node() {
+        // The release contract: bundled Node + bundled node_modules in
+        // node-sidecar/ together must let getSupportedModels return more
+        // than just builtins (i.e. SDK augmentation actually fires).
+        // If node-sidecar/node_modules is absent (fresh checkout, no
+        // pnpm install yet) we skip rather than fail.
+        let Some(node_path) = bundled_node_path_for_test() else {
+            eprintln!("skipped: no bundled Node binary present");
+            return;
+        };
+        let script = sidecar_script();
+        if !script.is_file() {
+            eprintln!("skipped: missing {}", script.display());
+            return;
+        }
+        let sidecar_node_modules = repo_root().join("node-sidecar").join("node_modules").join("@anthropic-ai").join("claude-agent-sdk");
+        if !sidecar_node_modules.exists() {
+            eprintln!("skipped: node-sidecar/node_modules not installed (run `pnpm --dir node-sidecar install`)");
+            return;
+        }
+        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None };
+        let state = SidecarState::new();
+        let result = state
+            .call(&cfg, "claude.getSupportedModels", Value::Null, Duration::from_secs(30))
+            .expect("getSupportedModels");
+        let arr = result.as_array().expect("expected array");
+        // Builtins=7 — anything more proves the bundled SDK was reachable.
+        assert!(arr.len() >= 7, "expected at least 7 builtins, got {}", arr.len());
+        // At least one entry must come from the SDK to confirm augmentation.
+        // (If sdk-import silently fell back to builtins-only this would be 7.)
+        let has_sdk_entry = arr.iter().any(|m| m.get("source").and_then(|s| s.as_str()) == Some("sdk"));
+        assert!(has_sdk_entry, "expected ≥1 SDK-tagged model from bundled node_modules; got {:?}", arr);
+        state.reset();
+    }
+
+    #[test]
     fn end_to_end_bundled_node_runs_sidecar() {
         // Verifies the bundled-Node code path by spawning the sidecar
         // through node-sidecar/runtime/<plat>-<arch>/[bin/]node[.exe]
