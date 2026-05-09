@@ -25,6 +25,18 @@ Node sidecar for agent SDKs
 3. 穩定 OS 整合與 process/runtime core 逐步搬到 Rust。
 4. 先用 spike 驗證風險，再決定是否全面替換 Electron。
 
+## Preview 版切換目標
+
+預估在 10 個 preview 版內完成從 Electron 到 Tauri 的主要切換。這裡的「切換」定義為：Tauri build 取代 Electron build 成為 preview 發佈目標；切換完成後不保留 Electron build，也不做 Electron/Tauri 雙軌維護。必要 rollback 依賴前一個可用 release/tag，而不是保留 Electron runtime。
+
+建議節奏：
+
+1. Preview 1-2：完成 host API adapter 與最小 Tauri shell。
+2. Preview 3-4：完成 PTY prototype，決定 Rust PTY 或 Node sidecar 路線。
+3. Preview 5-6：讓 workspace、settings、fs、git、worktree 等穩定 host 能力在 Tauri 版可用。
+4. Preview 7-8：整合 agent Node sidecar、packaging、macOS notarization 與 Windows installer。
+5. Preview 9-10：以 Tauri build 作為 preview 發佈目標，移除 Electron 發佈流程與 runtime 依賴。
+
 ---
 
 ## 短期計劃：1-3 天
@@ -119,6 +131,7 @@ Node sidecar for agent SDKs
 ### 目標
 
 讓 Tauri build 成為正式版候選，而不是 demo。
+短期發佈節奏上，目標是在 10 個 preview 版內讓 Tauri build 取代 Electron build 成為 preview 發佈目標，切換後不保留 Electron build。
 
 ### 工作項目
 
@@ -167,7 +180,7 @@ Node sidecar for agent SDKs
 1. Tauri build 功能等價於 Electron 版主要流程。
 2. installer 與 updater 可用。
 3. secrets migration 有回滾或 fallback。
-4. Electron 版可在過渡期保留，直到 Tauri 版完成主要平台驗證。
+4. Tauri 版完成主要平台驗證後，Electron 發佈流程與 runtime 依賴會被移除；不維持 Electron fallback。
 
 ---
 
