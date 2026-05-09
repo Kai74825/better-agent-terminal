@@ -65,6 +65,8 @@ async function run() {
       if (cmd === 'settings_load') return null as unknown as T
       if (cmd === 'settings_save') return undefined as unknown as T
       if (cmd === 'shell_open_external') return undefined as unknown as T
+      if (cmd === 'shell_open_path') return undefined as unknown as T
+      if (cmd === 'dialog_confirm') return true as unknown as T
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -78,11 +80,19 @@ async function run() {
 
     await mod.host.settings.save('{"theme":"dark"}')
     await mod.host.shell.openExternal('https://example.com')
+    await mod.host.shell.openPath('C:/Users/me/project')
+    const ok = await mod.host.dialog.confirm('Proceed?', 'Heads up')
+    assert.equal(ok, true)
+    // title is optional — the adapter passes undefined through.
+    await mod.host.dialog.confirm('Just a message')
 
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
       { cmd: 'shell_open_external', args: { url: 'https://example.com' } },
+      { cmd: 'shell_open_path', args: { path: 'C:/Users/me/project' } },
+      { cmd: 'dialog_confirm', args: { message: 'Proceed?', title: 'Heads up' } },
+      { cmd: 'dialog_confirm', args: { message: 'Just a message', title: undefined } },
     ])
   }
 

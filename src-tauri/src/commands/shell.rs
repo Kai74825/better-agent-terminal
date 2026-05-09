@@ -34,6 +34,22 @@ pub async fn shell_open_external(app: tauri::AppHandle, url: String) -> Result<(
     Ok(())
 }
 
+// Mirror of Electron `shell.openPath` — opens a local path with the OS's
+// default handler (Finder/Explorer for folders, default app for files).
+// Empty strings are rejected so we don't accidentally open the cwd.
+#[tauri::command]
+pub async fn shell_open_path(app: tauri::AppHandle, path: String) -> Result<(), CommandError> {
+    if path.trim().is_empty() {
+        return Err(CommandError {
+            message: "shell_open_path requires a non-empty path".into(),
+        });
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(Into::<CommandError>::into)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // Pure-input validation lives here; integration tests run via
@@ -42,11 +58,24 @@ mod tests {
         url.starts_with("file://")
     }
 
+    fn rejects_empty_path(path: &str) -> bool {
+        path.trim().is_empty()
+    }
+
     #[test]
     fn file_urls_are_rejected() {
         assert!(rejects_file_scheme("file:///etc/passwd"));
         assert!(rejects_file_scheme("file://localhost/c:/foo.txt"));
         assert!(!rejects_file_scheme("https://example.com"));
         assert!(!rejects_file_scheme("mailto:hi@example.com"));
+    }
+
+    #[test]
+    fn empty_paths_are_rejected() {
+        assert!(rejects_empty_path(""));
+        assert!(rejects_empty_path("   "));
+        assert!(rejects_empty_path("\t\n"));
+        assert!(!rejects_empty_path("C:/Users"));
+        assert!(!rejects_empty_path("/home/user"));
     }
 }

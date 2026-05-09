@@ -6,5 +6,6 @@
 // (src/host-api.ts), so renaming or replacing a command is a one-place
 // edit at this layer plus the adapter route.
 
+pub mod dialog;
 pub mod settings;
 pub mod shell;

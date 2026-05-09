@@ -7,7 +7,7 @@
 
 mod commands;
 
-use commands::{settings, shell as shell_cmd};
+use commands::{dialog as dialog_cmd, settings, shell as shell_cmd};
 
 pub fn run() {
     tauri::Builder::default()
@@ -17,6 +17,8 @@ pub fn run() {
             settings::settings_load,
             settings::settings_save,
             shell_cmd::shell_open_external,
+            shell_cmd::shell_open_path,
+            dialog_cmd::dialog_confirm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running better-agent-terminal");

@@ -103,8 +103,17 @@ function createTauriHost(): BatAppAPI {
     },
     shell: {
       openExternal: (url: string) => getInvoke()<void>('shell_open_external', { url }),
-      openPath: () => notImplemented('shell.openPath'),
+      openPath: (path: string) => getInvoke()<void>('shell_open_path', { path }),
       getPathForFile: () => notImplemented('shell.getPathForFile'),
+    },
+    dialog: {
+      confirm: (message: string, title?: string) =>
+        getInvoke()<boolean>('dialog_confirm', { message, title }),
+      // Not yet ported — picker dialogs require additional Tauri permission
+      // wiring and per-platform UX testing.
+      selectFolder: () => notImplemented('dialog.selectFolder'),
+      selectImages: () => notImplemented('dialog.selectImages'),
+      selectFiles: () => notImplemented('dialog.selectFiles'),
     },
   }
 
@@ -166,7 +175,7 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 
 // Namespaces whose methods are routed through Tauri invoke. Listed here so
 // the permissive shim can prefer the real impl when present.
-const PORTED_NAMESPACES = new Set(['settings', 'shell'])
+const PORTED_NAMESPACES = new Set(['settings', 'shell', 'dialog'])
 
 export function installTauriShim(): void {
   if (getHostKind() !== 'tauri') return
