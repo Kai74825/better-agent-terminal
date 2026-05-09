@@ -24,6 +24,7 @@ import { createReadStream, accessSync, constants as fsConstants } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { join, basename } from 'node:path'
 import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 // Handler registry. Each handler receives `params` (any JSON value) and
 // returns either a value or a Promise resolving to one. Throw to signal an
@@ -420,14 +421,27 @@ export { loadAnthropicSdk, __setSdkOverrideForTests }
 
 const STUB_AUTH_ERR = 'claude account ops not yet wired through Tauri sidecar'
 
-registerHandler('claude.authLogin', async () => ({ success: false, error: STUB_AUTH_ERR }))
+// authLogin shells out to `claude auth login` (interactive, browser-based
+// OAuth). The CLI prints a URL, opens the user's browser, and exits when
+// the OAuth callback fires; we just wait for the process to exit. The
+// 180s ceiling is generous for a real-user flow but bounded so a stuck
+// flow eventually fails. Uses the bundled CLI when available so a fresh
+// release MSI install can authenticate without requiring system claude.
+registerHandler('claude.authLogin', async () => {
+  return new Promise((resolve) => {
+    spawnClaudeCli(['auth', 'login'], { timeout: AUTH_LOGIN_TIMEOUT_MS }, (err) => {
+      if (err) resolve({ success: false, error: err.message })
+      else resolve({ success: true })
+    })
+  })
+})
 // authLogout shells out to `claude auth logout` and reports the result.
 // 10s timeout — the CLI exits ~immediately on success. Failure usually
 // means the CLI isn't installed or auth state is corrupt; surface the
 // error message so the renderer can show it.
 registerHandler('claude.authLogout', async () => {
   return new Promise((resolve) => {
-    execFile('claude', ['auth', 'logout'], { timeout: AUTH_STATUS_TIMEOUT_MS }, (err) => {
+    spawnClaudeCli(['auth', 'logout'], { timeout: AUTH_STATUS_TIMEOUT_MS }, (err) => {
       if (err) resolve({ success: false, error: err.message })
       else resolve({ success: true })
     })
@@ -903,10 +917,69 @@ export { findClaudeCliPath, listSessionsFallback }
 // safeStorage-encrypted file the sidecar deliberately does not touch.
 
 const AUTH_STATUS_TIMEOUT_MS = 10_000
+// auth login is interactive (browser-based OAuth, ~30-60s typical), so
+// we give it a generous ceiling. The CLI exits as soon as the OAuth
+// callback fires; if the user never completes the flow, we time out.
+const AUTH_LOGIN_TIMEOUT_MS = 180_000
+
+// Resolve the path to a `claude` CLI binary. The bundled SDK ships one
+// per platform (e.g. node-sidecar/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe);
+// prefer that so a fresh release MSI install can authenticate without
+// requiring a system claude. Falls back to whatever's on PATH.
+//
+// Test/fixture override: BAT_SIDECAR_CLAUDE_BIN points at any executable
+// (typically a printf-and-exit shim) so tests can verify the spawn path
+// without invoking the real CLI's network flow.
+let _claudeCliPathCache
+function resolveClaudeCliBinary() {
+  if (process.env.BAT_SIDECAR_CLAUDE_BIN) return process.env.BAT_SIDECAR_CLAUDE_BIN
+  if (_claudeCliPathCache !== undefined) return _claudeCliPathCache
+  // Probe the SDK-bundled binding directory siblings — there's at most
+  // one per install (the package matches host platform/arch via npm
+  // optionalDependencies), so the first match wins.
+  const tripleDirs = [
+    'claude-agent-sdk-win32-x64',
+    'claude-agent-sdk-win32-arm64',
+    'claude-agent-sdk-darwin-x64',
+    'claude-agent-sdk-darwin-arm64',
+    'claude-agent-sdk-linux-x64',
+    'claude-agent-sdk-linux-arm64',
+  ]
+  const exeName = platform() === 'win32' ? 'claude.exe' : 'claude'
+  // Walk up from this server.mjs to find node_modules/@anthropic-ai/.
+  // import.meta.url is a file URL; ../../node_modules/@anthropic-ai/<pkg>/
+  let here
+  try {
+    here = fileURLToPath(import.meta.url)
+  } catch {
+    here = null
+  }
+  if (here) {
+    const sidecarRoot = join(here, '..', '..')
+    for (const triple of tripleDirs) {
+      const candidate = join(sidecarRoot, 'node_modules', '@anthropic-ai', triple, exeName)
+      try {
+        accessSync(candidate, fsConstants.X_OK)
+        _claudeCliPathCache = candidate
+        return candidate
+      } catch { /* not present, try next */ }
+    }
+  }
+  _claudeCliPathCache = null
+  return null
+}
+
+// Spawn the resolved claude CLI with the given args. Falls back to
+// invoking 'claude' from PATH when no bundled binary is available.
+function spawnClaudeCli(args, opts, callback) {
+  const bundled = resolveClaudeCliBinary()
+  const bin = bundled || 'claude'
+  return execFile(bin, args, opts, callback)
+}
 
 function fetchAuthStatus() {
   return new Promise((resolve) => {
-    execFile('claude', ['auth', 'status'], { timeout: AUTH_STATUS_TIMEOUT_MS }, (err, stdout) => {
+    spawnClaudeCli(['auth', 'status'], { timeout: AUTH_STATUS_TIMEOUT_MS }, (err, stdout) => {
       if (err) {
         resolve(null)
         return
@@ -966,7 +1039,8 @@ async function readAccountIndex() {
 }
 
 // Exported for tests.
-export { fetchAuthStatus, resolveDataDir, readAccountIndex }
+function __resetClaudeCliCacheForTests() { _claudeCliPathCache = undefined }
+export { fetchAuthStatus, resolveDataDir, readAccountIndex, resolveClaudeCliBinary, __resetClaudeCliCacheForTests }
 
 // --- openai.listSessions helper ------------------------------------------
 //

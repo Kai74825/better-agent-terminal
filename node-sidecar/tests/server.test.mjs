@@ -661,6 +661,74 @@ async function inProcess() {
     restore2()
   }
 
+  // claude.authLogin / authLogout / authStatus all spawn the resolved
+  // claude CLI. Verify that the resolver picks up the bundled binary
+  // when present (sidecar/node_modules/@anthropic-ai/claude-agent-sdk-<triple>/claude[.exe])
+  // and that the env override BAT_SIDECAR_CLAUDE_BIN takes precedence.
+  // We use the env override for the actual auth-flow tests so we can
+  // point at a deterministic shim (process.execPath running an exit-0
+  // script) instead of invoking the real CLI's network flow.
+  const { resolveClaudeCliBinary, __resetClaudeCliCacheForTests } = mod
+  __resetClaudeCliCacheForTests()
+  const savedBin = process.env.BAT_SIDECAR_CLAUDE_BIN
+  delete process.env.BAT_SIDECAR_CLAUDE_BIN
+  try {
+    const bundledPath = resolveClaudeCliBinary()
+    if (bundledPath) {
+      // Bundled binary resolved. Sanity check: it points at the SDK
+      // package's claude executable.
+      const bundledLower = bundledPath.toLowerCase().replace(/\\/g, '/')
+      assert.ok(
+        bundledLower.includes('node_modules/@anthropic-ai/claude-agent-sdk-'),
+        `expected bundled path under @anthropic-ai/claude-agent-sdk-<triple>, got ${bundledPath}`,
+      )
+      assert.ok(
+        bundledLower.endsWith('claude.exe') || bundledLower.endsWith('/claude'),
+        `expected exe suffix, got ${bundledPath}`,
+      )
+    } else {
+      // No bundled binary — that's OK in fresh checkouts where
+      // node-sidecar/node_modules hasn't been installed. The handler
+      // falls back to PATH lookup which we can't deterministically test.
+      console.log('claude CLI bundle not present — bundled-resolver assertion skipped')
+    }
+  } finally {
+    if (savedBin !== undefined) process.env.BAT_SIDECAR_CLAUDE_BIN = savedBin
+  }
+
+  // Env override: set BAT_SIDECAR_CLAUDE_BIN to a node shim that
+  // exits 0 immediately. authLogin/authLogout dispatch must succeed
+  // and report {success:true}. Verifies the spawn path is plumbed
+  // correctly without hitting the real network OAuth flow.
+  process.env.BAT_SIDECAR_CLAUDE_BIN = process.execPath
+  __resetClaudeCliCacheForTests()
+  try {
+    // The shim is just `node`; pass an exit-0 args via a wrapper. Since
+    // execFile passes our handler args as-is, we can't inject a
+    // -e "process.exit(0)" globally — but `node auth login` will still
+    // exit immediately with code 1 (unknown subcommand) which means we
+    // get an error result, not a stub. That's enough to prove the
+    // handler is calling spawnClaudeCli, not falling back to the stub.
+    const loginReply = await dispatch({ jsonrpc: '2.0', id: 250, method: 'claude.authLogin' })
+    // Either success (unlikely with node binary) or a CLI error message
+    // from node. The pre-#23 stub would have returned a hardcoded
+    // STUB_AUTH_ERR; absence of that string proves the wiring.
+    assert.ok(loginReply.result, 'authLogin returned undefined result')
+    if (!loginReply.result.success) {
+      assert.ok(typeof loginReply.result.error === 'string')
+      assert.ok(
+        !loginReply.result.error.includes('not yet wired'),
+        `authLogin still using stub error: ${loginReply.result.error}`,
+      )
+    }
+    const logoutReply = await dispatch({ jsonrpc: '2.0', id: 251, method: 'claude.authLogout' })
+    assert.ok(logoutReply.result)
+  } finally {
+    if (savedBin === undefined) delete process.env.BAT_SIDECAR_CLAUDE_BIN
+    else process.env.BAT_SIDECAR_CLAUDE_BIN = savedBin
+    __resetClaudeCliCacheForTests()
+  }
+
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
   const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod
