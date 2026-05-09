@@ -27,7 +27,11 @@
     "diagnose:ctrl-o:verbose": "electron tests/diagnose-ctrl-o.js --verbose",
     "test:node-resolver": "tsx tests/node-resolver.test.ts",
     "test:codex-resume": "tsx tests/codex-resume-fallback.test.ts",
-    "test:host-api": "tsx tests/host-api.test.ts"
+    "test:host-api": "tsx tests/host-api.test.ts",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:debug": "tauri build --debug"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.58",
@@ -57,6 +61,8 @@
     "@lydell/node-pty-win32-x64": "1.1.0"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/cli": "^2.11.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
     "@types/qrcode": "^1.5.6",

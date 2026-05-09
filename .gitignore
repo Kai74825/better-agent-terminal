@@ -1,7 +1,12 @@
 node_modules/
 dist/
 dist-electron/
+dist-tauri/
 release/
+
+# Tauri Rust target dir + generated bundle output
+src-tauri/target/
+src-tauri/gen/
 *.log
 .DS_Store
 
