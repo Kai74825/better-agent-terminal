@@ -444,6 +444,9 @@ function createTauriHost(): BatAppAPI {
         if (key === 'listSessions') {
           return (cwd: string) => getInvoke()<unknown>('claude_list_sessions', { cwd })
         }
+        if (key === 'scanSkills') {
+          return (cwd: string) => getInvoke()<unknown>('claude_scan_skills', { cwd })
+        }
         const sessionReadCommands: Record<string, string> = {
           getSupportedModels: 'claude_get_supported_models',
           getSupportedCommands: 'claude_get_supported_commands',

@@ -264,6 +264,42 @@ async function inProcess() {
   } finally {
     rmSync(join(OPENAI_SESSIONS_ROOT, fakeYear), { recursive: true, force: true })
   }
+
+  // scanSkills — fabricate a project-scoped .claude/skills/ tree and
+  // verify both top-level *.md and SKILL.md-in-subdir paths are picked
+  // up, frontmatter is parsed, and dedup-by-name kicks in.
+  const { scanSkills, parseSkillFrontmatter } = mod
+  // parseSkillFrontmatter unit checks: empty input, no frontmatter, valid.
+  assert.deepEqual(parseSkillFrontmatter(''), {})
+  assert.deepEqual(parseSkillFrontmatter('# heading only'), {})
+  assert.deepEqual(parseSkillFrontmatter('---\nname: foo\ndescription: "with quotes"\n---\nbody'),
+    { name: 'foo', description: 'with quotes' })
+
+  const fakeProject = mkdtempSync(join(tmpdir(), 'sidecar-skills-'))
+  try {
+    const skillsDir = join(fakeProject, '.claude', 'skills')
+    mkdirSync(skillsDir, { recursive: true })
+    // Top-level .md skill
+    writeFileSync(join(skillsDir, 'flat.md'),
+      '---\nname: flat-skill\ndescription: a flat skill\n---\nbody here\n')
+    // Subdir with SKILL.md
+    const sub = join(skillsDir, 'nested')
+    mkdirSync(sub)
+    writeFileSync(join(sub, 'SKILL.md'),
+      '# Nested\n\nNo frontmatter, fall back to first heading.\n')
+    // Empty subdir without SKILL.md — silently skipped
+    mkdirSync(join(skillsDir, 'empty'))
+
+    const skills = await scanSkills(fakeProject)
+    const byName = new Map(skills.map(s => [s.name, s]))
+    assert.ok(byName.has('flat-skill'), 'missing flat-skill')
+    assert.equal(byName.get('flat-skill').description, 'a flat skill')
+    assert.equal(byName.get('flat-skill').scope, 'project')
+    assert.ok(byName.has('nested'), 'missing nested skill')
+    assert.equal(byName.get('nested').description, 'Nested')
+  } finally {
+    rmSync(fakeProject, { recursive: true, force: true })
+  }
 }
 
 // End-to-end: spawn `node server.mjs`, send a few requests, assert replies.

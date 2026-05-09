@@ -271,3 +271,12 @@ pub fn claude_get_worktree_status(
 ) -> Result<Value, BridgeError> {
     call(&app, &state, "claude.getWorktreeStatus", json!({ "sessionId": session_id }))
 }
+
+#[tauri::command]
+pub fn claude_scan_skills(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    cwd: String,
+) -> Result<Value, BridgeError> {
+    call(&app, &state, "claude.scanSkills", json!({ "cwd": cwd }))
+}
