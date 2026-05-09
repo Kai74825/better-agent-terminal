@@ -185,7 +185,10 @@ function createTauriHost(): BatAppAPI {
       // Image clipboard requires a separate raw-bytes bridge; not ported yet.
       saveImage: () => notImplemented('clipboard.saveImage'),
       writeImage: () => notImplemented('clipboard.writeImage'),
-      onCopyShortcut: () => notImplemented('clipboard.onCopyShortcut'),
+      // Listener-style: WorkerPanel registers this on mount. No copy
+      // shortcut event fires under Tauri yet — return a no-op unsub so
+      // the panel renders.
+      onCopyShortcut: () => () => {},
     },
     image: {
       readAsDataUrl: (filePath: string) =>
@@ -225,11 +228,14 @@ function createTauriHost(): BatAppAPI {
         ),
       // Watcher + path-link resolution are not ported yet — they need an
       // event-streaming bridge and language-aware path heuristics
-      // respectively.
+      // respectively. resolvePathLinks throws because callers await its
+      // result; watch/unwatch/onChanged are listener-style and panels
+      // call them unconditionally on mount, so a no-op stub keeps the
+      // tree from crashing — fs change notifications just won't fire.
       resolvePathLinks: () => notImplemented('fs.resolvePathLinks'),
-      watch: () => notImplemented('fs.watch'),
-      unwatch: () => notImplemented('fs.unwatch'),
-      onChanged: () => notImplemented('fs.onChanged'),
+      watch: () => {},
+      unwatch: () => {},
+      onChanged: () => () => {},
     },
     update: {
       getVersion: () => getInvoke()<string>('update_get_version'),
@@ -258,6 +264,12 @@ function createTauriHost(): BatAppAPI {
       getDetachedId: () => null,
       onDetached: () => () => {},
       onReattached: () => () => {},
+      // workspace:reload comes from another Electron window or remote
+      // broadcast hub re-pushing serialized state. The Tauri MVP is
+      // single-window without remote sync, so the callback never fires —
+      // returning a no-op unsubscriber keeps workspace-store.ts happy
+      // (it calls this unconditionally during init).
+      onReload: () => () => {},
     },
     profile: {
       // Single-window MVP — see src-tauri/src/commands/profile.rs.
