@@ -171,7 +171,10 @@ function createTauriHost(): BatAppAPI {
     shell: {
       openExternal: (url: string) => getInvoke()<void>('shell_open_external', { url }),
       openPath: (path: string) => getInvoke()<void>('shell_open_path', { path }),
-      getPathForFile: () => notImplemented('shell.getPathForFile'),
+      // Tauri 2 webview has no equivalent of Electron's webUtils.getPathForFile —
+      // a File from a browser drop event doesn't expose its on-disk path.
+      // Returning null lets drop handlers gracefully fall back to dataURL.
+      getPathForFile: () => null,
     },
     dialog: {
       confirm: (message: string, title?: string) =>

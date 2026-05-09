@@ -569,6 +569,37 @@ mod tests {
         );
     }
 
+    // Drag-drop regression: Tauri 2's default `dragDropEnabled: true`
+    // intercepts OS drag-drop at the webview layer, so the renderer's
+    // standard browser `onDrop` handlers never fire. The renderer's
+    // ClaudeAgentPanel / CodexAgentPanel / OpenAIAgentPanel / Sidebar
+    // all rely on `onDrop`, so silently flipping this back to true
+    // breaks file/image attachment + workspace folder drop.
+    //
+    // Pin the contract here. If a future tauri.conf edit removes the
+    // explicit `dragDropEnabled: false`, this test goes red.
+    #[test]
+    fn tauri_conf_disables_dragdrop_so_browser_ondrop_fires() {
+        let conf_path = repo_root().join("src-tauri").join("tauri.conf.json");
+        let raw = std::fs::read_to_string(&conf_path).expect("tauri.conf.json must be readable");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("tauri.conf.json must parse");
+        let windows = parsed
+            .pointer("/app/windows")
+            .and_then(|v| v.as_array())
+            .expect("app.windows must be an array");
+        assert!(!windows.is_empty(), "app.windows must declare at least one window");
+        for (i, w) in windows.iter().enumerate() {
+            let dde = w.get("dragDropEnabled").and_then(|v| v.as_bool());
+            assert_eq!(
+                dde, Some(false),
+                "window[{i}].dragDropEnabled must be explicitly false so the renderer's \
+                 onDrop handlers fire. Tauri's OS-level drag-drop interception is \
+                 incompatible with our File-based attach flow.",
+            );
+        }
+    }
+
     #[test]
     fn find_bundled_node_returns_none_for_missing_dir() {
         let tmp = std::env::temp_dir().join(format!("bat-bundled-node-test-empty-{}", std::process::id()));

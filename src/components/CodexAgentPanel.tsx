@@ -2396,17 +2396,18 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     e.preventDefault()
     setIsDragOver(false)
     for (const file of e.dataTransfer.files) {
-      if (isRemoteConnected) {
+      const filePath = isRemoteConnected ? null : host.shell.getPathForFile(file)
+      if (!filePath) {
         if (file.type.startsWith('image/')) {
           const dataUrl = await readFileAsDataUrl(file)
           addImageDataUrl(file.name || filenameForPastedImage(file), dataUrl)
-        } else {
+        } else if (isRemoteConnected) {
           window.alert('Remote sessions can only attach local dropped images. File paths must exist on the host.')
+        } else {
+          window.alert('Drag-drop of non-image files needs the host to expose paths; not yet wired in this build.')
         }
         continue
       }
-      const filePath = host.shell.getPathForFile(file)
-      if (!filePath) continue
       if (file.type.startsWith('image/')) {
         await addImageByPath(filePath)
       } else {

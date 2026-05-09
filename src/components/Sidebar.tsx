@@ -383,15 +383,21 @@ export function Sidebar({
           }
           const files = Array.from(e.dataTransfer.files)
           let added = 0
+          let pathlessSeen = false
           for (const file of files) {
             const filePath = host.shell.getPathForFile(file)
             if (filePath) {
               const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
               workspaceStore.addWorkspace(name, filePath)
               added++
+            } else {
+              pathlessSeen = true
             }
           }
           if (added > 0) workspaceStore.save()
+          else if (pathlessSeen) {
+            window.alert('Drag-drop of folders to add as workspaces needs the host to expose paths; use the "Add workspace" button instead.')
+          }
         }}
       >
         {filteredWorkspaces.map(workspace => (
