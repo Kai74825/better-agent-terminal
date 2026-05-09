@@ -204,9 +204,25 @@ registerHandler('worktree.rehydrate', async () => ({ success: false }))
 // --- agent.* ---------------------------------------------------------------
 //
 // Single read-only method today: which presets the host knows how to
-// start. Returns an empty list until presets are registered in the
-// sidecar. Renderer treats empty list as "no advanced presets available".
-registerHandler('agent.listPresets', async () => [])
+// start. Mirrored from src/types/agent-presets.ts AGENT_PRESETS — the
+// renderer's NewTerminalQuickPick uses this to gate which preset cards
+// render. Returning [] would gray out the entire picker. Keep this
+// list in sync with the renderer constant; if you add a preset there
+// without updating this, the new card will not be listed under Tauri.
+const AGENT_PRESET_IDS = [
+  'claude-code',
+  'claude-code-v2',
+  'claude-code-worktree',
+  'claude-cli',
+  'claude-cli-worktree',
+  'codex-agent',
+  'codex-agent-worktree',
+  'openai-agent',
+  'codex-cli',
+  'none',
+]
+registerHandler('agent.listPresets', async () => AGENT_PRESET_IDS)
+export { AGENT_PRESET_IDS }
 
 // --- remote.* / tunnel.* stubs --------------------------------------------
 //

@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -300,6 +301,28 @@ async function inProcess() {
   } finally {
     rmSync(fakeProject, { recursive: true, force: true })
   }
+
+  // AGENT_PRESET_IDS in the sidecar must stay in sync with the
+  // renderer-side AGENT_PRESETS constant. If this assertion fires,
+  // someone added a preset to src/types/agent-presets.ts without
+  // updating node-sidecar/src/server.mjs.
+  const { AGENT_PRESET_IDS } = mod
+  const presetsModule = await readFile(
+    new URL('../../src/types/agent-presets.ts', import.meta.url), 'utf-8',
+  )
+  const idsFromTs = [...presetsModule.matchAll(/^\s*id:\s*'([^']+)'/gm)].map(m => m[1])
+  assert.deepEqual(
+    [...AGENT_PRESET_IDS].sort(),
+    [...idsFromTs].sort(),
+    `sidecar AGENT_PRESET_IDS drifted from src/types/agent-presets.ts (sidecar=${AGENT_PRESET_IDS}, ts=${idsFromTs})`,
+  )
+
+  // Round-trip the agent.listPresets handler so we know it actually
+  // returns the static list rather than [] from a regression.
+  const presetsReply = await dispatch({ jsonrpc: '2.0', id: 50, method: 'agent.listPresets' })
+  assert.ok(Array.isArray(presetsReply.result))
+  assert.ok(presetsReply.result.length > 0, 'agent.listPresets returned empty list')
+  assert.ok(presetsReply.result.includes('claude-cli'))
 }
 
 // End-to-end: spawn `node server.mjs`, send a few requests, assert replies.

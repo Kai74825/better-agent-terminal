@@ -2,7 +2,9 @@
 
 ## 進度紀錄（持續更新）
 
-最近一次更新：2026-05-09 (#11)。（同上 + **新 #11**：再 port `claude.scanSkills` — 走訪 `<cwd>/.claude/skills/` 與 `~/.claude/skills/`，吃 SKILL.md（subdir）與 *.md（top-level），parse YAML frontmatter 抓 name/description，沒有 frontmatter 就退回首條 heading。新增 `claude_scan_skills` Tauri command + adapter 顯式路由（從 permissive fallback 拉出）。renderer 的 SkillsPanel 在 Tauri 下會直接拿到掃描結果，不再走 warn-once null。新增 host-api 測試 + sidecar fixture-driven 測試。所有測試仍綠。）
+最近一次更新：2026-05-09 (#12)。（同上 + **新 #12**：sidecar 的 `agent.listPresets` 從 stub `[]` 換成真實 preset id 列表，鏡射 `src/types/agent-presets.ts::AGENT_PRESETS`。NewTerminalQuickPick 的 preset 卡片在 Tauri 下會全部亮起（之前 sidecar 回 [] 會把所有非 'none' 的卡片視為 unsupported 而 disable）。新增 drift guard 測試：sidecar 直接 read renderer-side TS 檔，regex 抓所有 `id: '...'` literals，斷言 sorted-equal — 若日後新增 preset 沒同步更新 sidecar，測試立即 fail。所有測試仍綠。）
+
+歷史紀錄：2026-05-09 (#11)。（同上 + **新 #11**：再 port `claude.scanSkills` — 走訪 `<cwd>/.claude/skills/` 與 `~/.claude/skills/`，吃 SKILL.md（subdir）與 *.md（top-level），parse YAML frontmatter 抓 name/description，沒有 frontmatter 就退回首條 heading。新增 `claude_scan_skills` Tauri command + adapter 顯式路由（從 permissive fallback 拉出）。renderer 的 SkillsPanel 在 Tauri 下會直接拿到掃描結果，不再走 warn-once null。新增 host-api 測試 + sidecar fixture-driven 測試。所有測試仍綠。）
 
 歷史紀錄：2026-05-09 (#10)。（同上 + **新 #10**：把 `openai.listSessions` 從 stub 換成真實實作 — 走訪 `~/.better-agent-terminal/openai-sessions/<yyyy>/<mm>/<dd>/*.jsonl`，每檔 parse JSONL 抓首條 user message 當 preview，mtime desc 排序，與 `electron/openai-agent/persistence.ts::listAllSessions` 行為一致。renderer 切到 OpenAI panel 時 resume list 會直接拿到 Electron 累積的 session 紀錄，不需要等 OpenAI 真實 manager port 完。所有 sidecar e2e + cargo + host-api + ts 仍綠。）
 
