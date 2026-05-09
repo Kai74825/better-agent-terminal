@@ -2,7 +2,7 @@
 
 ## 進度紀錄（持續更新）
 
-最近一次更新：2026-05-09。
+最近一次更新：2026-05-09。（最新一輪：完成 renderer 大規模搬遷到 `host` adapter，settings/shell/dialog/fs/clipboard/image 共 98 處 callsite 改走 adapter；同時補齊 fs 全套 directory ops + `image_read_as_data_url`，cargo test 30 測例。）
 
 ### 已完成
 
@@ -35,7 +35,7 @@
 - [ ] 把更多 Electron preload 命名空間 port 到 Rust。已完成：`shell.openPath`、`dialog.{confirm,selectFolder,selectFiles,selectImages}`、`fs.{readFile,home,readdir,listDirs,mkdir,deletePath,quickLocations,search}`、`settings.getShellPath`、`clipboard.writeText`、`image.readAsDataUrl`。待辦：`clipboard.{saveImage,writeImage}`（需要 raw bytes / data URL 橋）、`image.saveDataUrl`（save-file picker + 寫檔）、`fs.resolvePathLinks`（語言/檔副檔名啟發式）、`update.check` / `update.getVersion`、`debug.log` 接到 Rust logger。
 - [ ] 規劃 PTY 路線（Phase 2）：Rust PTY vs Node sidecar prototype。
 - [ ] Agent SDK Node sidecar 設計（Phase 2）。
-- [ ] 把全部 `window.batAppAPI.*` 直呼換成 `host.*`，讓 renderer 完全不直讀全域。
+- [~] 把全部 `window.batAppAPI.*` 直呼換成 `host.*`：已 port 命名空間（settings、shell、dialog、fs、clipboard、image，共 98 處 / 20 個檔案）已切到 `host.*`；剩下未 port 的命名空間（pty、claude、codex、openai、workspace、git、worktree 等）仍走 `window.batAppAPI` 直到該命名空間有 Rust 對應。
 
 ### 計畫調整
 
