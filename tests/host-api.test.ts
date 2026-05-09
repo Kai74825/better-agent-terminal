@@ -6,7 +6,12 @@
 import * as assert from 'node:assert/strict'
 
 // jsdom-free: we synthesise a globalThis.window that the adapter inspects.
-type WinShape = { batAppAPI?: unknown; __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown }
+type TauriInvoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
+type WinShape = {
+  batAppAPI?: unknown
+  __TAURI_INTERNALS__?: { invoke?: TauriInvoke }
+  __TAURI__?: unknown
+}
 const setWindow = (shape: WinShape | undefined) => {
   ;(globalThis as { window?: WinShape | undefined }).window = shape
 }
@@ -51,27 +56,58 @@ async function run() {
     assert.deepEqual(calls, ['load', 'open:https://example.com'])
   }
 
-  // 3) Tauri detection + stub error
+  // 3) Tauri detection routes ported namespaces through invoke
   {
-    setWindow({ __TAURI_INTERNALS__: {} })
+    const invokeCalls: { cmd: string; args?: Record<string, unknown> }[] = []
+    const invoke: TauriInvoke = async <T>(cmd: string, args?: Record<string, unknown>) => {
+      invokeCalls.push({ cmd, args })
+      // Mirror Rust return shapes for the commands we care about.
+      if (cmd === 'settings_load') return null as unknown as T
+      if (cmd === 'settings_save') return undefined as unknown as T
+      if (cmd === 'shell_open_external') return undefined as unknown as T
+      throw new Error(`unexpected invoke: ${cmd}`)
+    }
+    setWindow({ __TAURI_INTERNALS__: { invoke } })
     const mod = await loadFreshAdapter()
     assert.equal(mod.getHostKind(), 'tauri')
     assert.equal(mod.isElectron(), false)
     assert.equal(mod.isTauri(), true)
-    assert.throws(() => (mod.host as { settings: { load: () => unknown } }).settings.load(),
-      /settings\.load is not yet implemented under Tauri/)
+
+    const loaded = await mod.host.settings.load()
+    assert.equal(loaded, null)
+
+    await mod.host.settings.save('{"theme":"dark"}')
+    await mod.host.shell.openExternal('https://example.com')
+
+    assert.deepEqual(invokeCalls, [
+      { cmd: 'settings_load', args: undefined },
+      { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
+      { cmd: 'shell_open_external', args: { url: 'https://example.com' } },
+    ])
   }
 
-  // 4) Legacy __TAURI__ marker still works
+  // 4) Tauri detection still throws "not implemented" for unported namespaces
+  {
+    const invoke: TauriInvoke = async () => undefined as unknown as never
+    setWindow({ __TAURI_INTERNALS__: { invoke } })
+    const mod = await loadFreshAdapter()
+    assert.throws(() => (mod.host as { pty: { create: () => unknown } }).pty.create(),
+      /pty\.create is not yet implemented under Tauri/)
+  }
+
+  // 5) Legacy __TAURI__ marker still works (detection only — invoke can't be
+  //    resolved without __TAURI_INTERNALS__, so calls error clearly).
   {
     setWindow({ __TAURI__: {} })
     const mod = await loadFreshAdapter()
     assert.equal(mod.getHostKind(), 'tauri')
+    assert.throws(() => (mod.host as { settings: { load: () => unknown } }).settings.load(),
+      /tauri invoke not available/)
   }
 
-  // 5) Electron wins when both markers exist (host already created window)
+  // 6) Electron wins when both markers exist
   {
-    setWindow({ batAppAPI: { ping: () => 'pong' }, __TAURI_INTERNALS__: {} })
+    setWindow({ batAppAPI: { ping: () => 'pong' }, __TAURI_INTERNALS__: { invoke: () => Promise.resolve(null) } })
     const mod = await loadFreshAdapter()
     assert.equal(mod.getHostKind(), 'electron')
   }

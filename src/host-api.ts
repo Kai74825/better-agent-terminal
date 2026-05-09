@@ -1,9 +1,11 @@
 // Host API adapter.
 //
 // Renderer code should import { host } from this module instead of reading
-// window.batAppAPI directly. The adapter currently delegates straight to
-// window.batAppAPI under Electron; once a Tauri host is wired up the same
-// surface will route to invoke()/listen() without renderer-side changes.
+// window.batAppAPI directly. The adapter delegates straight to
+// window.batAppAPI under Electron and routes ported namespaces through
+// tauri-invoke commands under Tauri. Anything that isn't ported yet
+// throws a clear "not yet implemented" error so missing coverage fails
+// loudly instead of silently no-oping.
 //
 // Runtime selection happens via getHostKind() — Electron is detected by the
 // presence of window.batAppAPI, Tauri by window.__TAURI_INTERNALS__ (the
@@ -34,10 +36,10 @@ export function getHostKind(): HostKind {
 export const isElectron = (): boolean => getHostKind() === 'electron'
 export const isTauri = (): boolean => getHostKind() === 'tauri'
 
-// The Tauri stub never changes shape so we lazily memoise it; the Electron
+// The Tauri impl never changes shape so we lazily memoise it; the Electron
 // API is resolved on every access so renderer reloads (or test scenarios
 // that swap `window`) pick up the fresh reference without a manual reset.
-let tauriStub: BatAppAPI | null = null
+let tauriImpl: BatAppAPI | null = null
 
 function resolveHost(): BatAppAPI {
   const kind = getHostKind()
@@ -47,8 +49,8 @@ function resolveHost(): BatAppAPI {
     return api
   }
   if (kind === 'tauri') {
-    if (!tauriStub) tauriStub = createTauriHostStub()
-    return tauriStub
+    if (!tauriImpl) tauriImpl = createTauriHost()
+    return tauriImpl
   }
   throw new Error('host-api: no host runtime detected (neither Electron nor Tauri)')
 }
@@ -63,29 +65,58 @@ export const host: BatAppAPI = new Proxy({} as BatAppAPI, {
   },
 }) as BatAppAPI
 
-// --- Tauri stub --------------------------------------------------------------
-// A real Tauri implementation will be filled in incrementally. For now we
-// surface a stub that errors loudly on any method access; the renderer should
-// gate Tauri-only paths via isTauri()/isElectron() until coverage lands.
+// --- Tauri implementation ----------------------------------------------------
+//
+// Each ported namespace lives in its own factory so adding the next one is a
+// localised change. Anything unported delegates to a "not implemented" stub.
 
 function notImplemented(name: string): never {
   throw new Error(`host-api: ${name} is not yet implemented under Tauri`)
 }
 
-function createTauriHostStub(): BatAppAPI {
-  const handler: ProxyHandler<object> = {
-    get(_target, prop) {
-      const key = String(prop)
-      // Synthesise nested namespaces so callers like host.shell.openExternal()
-      // still throw a useful error instead of "Cannot read properties of
-      // undefined".
-      return new Proxy({}, {
-        get(_t, sub) {
-          notImplemented(`${key}.${String(sub)}`)
-        },
-      })
+// We import @tauri-apps/api lazily so nothing in this module pulls Tauri's
+// runtime when we're under Electron — the tree-shaker can keep it out of the
+// renderer bundle entirely if isTauri() is never true at build time.
+type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>
+function getInvoke(): Invoke {
+  // Resolved synchronously through the Tauri-injected window global. We do
+  // NOT cache because the global gets swapped during HMR and tests, and
+  // the property read is cheap.
+  const g = (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: { invoke: Invoke } } }).window
+  const direct = g?.__TAURI_INTERNALS__?.invoke
+  if (direct) return direct
+  throw new Error('host-api: tauri invoke not available; ensure window.__TAURI_INTERNALS__ is present')
+}
+
+function createTauriHost(): BatAppAPI {
+  // Build a partial implementation: only ported namespaces are real; the rest
+  // throw via a Proxy so missing coverage fails loudly.
+  const ported: Record<string, unknown> = {
+    settings: {
+      load: () => getInvoke()<string | null>('settings_load'),
+      save: (data: string) => getInvoke()<void>('settings_save', { data }),
+      // Not yet ported — defer to Electron-shaped errors so callers see a
+      // consistent failure mode.
+      getShellPath: () => notImplemented('settings.getShellPath'),
+      clearTerminalHistory: () => notImplemented('settings.clearTerminalHistory'),
+      detectCx: () => notImplemented('settings.detectCx'),
+    },
+    shell: {
+      openExternal: (url: string) => getInvoke()<void>('shell_open_external', { url }),
+      openPath: () => notImplemented('shell.openPath'),
+      getPathForFile: () => notImplemented('shell.getPathForFile'),
     },
   }
-  // The proxy intentionally lies about its shape so TS-level callers compile.
-  return new Proxy({}, handler) as BatAppAPI
+
+  return new Proxy({}, {
+    get(_target, prop) {
+      const key = String(prop)
+      if (key in ported) return ported[key]
+      // Synthesise a nested namespace proxy so calls like host.foo.bar()
+      // produce a useful error instead of TypeError on undefined access.
+      return new Proxy({}, {
+        get(_t, sub) { notImplemented(`${key}.${String(sub)}`) },
+      })
+    },
+  }) as BatAppAPI
 }
