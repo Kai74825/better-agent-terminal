@@ -135,6 +135,7 @@ pub fn run() {
             claude_cmd::claude_get_context_usage,
             claude_cmd::claude_get_worktree_status,
             claude_cmd::claude_scan_skills,
+            claude_cmd::claude_cleanup_worktree,
             openai_cmd::openai_get_api_key_status,
             openai_cmd::openai_set_api_key,
             openai_cmd::openai_clear_api_key,

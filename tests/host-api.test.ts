@@ -174,6 +174,7 @@ async function run() {
       if (cmd === 'claude_get_cli_path') return '' as unknown as T
       if (cmd === 'claude_list_sessions') return [] as unknown as T
       if (cmd === 'claude_scan_skills') return [] as unknown as T
+      if (cmd === 'claude_cleanup_worktree') return true as unknown as T
       if (cmd === 'claude_get_supported_models') return [] as unknown as T
       if (cmd === 'claude_get_supported_commands') return [] as unknown as T
       if (cmd === 'claude_get_supported_agents') return [] as unknown as T
@@ -425,6 +426,7 @@ async function run() {
     assert.equal(await mod.host.claude.getCliPath(), '')
     assert.deepEqual(await mod.host.claude.listSessions('/cwd'), [])
     assert.deepEqual(await mod.host.claude.scanSkills('/cwd'), [])
+    assert.equal(await mod.host.claude.cleanupWorktree('s-1', true), true)
     assert.deepEqual(await mod.host.claude.getSupportedModels('s-1'), [])
     assert.deepEqual(await mod.host.claude.getSupportedCommands('s-1'), [])
     assert.deepEqual(await mod.host.claude.getSupportedAgents('s-1'), [])
@@ -588,6 +590,7 @@ async function run() {
       { cmd: 'claude_get_cli_path', args: undefined },
       { cmd: 'claude_list_sessions', args: { cwd: '/cwd' } },
       { cmd: 'claude_scan_skills', args: { cwd: '/cwd' } },
+      { cmd: 'claude_cleanup_worktree', args: { sessionId: 's-1', deleteBranch: true } },
       { cmd: 'claude_get_supported_models', args: { sessionId: 's-1' } },
       { cmd: 'claude_get_supported_commands', args: { sessionId: 's-1' } },
       { cmd: 'claude_get_supported_agents', args: { sessionId: 's-1' } },

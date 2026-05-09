@@ -159,6 +159,23 @@ registerHandler('claude.getWorktreeStatus', async () => null)
 // claude.scanSkills walks <cwd>/.claude/skills + ~/.claude/skills and
 // returns SkillMeta entries. No SDK dep — pure fs walk + YAML
 // frontmatter parsing. Mirrors electron/openai-agent/skills-scanner.ts.
+// claude.cleanupWorktree drops the worktree associated with a session.
+// In the Electron flow it also resets the agent session's cwd back to
+// originalCwd and emits claude:worktree-info — those happen in the
+// session manager, which still lives in the renderer/Electron side
+// for now. The sidecar just runs the disk-level cleanup.
+registerHandler('claude.cleanupWorktree', async (params) => {
+  const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
+  const deleteBranch = params?.deleteBranch !== false
+  if (!sessionId) return false
+  try {
+    await worktreeRemove(sessionId, deleteBranch)
+    sendEvent('claude:worktree-info', { sessionId, payload: null })
+    return true
+  } catch {
+    return false
+  }
+})
 registerHandler('claude.scanSkills', async (params) => {
   const cwd = typeof params?.cwd === 'string' ? params.cwd : ''
   if (!cwd) return []

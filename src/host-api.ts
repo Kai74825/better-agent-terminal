@@ -447,6 +447,10 @@ function createTauriHost(): BatAppAPI {
         if (key === 'scanSkills') {
           return (cwd: string) => getInvoke()<unknown>('claude_scan_skills', { cwd })
         }
+        if (key === 'cleanupWorktree') {
+          return (sessionId: string, deleteBranch: boolean) =>
+            getInvoke()<unknown>('claude_cleanup_worktree', { sessionId, deleteBranch })
+        }
         const sessionReadCommands: Record<string, string> = {
           getSupportedModels: 'claude_get_supported_models',
           getSupportedCommands: 'claude_get_supported_commands',

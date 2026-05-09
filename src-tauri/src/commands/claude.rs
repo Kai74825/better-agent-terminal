@@ -280,3 +280,16 @@ pub fn claude_scan_skills(
 ) -> Result<Value, BridgeError> {
     call(&app, &state, "claude.scanSkills", json!({ "cwd": cwd }))
 }
+
+#[tauri::command]
+pub fn claude_cleanup_worktree(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    session_id: String,
+    delete_branch: bool,
+) -> Result<Value, BridgeError> {
+    call(&app, &state, "claude.cleanupWorktree", json!({
+        "sessionId": session_id,
+        "deleteBranch": delete_branch,
+    }))
+}
