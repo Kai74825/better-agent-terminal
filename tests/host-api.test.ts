@@ -153,6 +153,10 @@ async function run() {
       if (cmd === 'profile_duplicate') return null as unknown as T
       if (cmd === 'profile_activate') return undefined as unknown as T
       if (cmd === 'profile_deactivate') return undefined as unknown as T
+      if (cmd === 'claude_auth_status') return null as unknown as T
+      if (cmd === 'claude_account_list') {
+        return { accounts: [], activeAccountId: null, switchWarningShown: false } as unknown as T
+      }
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -332,6 +336,14 @@ async function run() {
     await mod.host.profile.activate('default')
     await mod.host.profile.deactivate('default')
 
+    // claude.* — Phase 2 sidecar bridge. authStatus and accountList route
+    // through the Rust SidecarState into the Node sidecar. The renderer
+    // still sees Promise-returning methods identical to the Electron shape.
+    assert.equal(await mod.host.claude.authStatus(), null)
+    assert.deepEqual(await mod.host.claude.accountList(), {
+      accounts: [], activeAccountId: null, switchWarningShown: false,
+    })
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -418,6 +430,8 @@ async function run() {
       { cmd: 'profile_duplicate', args: { profileId: 'default', newName: 'Copy' } },
       { cmd: 'profile_activate', args: { profileId: 'default' } },
       { cmd: 'profile_deactivate', args: { profileId: 'default' } },
+      { cmd: 'claude_auth_status', args: undefined },
+      { cmd: 'claude_account_list', args: undefined },
     ])
   }
 
@@ -434,6 +448,10 @@ async function run() {
     // pty.restart) still throw the same way.
     assert.throws(() => (mod.host as { pty: { restart: () => unknown } }).pty.restart(),
       /pty\.restart is not yet implemented under Tauri/)
+    // claude.* is partially ported: authStatus/accountList route to the
+    // sidecar, anything else throws a per-method "not yet implemented".
+    assert.throws(() => (mod.host as { claude: { startSession: () => unknown } }).claude.startSession(),
+      /claude\.startSession is not yet implemented under Tauri/)
   }
 
   // 5) Legacy __TAURI__ marker still works (detection only — invoke can't be

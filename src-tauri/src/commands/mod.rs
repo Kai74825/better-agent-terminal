@@ -7,6 +7,7 @@
 // edit at this layer plus the adapter route.
 
 pub mod app;
+pub mod claude;
 pub mod clipboard;
 pub mod debug;
 pub mod dialog;

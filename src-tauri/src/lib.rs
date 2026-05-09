@@ -7,13 +7,14 @@
 
 mod commands;
 mod path_guard;
+mod sidecar;
 
 use commands::{
-    app as app_cmd, clipboard as clipboard_cmd, debug as debug_cmd, dialog as dialog_cmd,
-    fs as fs_cmd, git as git_cmd, github as github_cmd, image as image_cmd,
-    notification as notification_cmd, profile as profile_cmd, pty as pty_cmd, settings,
-    shell as shell_cmd, snippet as snippet_cmd, update as update_cmd,
-    workspace as workspace_cmd,
+    app as app_cmd, claude as claude_cmd, clipboard as clipboard_cmd, debug as debug_cmd,
+    dialog as dialog_cmd, fs as fs_cmd, git as git_cmd, github as github_cmd,
+    image as image_cmd, notification as notification_cmd, profile as profile_cmd,
+    pty as pty_cmd, settings, shell as shell_cmd, snippet as snippet_cmd,
+    update as update_cmd, workspace as workspace_cmd,
 };
 
 pub fn run() {
@@ -24,6 +25,7 @@ pub fn run() {
         .manage(pty_cmd::PtyState::default())
         .manage(notification_cmd::NotificationState::default())
         .manage(snippet_cmd::SnippetState::default())
+        .manage(sidecar::SidecarState::new())
         .invoke_handler(tauri::generate_handler![
             settings::settings_load,
             settings::settings_save,
@@ -104,6 +106,9 @@ pub fn run() {
             profile_cmd::profile_duplicate,
             profile_cmd::profile_activate,
             profile_cmd::profile_deactivate,
+            claude_cmd::claude_ping,
+            claude_cmd::claude_auth_status,
+            claude_cmd::claude_account_list,
         ])
         .run(tauri::generate_context!())
         .expect("error while running better-agent-terminal");

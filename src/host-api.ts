@@ -386,6 +386,25 @@ function createTauriHost(): BatAppAPI {
       getStatus: (cwd: string) =>
         getInvoke()<{ status: string; file: string }[]>('git_get_status', { cwd }),
     },
+    claude: new Proxy({}, {
+      // The Claude surface is large (30+ methods on the Electron preload).
+      // For Phase 2 MVP we route only authStatus + accountList through the
+      // Node sidecar via the Rust bridge — the rest stay loud "not yet
+      // implemented" stubs so missing coverage fails clearly. Adding more
+      // methods is just one new branch per command.
+      get(_t, prop) {
+        const key = String(prop)
+        if (key === 'authStatus') {
+          return () => getInvoke()<unknown>('claude_auth_status')
+        }
+        if (key === 'accountList') {
+          return () => getInvoke()<unknown>('claude_account_list')
+        }
+        // claude_ping is intentionally not exposed on the renderer — it
+        // exists in Rust as a sidecar smoke test only.
+        return () => notImplemented(`claude.${key}`)
+      },
+    }),
     pty: {
       create: (options: unknown) =>
         getInvoke()<string>('pty_create', { options: options as Record<string, unknown> }),
@@ -466,6 +485,7 @@ const PORTED_NAMESPACES = new Set([
   'settings', 'shell', 'dialog', 'fs', 'clipboard', 'image',
   'pty', 'workspace', 'update', 'debug', 'git', 'app',
   'notification', 'system', 'github', 'snippet', 'profile',
+  'claude',
 ])
 
 export function installTauriShim(): void {
