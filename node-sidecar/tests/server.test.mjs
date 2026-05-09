@@ -572,11 +572,38 @@ async function inProcess() {
     restoreSendEvent()
   }
 
-  // expectedContextWindowForModel mirror of TS-side
-  // CLAUDE_BUILTIN_MODEL_CONTEXT_WINDOWS. Drift guard already validates
-  // CLAUDE_BUILTIN_DEDUP_KEYS keys match the TS map; here we validate
-  // the per-key values + preset auto-compact entries.
+  // Drift guard: sidecar CLAUDE_MODEL_CONTEXT_WINDOWS must agree with
+  // src/utils/claude-model-presets.ts CLAUDE_BUILTIN_MODEL_CONTEXT_WINDOWS
+  // for every base-id key + value, AND must contain entries for all
+  // four auto-compact preset ids (values are hand-derived from
+  // OPUS_47_PRESET_AUTO_COMPACT and don't exactly mirror that map —
+  // :1m has TS-side null (no auto-compact) but the actual context
+  // window is 1M, which is what we surface to maxTokens).
+  // Scope the match to the same map literal we located earlier (ctxMatch[1]).
   const { CLAUDE_MODEL_CONTEXT_WINDOWS, expectedContextWindowForModel } = mod
+  const tsCtxMap = new Map()
+  for (const m of ctxMatch[1].matchAll(/\[\s*'([^']+)'\s*,\s*(\d+)\s*\]/g)) {
+    tsCtxMap.set(m[1], parseInt(m[2], 10))
+  }
+  for (const [k, v] of tsCtxMap) {
+    assert.equal(
+      CLAUDE_MODEL_CONTEXT_WINDOWS.get(k), v,
+      `sidecar CLAUDE_MODEL_CONTEXT_WINDOWS[${k}] (${CLAUDE_MODEL_CONTEXT_WINDOWS.get(k)}) drifted from TS (${v})`,
+    )
+  }
+  // Preset entries must exist with a positive number.
+  for (const presetId of [
+    'claude-opus-4-7:auto-compact-200k',
+    'claude-opus-4-7:auto-compact-300k',
+    'claude-opus-4-7:auto-compact-400k',
+    'claude-opus-4-7:1m',
+  ]) {
+    const v = CLAUDE_MODEL_CONTEXT_WINDOWS.get(presetId)
+    assert.ok(typeof v === 'number' && v > 0, `expected positive context window for ${presetId}, got ${v}`)
+  }
+
+  // Spot-check a few well-known values + expectedContextWindowForModel
+  // base-id fallback semantics.
   assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-opus-4-7'), 1000000)
   assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-haiku-4-5-20251001'), 200000)
   assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-opus-4-7:auto-compact-200k'), 200000)
