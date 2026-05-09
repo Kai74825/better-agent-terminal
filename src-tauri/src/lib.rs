@@ -144,6 +144,7 @@ pub fn run() {
             claude_cmd::claude_reset_session,
             claude_cmd::claude_resume_session,
             claude_cmd::claude_fork_session,
+            claude_cmd::claude_fetch_subagent_messages,
             claude_cmd::claude_rewind_to_prompt,
             claude_cmd::claude_resolve_permission,
             claude_cmd::claude_resolve_ask_user,

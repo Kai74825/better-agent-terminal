@@ -492,6 +492,31 @@ async function inProcess() {
   assert.equal(meta2.result.model, 'claude-haiku-4-5-20251001')
   assert.equal(meta2.result.effort, 'high')
   assert.equal(meta2.result.autoCompactWindow, 100000)
+  // The renderer's status line reads inputTokens/outputTokens/numTurns/
+  // contextTokens/durationMs etc. with `.toLocaleString()` directly (no
+  // optional chaining), so before-the-first-turn the meta must still
+  // surface 0 defaults instead of undefined. Lock the full shape so a
+  // missing field crashes this test before crashing ClaudeAgentPanel.
+  for (const key of [
+    'permissionMode', 'model', 'effort', 'autoCompactWindow',
+    'sdkSessionId', 'cwd', 'totalCost',
+    'inputTokens', 'outputTokens', 'durationMs', 'numTurns',
+    'contextWindow', 'maxOutputTokens', 'contextTokens',
+    'cacheReadTokens', 'cacheCreationTokens',
+    'callCacheRead', 'callCacheWrite', 'lastQueryCalls',
+  ]) {
+    assert.ok(key in meta2.result, `getSessionMeta missing field: ${key}`)
+  }
+  // Numeric fields default to 0 (not undefined).
+  for (const numKey of [
+    'totalCost', 'inputTokens', 'outputTokens', 'durationMs', 'numTurns',
+    'contextWindow', 'maxOutputTokens', 'contextTokens',
+    'cacheReadTokens', 'cacheCreationTokens',
+    'callCacheRead', 'callCacheWrite', 'lastQueryCalls',
+  ]) {
+    assert.equal(typeof meta2.result[numKey], 'number',
+      `getSessionMeta.${numKey} must be a number`)
+  }
 
   // resetSession drops the entry; subsequent getSessionState returns null.
   const reset = await dispatch({ jsonrpc: '2.0', id: 209, method: 'claude.resetSession', params: { sessionId: 'state-1' } })
@@ -814,6 +839,161 @@ async function inProcess() {
   } finally {
     __setSdkOverrideForTests(undefined)
     restoreForkSend2()
+  }
+
+  // claude.fetchSubagentMessages: read the SDK's per-subagent transcript
+  // shard and normalise into the renderer's (ClaudeMessage|ClaudeToolCall)[]
+  // shape. Drive a fake SDK exporting `getSubagentMessages()` that yields
+  // a synthetic 4-message conversation: user kickoff prompt, assistant
+  // tool_use, user tool_result (success), assistant final reply. Assert
+  // the sidecar collapses the tool_result back into the matching tool
+  // entry, drops noise messages, and tags items with parentToolUseId.
+  const fetchCaptured = []
+  const restoreFetchSend = mod.__setSendEventForTests(() => {})
+  const fakeSdkFetch = {
+    getSubagentMessages(sdkSid, agentId, opts) {
+      fetchCaptured.push({ sdkSid, agentId, opts })
+      return Promise.resolve([
+        {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: 'sub kickoff' }] },
+          timestamp: '2026-05-09T10:00:00Z',
+        },
+        {
+          type: 'assistant',
+          message: { role: 'assistant', content: [
+            { type: 'thinking', thinking: 'planning the bash run' },
+            { type: 'text', text: 'I will run the command.' },
+            { type: 'tool_use', id: 'tu-bash-1', name: 'Bash', input: { command: 'ls' } },
+          ] },
+          timestamp: '2026-05-09T10:00:01Z',
+        },
+        {
+          type: 'user',
+          message: { role: 'user', content: [
+            { type: 'tool_result', tool_use_id: 'tu-bash-1', content: 'file1\nfile2', is_error: false },
+          ] },
+          timestamp: '2026-05-09T10:00:02Z',
+        },
+        // Noise message — must be dropped.
+        {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] },
+          timestamp: '2026-05-09T10:00:03Z',
+        },
+        {
+          type: 'assistant',
+          message: { role: 'assistant', content: [
+            { type: 'text', text: 'Done.' },
+          ] },
+          timestamp: '2026-05-09T10:00:04Z',
+        },
+      ])
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkFetch)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 410, method: 'claude.resumeSession',
+      params: { sessionId: 'sa-1', sdkSessionId: 'sdk-parent-xyz',
+        options: { cwd: '/sa-cwd' } } })
+
+    const reply = await dispatch({ jsonrpc: '2.0', id: 411, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-1', agentToolUseId: 'agent-tu-1' } })
+    assert.ok(Array.isArray(reply.result), `expected array, got ${JSON.stringify(reply)}`)
+    assert.equal(reply.result.length, 4, 'kickoff + thinking-bearing assistant + bash tool + final reply (noise dropped)')
+
+    // SDK helper was called with sdkSessionId, agentToolUseId, and {dir:cwd}.
+    assert.equal(fetchCaptured.length, 1)
+    assert.equal(fetchCaptured[0].sdkSid, 'sdk-parent-xyz')
+    assert.equal(fetchCaptured[0].agentId, 'agent-tu-1')
+    assert.deepEqual(fetchCaptured[0].opts, { dir: '/sa-cwd' })
+
+    // Item 0: user kickoff text. parentToolUseId pinned to the agent.
+    assert.equal(reply.result[0].role, 'user')
+    assert.equal(reply.result[0].content, 'sub kickoff')
+    assert.equal(reply.result[0].parentToolUseId, 'agent-tu-1')
+
+    // Item 1: assistant text with thinking sidecar.
+    assert.equal(reply.result[1].role, 'assistant')
+    assert.equal(reply.result[1].content, 'I will run the command.')
+    assert.equal(reply.result[1].thinking, 'planning the bash run')
+
+    // Item 2: tool_use entry, status updated to 'completed' by the
+    // tool_result fold-in, result text captured.
+    assert.equal(reply.result[2].toolName, 'Bash')
+    assert.equal(reply.result[2].id, 'tu-bash-1')
+    assert.deepEqual(reply.result[2].input, { command: 'ls' })
+    assert.equal(reply.result[2].status, 'completed', 'tool_result is_error:false → completed')
+    assert.equal(reply.result[2].result, 'file1\nfile2', 'tool_result content folded in')
+
+    // Item 3: final assistant reply.
+    assert.equal(reply.result[3].role, 'assistant')
+    assert.equal(reply.result[3].content, 'Done.')
+
+    // is_error:true should map status → 'error'.
+    const errSdk = {
+      getSubagentMessages: () => Promise.resolve([
+        { type: 'assistant', message: { role: 'assistant', content: [
+          { type: 'tool_use', id: 'tu-read-1', name: 'Read', input: { file_path: '/missing' } },
+        ] } },
+        { type: 'user', message: { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'tu-read-1', content: 'ENOENT', is_error: true },
+        ] } },
+      ]),
+    }
+    __setSdkOverrideForTests(errSdk)
+    const errReply = await dispatch({ jsonrpc: '2.0', id: 412, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-1', agentToolUseId: 'agent-tu-2' } })
+    assert.equal(errReply.result.length, 1)
+    assert.equal(errReply.result[0].status, 'error')
+    assert.equal(errReply.result[0].result, 'ENOENT')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreFetchSend()
+  }
+
+  // Defensive paths: missing params → []; unknown sessionId → [];
+  // session without sdkSessionId → []; SDK throws → []; SDK without
+  // getSubagentMessages helper → []. All five must avoid throwing so the
+  // renderer just shows "no subagent details" instead of crashing.
+  const restoreFetchSend2 = mod.__setSendEventForTests(() => {})
+  try {
+    const noSidReply = await dispatch({ jsonrpc: '2.0', id: 413, method: 'claude.fetchSubagentMessages',
+      params: { agentToolUseId: 'a' } })
+    assert.deepEqual(noSidReply.result, [])
+    const noAgentReply = await dispatch({ jsonrpc: '2.0', id: 414, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-1' } })
+    assert.deepEqual(noAgentReply.result, [])
+    const unknownReply = await dispatch({ jsonrpc: '2.0', id: 415, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'never-started', agentToolUseId: 'a' } })
+    assert.deepEqual(unknownReply.result, [])
+
+    // Session with no sdkSessionId yet → [] (start without resume).
+    await dispatch({ jsonrpc: '2.0', id: 416, method: 'claude.startSession',
+      params: { sessionId: 'sa-empty', options: { cwd: '/x' } } })
+    const noSdkReply = await dispatch({ jsonrpc: '2.0', id: 417, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-empty', agentToolUseId: 'a' } })
+    assert.deepEqual(noSdkReply.result, [])
+
+    // SDK throws → [].
+    const throwingSdk = {
+      getSubagentMessages: () => Promise.reject(new Error('disk read failed')),
+    }
+    __setSdkOverrideForTests(throwingSdk)
+    await dispatch({ jsonrpc: '2.0', id: 418, method: 'claude.resumeSession',
+      params: { sessionId: 'sa-throw', sdkSessionId: 'sdk-t', options: { cwd: '/x' } } })
+    const throwReply = await dispatch({ jsonrpc: '2.0', id: 419, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-throw', agentToolUseId: 'a' } })
+    assert.deepEqual(throwReply.result, [], 'sdk throw → graceful []')
+
+    // SDK without getSubagentMessages helper → [].
+    __setSdkOverrideForTests({ /* no getSubagentMessages */ })
+    const noHelperReply = await dispatch({ jsonrpc: '2.0', id: 420, method: 'claude.fetchSubagentMessages',
+      params: { sessionId: 'sa-throw', agentToolUseId: 'a' } })
+    assert.deepEqual(noHelperReply.result, [], 'missing helper → []')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreFetchSend2()
   }
 
   // Parity test: queryOptions must include the same keys Electron sets.

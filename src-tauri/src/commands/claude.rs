@@ -382,6 +382,27 @@ pub fn claude_fork_session(
 }
 
 #[tauri::command]
+pub fn claude_fetch_subagent_messages(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    session_id: String,
+    agent_tool_use_id: String,
+) -> Result<Value, BridgeError> {
+    // Subagent message fetch reads an on-disk transcript shard via the
+    // SDK helper; in the worst case (cold SDK load + slow disk) this can
+    // take up to a couple of seconds. Bump past the default 15s to be
+    // safe — failure path returns [] so the renderer just shows "no
+    // messages" instead of throwing.
+    call_with_timeout(
+        &app,
+        &state,
+        "claude.fetchSubagentMessages",
+        json!({ "sessionId": session_id, "agentToolUseId": agent_tool_use_id }),
+        Duration::from_secs(30),
+    )
+}
+
+#[tauri::command]
 pub fn claude_rewind_to_prompt(
     app: AppHandle,
     state: State<'_, SidecarState>,

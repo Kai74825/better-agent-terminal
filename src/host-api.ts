@@ -446,6 +446,16 @@ function createTauriHost(): BatAppAPI {
           return (sessionId: string) =>
             getInvoke()<unknown>('claude_fork_session', { sessionId })
         }
+        // fetchSubagentMessages: load the per-message expansion of an
+        // Agent/Task subagent run so the renderer can show the inner
+        // message stream. Returns [] when the SDK helper is unavailable
+        // or the agent transcript can't be located — same contract as
+        // Electron, which lets the panel fall back to a single-line
+        // summary instead of throwing.
+        if (key === 'fetchSubagentMessages') {
+          return (sessionId: string, agentToolUseId: string) =>
+            getInvoke()<unknown>('claude_fetch_subagent_messages', { sessionId, agentToolUseId })
+        }
         // resumeSession: rehydrate an existing SDK session id so the next
         // sendMessage continues that conversation instead of starting
         // fresh. Renderer panels call this on remount when they have a

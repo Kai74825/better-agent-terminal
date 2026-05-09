@@ -351,6 +351,118 @@ registerHandler('claude.forkSession', async (params) => {
   return { newSdkSessionId }
 })
 
+// claude.fetchSubagentMessages: load the messages a subagent (Agent/Task
+// tool) produced during its turn so the renderer can expand the active-
+// task panel into a per-message view. Mirror of
+// electron/claude-agent-manager.ts:2558. The SDK exports
+// `getSubagentMessages(sdkSessionId, agentToolUseId, {dir})` which reads
+// the on-disk transcript shard the CLI wrote during the parent run; we
+// then normalise raw user/assistant messages into the renderer's
+// (ClaudeMessage | ClaudeToolCall)[] shape so it can render them with
+// the same components as the parent thread.
+//
+// Tool-result content is folded back into the matching tool-use entry
+// (status: 'completed' | 'error', result truncated to 2000 chars) so the
+// UI keeps the "tool ran → result" pairing instead of showing a bare
+// user-role message with embedded tool_result blocks.
+//
+// Returns [] for any failure (no SDK, no sdkSessionId, SDK throws,
+// missing helper) — same contract as Electron.
+registerHandler('claude.fetchSubagentMessages', async (params) => {
+  const sessionId = params?.sessionId
+  const agentToolUseId = params?.agentToolUseId
+  if (typeof sessionId !== 'string' || !sessionId) return []
+  if (typeof agentToolUseId !== 'string' || !agentToolUseId) return []
+  const session = sessions.get(sessionId)
+  const sdkSid = session?.sdkSessionId
+  if (!sdkSid) return []
+  const sdk = await loadAnthropicSdk()
+  if (!sdk || typeof sdk.getSubagentMessages !== 'function') return []
+  const cwd = (session?.options && typeof session.options === 'object' && typeof session.options.cwd === 'string')
+    ? session.options.cwd
+    : undefined
+  let messages
+  try {
+    messages = await sdk.getSubagentMessages(sdkSid, agentToolUseId, cwd ? { dir: cwd } : undefined)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`[sidecar] claude.fetchSubagentMessages: ${errMsg}\n`)
+    return []
+  }
+  if (!Array.isArray(messages)) return []
+  const items = []
+  const toolIndexMap = new Map()
+  for (const msg of messages) {
+    const ts = msg?.timestamp ? new Date(msg.timestamp).getTime() : Date.now()
+    if (msg?.type === 'user') {
+      const content = msg?.message?.content
+      let text = ''
+      if (typeof content === 'string') {
+        text = content
+      } else if (Array.isArray(content)) {
+        const textBlock = content.find(b => b && b.type === 'text')
+        if (textBlock && typeof textBlock.text === 'string') text = textBlock.text
+        for (const block of content) {
+          if (block && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+            const idx = toolIndexMap.get(block.tool_use_id)
+            if (idx !== undefined) {
+              const tool = items[idx]
+              tool.status = block.is_error ? 'error' : 'completed'
+              const resultText = typeof block.content === 'string'
+                ? block.content
+                : JSON.stringify(block.content)
+              tool.result = (resultText || '').slice(0, 2000)
+            }
+          }
+        }
+      }
+      const isNoise = !text
+        || text === '[Request interrupted by user for tool use]'
+        || text.startsWith('<local-command-caveat>')
+      if (!isNoise) {
+        items.push({
+          id: `sa-user-${items.length}`,
+          sessionId, role: 'user', content: text,
+          parentToolUseId: agentToolUseId, timestamp: ts,
+        })
+      }
+    } else if (msg?.type === 'assistant') {
+      const content = msg?.message?.content
+      if (Array.isArray(content)) {
+        const thinkingText = content
+          .filter(b => b && b.type === 'thinking')
+          .map(b => (typeof b.thinking === 'string' ? b.thinking : ''))
+          .join('\n').trim()
+        const assistantText = content
+          .filter(b => b && b.type === 'text')
+          .map(b => (typeof b.text === 'string' ? b.text : ''))
+          .join('\n').trim()
+        if (assistantText || thinkingText) {
+          items.push({
+            id: `sa-asst-${items.length}`,
+            sessionId, role: 'assistant',
+            content: assistantText || '',
+            ...(thinkingText ? { thinking: thinkingText } : {}),
+            parentToolUseId: agentToolUseId, timestamp: ts,
+          })
+        }
+        for (const block of content) {
+          if (block && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+            const toolItem = {
+              id: block.id, sessionId, toolName: block.name,
+              input: block.input || {}, status: 'completed',
+              parentToolUseId: agentToolUseId, timestamp: ts,
+            }
+            toolIndexMap.set(block.id, items.length)
+            items.push(toolItem)
+          }
+        }
+      }
+    }
+  }
+  return items
+})
+
 // Real SDK-driven sendMessage. Each call kicks off a fresh single-shot
 // query() with `resume: <previousSdkSessionId>` so the SDK preserves
 // context across turns. Streaming-input mode + control methods
@@ -1031,14 +1143,42 @@ registerHandler('claude.getSessionState', async (params) => {
 registerHandler('claude.getSessionMeta', async (params) => {
   const s = sessions.get(String(params?.sessionId ?? ''))
   if (!s) return null
-  // Match the Electron getSessionMeta shape: spread metadata plus
-  // permissionMode. We don't store agent metadata yet, so the return
-  // is just the visible knobs.
+  // Match the Electron SessionMetadata shape (electron/claude-agent-manager.ts:181)
+  // — the renderer's status line reads `inputTokens`/`outputTokens`/etc.
+  // with `.toLocaleString()` directly (no optional chaining), so any
+  // missing field crashes the panel. Default every field to 0 / null so
+  // a fresh session before the first turn still renders cleanly.
+  // lastUsage is captured from SDK message_start/message_delta/result
+  // events with snake_case keys (see the t==='stream_event'/'result'
+  // branches in claude.sendMessage). Translate to the camelCase shape
+  // the renderer expects.
+  const u = s.lastUsage
+  const inputTokens = u?.input_tokens ?? 0
+  const outputTokens = u?.output_tokens ?? 0
+  const cacheReadTokens = u?.cache_read_input_tokens ?? 0
+  const cacheCreationTokens = u?.cache_creation_input_tokens ?? 0
+  const contextTokens = inputTokens + cacheReadTokens + cacheCreationTokens
+  const contextWindow = expectedContextWindowForModel(u?.model || s.model) || 0
   return {
-    permissionMode: s.permissionMode,
-    model: s.model,
-    effort: s.effort,
-    autoCompactWindow: s.autoCompactWindow,
+    permissionMode: s.permissionMode ?? 'default',
+    model: s.model ?? null,
+    effort: s.effort ?? null,
+    autoCompactWindow: s.autoCompactWindow ?? null,
+    sdkSessionId: s.sdkSessionId ?? null,
+    cwd: (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string') ? s.options.cwd : null,
+    totalCost: u?.totalCostUsd ?? 0,
+    inputTokens,
+    outputTokens,
+    durationMs: 0,
+    numTurns: u?.numTurns ?? 0,
+    contextWindow,
+    maxOutputTokens: 0,
+    contextTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    callCacheRead: 0,
+    callCacheWrite: 0,
+    lastQueryCalls: 0,
   }
 })
 // claude.getContextUsage: surface the cached usage from the last
