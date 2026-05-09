@@ -244,6 +244,18 @@ function createTauriHost(): BatAppAPI {
       onDetached: () => () => {},
       onReattached: () => () => {},
     },
+    app: {
+      // Single-window MVP: see src-tauri/src/commands/app.rs.
+      getWindowId: () => getInvoke()<string | null>('app_get_window_id'),
+      getWindowIndex: () => getInvoke()<number>('app_get_window_index'),
+      getLaunchProfile: () => getInvoke()<string | null>('app_get_launch_profile'),
+      getWindowProfile: () => getInvoke()<string | null>('app_get_window_profile'),
+      newWindow: () => getInvoke()<string>('app_new_window'),
+      focusNextWindow: () => getInvoke()<boolean>('app_focus_next_window'),
+      openNewInstance: (profileId: string) =>
+        getInvoke()<{ alreadyOpen: boolean }>('app_open_new_instance', { profileId }),
+      setDockBadge: (count: number) => getInvoke()<void>('app_set_dock_badge', { count }),
+    },
     git: {
       // Read-only git wrappers — see src-tauri/src/commands/git.rs.
       // The Rust side returns safe defaults (None / empty Vec / empty String)
@@ -347,7 +359,7 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 // the permissive shim can prefer the real impl when present.
 const PORTED_NAMESPACES = new Set([
   'settings', 'shell', 'dialog', 'fs', 'clipboard', 'image',
-  'pty', 'workspace', 'update', 'debug', 'git',
+  'pty', 'workspace', 'update', 'debug', 'git', 'app',
 ])
 
 export function installTauriShim(): void {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { parseConnectionUrl } from '../utils/connection-url'
+import { host } from '../host-api'
 
 interface ProfileEntry {
   id: string
@@ -70,7 +71,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
     const result = await window.batAppAPI.profile.listLocal()
     setProfiles(result.profiles)
     setActiveProfileIds(result.activeProfileIds)
-    const wpId = await window.batAppAPI.app.getWindowProfile()
+    const wpId = await host.app.getWindowProfile()
     setWindowProfileId(wpId)
 
     // Fan out: query each unique remote target for its active profile ids,

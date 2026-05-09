@@ -102,6 +102,14 @@ async function run() {
       if (cmd === 'git_get_status') {
         return [{ status: 'M', file: 'a.ts' }] as unknown as T
       }
+      if (cmd === 'app_get_window_id') return 'main' as unknown as T
+      if (cmd === 'app_get_window_index') return 1 as unknown as T
+      if (cmd === 'app_get_launch_profile') return null as unknown as T
+      if (cmd === 'app_get_window_profile') return null as unknown as T
+      if (cmd === 'app_new_window') return 'main' as unknown as T
+      if (cmd === 'app_focus_next_window') return false as unknown as T
+      if (cmd === 'app_open_new_instance') return { alreadyOpen: true } as unknown as T
+      if (cmd === 'app_set_dock_badge') return undefined as unknown as T
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -196,6 +204,17 @@ async function run() {
     const status = await mod.host.git.getStatus('/repo')
     assert.deepEqual(status, [{ status: 'M', file: 'a.ts' }])
 
+    // app.* — single-window MVP returns constants from the Rust side.
+    assert.equal(await mod.host.app.getWindowId(), 'main')
+    assert.equal(await mod.host.app.getWindowIndex(), 1)
+    assert.equal(await mod.host.app.getLaunchProfile(), null)
+    assert.equal(await mod.host.app.getWindowProfile(), null)
+    assert.equal(await mod.host.app.newWindow(), 'main')
+    assert.equal(await mod.host.app.focusNextWindow(), false)
+    const newInst = await mod.host.app.openNewInstance('profile-x')
+    assert.deepEqual(newInst, { alreadyOpen: true })
+    await mod.host.app.setDockBadge(7)
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -235,6 +254,14 @@ async function run() {
       { cmd: 'git_get_diff_files', args: { cwd: '/repo', commitHash: undefined } },
       { cmd: 'git_get_root', args: { cwd: '/repo' } },
       { cmd: 'git_get_status', args: { cwd: '/repo' } },
+      { cmd: 'app_get_window_id', args: undefined },
+      { cmd: 'app_get_window_index', args: undefined },
+      { cmd: 'app_get_launch_profile', args: undefined },
+      { cmd: 'app_get_window_profile', args: undefined },
+      { cmd: 'app_new_window', args: undefined },
+      { cmd: 'app_focus_next_window', args: undefined },
+      { cmd: 'app_open_new_instance', args: { profileId: 'profile-x' } },
+      { cmd: 'app_set_dock_badge', args: { count: 7 } },
     ])
   }
 

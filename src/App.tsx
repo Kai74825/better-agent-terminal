@@ -110,7 +110,7 @@ export default function App() {
   const [windowIndex, setWindowIndex] = useState<number>(1)
   const [authInfo, setAuthInfo] = useState<{ email?: string; subscriptionType?: string } | null>(null)
   useEffect(() => {
-    window.batAppAPI.app.getWindowIndex().then(setWindowIndex)
+    host.app.getWindowIndex().then(setWindowIndex)
   }, [])
   useEffect(() => {
     const fetchAuth = () => {
@@ -230,7 +230,7 @@ export default function App() {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        window.batAppAPI.app.newWindow()
+        host.app.newWindow()
       }
     }
     window.addEventListener('keydown', handler)
@@ -251,7 +251,7 @@ export default function App() {
       // Windows: Ctrl+` cycles between BAT app windows.
       if (window.batAppAPI.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
         e.preventDefault()
-        window.batAppAPI.app.focusNextWindow()
+        host.app.focusNextWindow()
         return
       }
 
@@ -363,7 +363,7 @@ export default function App() {
     const initProfile = async () => {
       const t0 = performance.now()
       try {
-        const launchProfileId = await window.batAppAPI.app.getLaunchProfile()
+        const launchProfileId = await host.app.getLaunchProfile()
         dlog(`[init] getLaunchProfile: ${(performance.now() - t0).toFixed(0)}ms`)
 
         const t1 = performance.now()
@@ -374,7 +374,7 @@ export default function App() {
         // 1. Launch profile (--profile= argument) takes priority
         // 2. Window registry's profileId (per-window binding)
         // 3. First active profile as fallback
-        const windowProfileId = await window.batAppAPI.app.getWindowProfile()
+        const windowProfileId = await host.app.getWindowProfile()
         const profileId = launchProfileId || windowProfileId || result.activeProfileIds[0]
         let active = result.profiles.find(p => p.id === profileId)
 
@@ -413,11 +413,11 @@ export default function App() {
             const localProfile = result.profiles.find(p => p.type !== 'remote')
             if (localProfile) {
               await window.batAppAPI.profile.load(localProfile.id)
-              const winIdx = await window.batAppAPI.app.getWindowIndex()
+              const winIdx = await host.app.getWindowIndex()
               setActiveProfileName(`${localProfile.name}:${winIdx}`)
             }
           } else {
-            const winIdx = await window.batAppAPI.app.getWindowIndex()
+            const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${active.name}:${winIdx}`)
             setIsRemoteConnected(true)
           }
@@ -431,7 +431,7 @@ export default function App() {
           const localProfile = result.profiles.find(p => p.type !== 'remote')
           if (localProfile) {
             await window.batAppAPI.profile.load(localProfile.id)
-            const winIdx = await window.batAppAPI.app.getWindowIndex()
+            const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${localProfile.name}:${winIdx}`)
           }
         } else if (active) {
@@ -440,17 +440,17 @@ export default function App() {
           if (launchProfileId) {
             await window.batAppAPI.profile.load(active.id)
           }
-          const winIdx = await window.batAppAPI.app.getWindowIndex()
+          const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${active.name}:${winIdx}`)
         } else if (result.profiles.length > 0) {
           // Fallback: activeProfileId didn't match any profile — use first local profile
           const fallback = result.profiles.find(p => p.type !== 'remote') || result.profiles[0]
-          const winIdx = await window.batAppAPI.app.getWindowIndex()
+          const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${fallback.name}:${winIdx}`)
         }
 
         // Store windowId for cross-window workspace drag
-        const winId = await window.batAppAPI.app.getWindowId()
+        const winId = await host.app.getWindowId()
         if (winId) workspaceStore.setWindowId(winId)
 
         const tLoad = performance.now()
@@ -589,7 +589,7 @@ export default function App() {
 
   // Open profile in a new app instance (or focus if already open)
   const handleProfileNewWindow = useCallback(async (profileId: string) => {
-    const result = await window.batAppAPI.app.openNewInstance(profileId)
+    const result = await host.app.openNewInstance(profileId)
     if (result?.alreadyOpen) {
       setAppNotification(t('profiles.alreadyOpen'))
     }
@@ -817,9 +817,9 @@ export default function App() {
           onClose={() => setShowProfiles(false)}
           onSwitchNewWindow={handleProfileNewWindow}
           onProfileRenamed={async (profileId, newName) => {
-            const wpId = await window.batAppAPI.app.getWindowProfile()
+            const wpId = await host.app.getWindowProfile()
             if (wpId === profileId) {
-              const winIdx = await window.batAppAPI.app.getWindowIndex()
+              const winIdx = await host.app.getWindowIndex()
               setActiveProfileName(`${newName}:${winIdx}`)
             }
           }}
