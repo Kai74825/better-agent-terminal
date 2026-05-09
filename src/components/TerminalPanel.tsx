@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useEffect, useRef, useState, memo } from 'react'
 import { Terminal, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -92,7 +93,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       const sizeLabel = text.length > 1024 * 1024 ? `${sizeMB} MB` : `${sizeKB} KB`
       const lines = text.split('\n').length
 
-      const confirmed = await window.batAppAPI.dialog.confirm(
+      const confirmed = await host.dialog.confirm(
         `About to paste a large text:\n\n• Size: ${sizeLabel} (${text.length.toLocaleString()} chars)\n• Lines: ${lines.toLocaleString()}\n\nThis may take a moment. Continue?`,
         'Large Paste Warning'
       )
@@ -107,9 +108,9 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
   }
 
   const handlePasteImage = async () => {
-    const filePath = await window.batAppAPI.clipboard.saveImage()
+    const filePath = await host.clipboard.saveImage()
     if (!filePath) return false
-    const written = await window.batAppAPI.clipboard.writeImage(filePath)
+    const written = await host.clipboard.writeImage(filePath)
     if (!written) return false
     window.batAppAPI.pty.write(terminalId, '\x1bv')
     return true
@@ -278,7 +279,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
     const unicode11Addon = new Unicode11Addon()
     const webLinksAddon = new WebLinksAddon((event, uri) => {
       // Open URL in default browser
-      window.batAppAPI.shell.openExternal(uri)
+      host.shell.openExternal(uri)
     })
     terminal.loadAddon(fitAddon)
     terminal.loadAddon(webLinksAddon)
@@ -306,7 +307,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
               end: { x: endX, y: bufferLineNumber }
             },
             activate(_event, text) {
-              window.batAppAPI.shell.openExternal(text)
+              host.shell.openExternal(text)
             }
           })
         }

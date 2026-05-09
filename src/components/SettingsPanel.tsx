@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
@@ -136,7 +137,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const refreshCxStatus = useCallback(async () => {
     setCxDetecting(true)
     try {
-      const status = await window.batAppAPI.settings.detectCx()
+      const status = await host.settings.detectCx()
       setCxStatus(status)
     } finally {
       setCxDetecting(false)
@@ -859,7 +860,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     style={{ marginTop: 6 }}
                     onClick={async () => {
                       if (confirm(t('settings.clearTerminalHistoryConfirm'))) {
-                        await window.batAppAPI.settings.clearTerminalHistory()
+                        await host.settings.clearTerminalHistory()
                         alert(t('settings.clearTerminalHistoryDone'))
                       }
                     }}

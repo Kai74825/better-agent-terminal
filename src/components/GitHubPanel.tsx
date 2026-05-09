@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
@@ -275,7 +276,7 @@ export function GitHubPanel({ workspaceFolderPath, onSendToClaude }: Readonly<Gi
             style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y, zIndex: 1000 }}
           >
             <div className="context-menu-item" onClick={() => {
-              getItemUrl(contextMenu.item).then(url => { if (url) window.batAppAPI.shell.openExternal(url) })
+              getItemUrl(contextMenu.item).then(url => { if (url) host.shell.openExternal(url) })
               setContextMenu(null)
             }}>{t('github.openInGitHub')}</div>
             <div className="context-menu-item" onClick={() => {

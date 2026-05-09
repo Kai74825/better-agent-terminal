@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workspace } from '../types'
@@ -383,7 +384,7 @@ export function Sidebar({
           const files = Array.from(e.dataTransfer.files)
           let added = 0
           for (const file of files) {
-            const filePath = window.batAppAPI.shell.getPathForFile(file)
+            const filePath = host.shell.getPathForFile(file)
             if (filePath) {
               const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
               workspaceStore.addWorkspace(name, filePath)
@@ -499,7 +500,7 @@ export function Sidebar({
             className="context-menu-item"
             onClick={() => {
               const ws = workspaces.find(w => w.id === contextMenu.workspaceId)
-              if (ws) window.batAppAPI.shell.openPath(ws.folderPath)
+              if (ws) host.shell.openPath(ws.folderPath)
               setContextMenu(null)
             }}
           >
@@ -527,7 +528,7 @@ export function Sidebar({
             <div
               className="context-menu-item"
               onClick={() => {
-                window.batAppAPI.shell.openExternal(githubUrl)
+                host.shell.openExternal(githubUrl)
                 setContextMenu(null)
               }}
             >

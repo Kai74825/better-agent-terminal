@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useEffect, useCallback, useState, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workspace, TerminalInstance, EnvVariable } from '../types'
@@ -73,7 +74,7 @@ async function getShellFromSettings(): Promise<string | undefined> {
   if (settings.shell === 'custom' && settings.customShellPath) {
     return settings.customShellPath
   }
-  return window.batAppAPI.settings.getShellPath(settings.shell)
+  return host.settings.getShellPath(settings.shell)
 }
 
 // Helper to merge environment variables
@@ -145,7 +146,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       setIsGitRepo(!!root)
     }).catch(() => setIsGitRepo(false))
     // Detect Procfiles in workspace folder
-    window.batAppAPI.fs.readdir(workspace.folderPath).then(entries => {
+    host.fs.readdir(workspace.folderPath).then(entries => {
       const found = entries
         .filter(entry => !entry.isDirectory && isProcfileName(entry.name))
         .map(entry => entry.path)

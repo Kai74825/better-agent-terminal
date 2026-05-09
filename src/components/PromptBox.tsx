@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { settingsStore } from '../stores/settings-store'
@@ -50,7 +51,7 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
     }
 
     if (imagePath) {
-      await window.batAppAPI.clipboard.writeImage(imagePath)
+      await host.clipboard.writeImage(imagePath)
       await new Promise(resolve => setTimeout(resolve, 100))
       await window.batAppAPI.pty.write(terminalId, '\x1bv')
       await new Promise(resolve => setTimeout(resolve, 800))
@@ -130,7 +131,7 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault()
-        const filePath = await window.batAppAPI.clipboard.saveImage()
+        const filePath = await host.clipboard.saveImage()
         if (filePath) {
           setImagePath(filePath)
         }

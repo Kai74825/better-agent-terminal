@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, EffortLevel, CodexEffortLevel } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
 import { CODEX_EFFORT_LEVELS, FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
@@ -411,11 +412,11 @@ class SettingsStore {
 
   async save(): Promise<void> {
     const data = JSON.stringify(this.settings)
-    await window.batAppAPI.settings.save(data)
+    await host.settings.save(data)
   }
 
   async load(): Promise<void> {
-    const data = await window.batAppAPI.settings.load()
+    const data = await host.settings.load()
     if (data) {
       try {
         const parsed = JSON.parse(data)

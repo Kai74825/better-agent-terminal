@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useEffect, useRef, useState, memo, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -44,7 +45,7 @@ async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
   } catch {
-    try { await window.batAppAPI.clipboard.writeText(text) } catch { /* ignore */ }
+    try { await host.clipboard.writeText(text) } catch { /* ignore */ }
   }
 }
 
@@ -359,7 +360,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
 
   // Re-read Procfile and sync process list (add new, remove deleted, update commands)
   const reloadProcfile = useCallback(async () => {
-    const result = await window.batAppAPI.fs.readFile(procfilePath)
+    const result = await host.fs.readFile(procfilePath)
     if (result.error || !result.content) return
     const entries = parseProcfile(result.content)
     if (entries.length === 0) return
@@ -501,7 +502,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     const fitAddon = new FitAddon()
     const unicode11Addon = new Unicode11Addon()
     const webLinksAddon = new WebLinksAddon((_, uri) => {
-      window.batAppAPI.shell.openExternal(uri)
+      host.shell.openExternal(uri)
     })
     terminal.loadAddon(fitAddon)
     terminal.loadAddon(webLinksAddon)
@@ -556,7 +557,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       if (sel) void copyText(sel)
     }
     document.addEventListener('keydown', onDocKeyDown, true)
-    const unsubscribeCopyShortcut = window.batAppAPI.clipboard.onCopyShortcut(onCopyShortcut)
+    const unsubscribeCopyShortcut = host.clipboard.onCopyShortcut(onCopyShortcut)
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
@@ -642,11 +643,11 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       if (settings.shell === 'custom' && settings.customShellPath) {
         shellRef.current = settings.customShellPath
       } else {
-        shellRef.current = await window.batAppAPI.settings.getShellPath(settings.shell)
+        shellRef.current = await host.settings.getShellPath(settings.shell)
       }
 
       // Read Procfile
-      const result = await window.batAppAPI.fs.readFile(procfilePath)
+      const result = await host.fs.readFile(procfilePath)
       if (disposed) return
       if (result.error || !result.content) {
         setError(result.error || 'Empty Procfile')

@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
@@ -177,7 +178,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
           const base = gitRoot || activePath
           const sep = window.batAppAPI.platform === 'win32' ? '\\' : '/'
           const fullPath = base + sep + filePath.replace(/[/\\]/g, sep)
-          const result = await window.batAppAPI.fs.readFile(fullPath)
+          const result = await host.fs.readFile(fullPath)
           if (result.content) {
             const lines = result.content.split('\n').map(l => '+' + l).join('\n')
             setDiff(`diff --git a/${filePath} b/${filePath}\nnew file\n--- /dev/null\n+++ b/${filePath}\n@@ -0,0 +1,${result.content.split('\n').length} @@\n${lines}`)
@@ -201,7 +202,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
     const base = gitRoot || activePath
     const sep = window.batAppAPI.platform === 'win32' ? '\\' : '/'
     const fullPath = base + sep + selectedFile.replace(/[/\\]/g, sep)
-    const result = await window.batAppAPI.fs.readFile(fullPath)
+    const result = await host.fs.readFile(fullPath)
     setFileContent(result.content || result.error || 'Unable to read file')
   }, [selectedFile, fileContent, activePath, gitRoot])
 

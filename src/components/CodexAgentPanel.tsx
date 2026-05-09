@@ -1,3 +1,4 @@
+import { host } from '../host-api'
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, cloneElement, isValidElement } from 'react'
 import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -160,11 +161,11 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   }, [activePlanFile, planFileShownAt])
 
   const handleSaveGeneratedImage = useCallback(async (image: { dataUrl: string; filename: string }) => {
-    await window.batAppAPI.image.saveDataUrl(image.dataUrl, image.filename)
+    await host.image.saveDataUrl(image.dataUrl, image.filename)
   }, [])
   useEffect(() => {
     if (!activePlanFile) { setPlanFileTitle(null); return }
-    window.batAppAPI.fs.readFile(activePlanFile).then(r => {
+    host.fs.readFile(activePlanFile).then(r => {
       if (!r.content) return
       const firstLine = r.content.split('\n').find((l: string) => l.trim().length > 0)
       if (firstLine) setPlanFileTitle(firstLine.replace(/^#+\s*/, '').trim())
@@ -1260,7 +1261,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       return
     }
     const timer = setTimeout(() => {
-      window.batAppAPI.fs.search(cwd, filePickerQuery.trim()).then((results: { name: string; path: string; isDirectory: boolean }[]) => {
+      host.fs.search(cwd, filePickerQuery.trim()).then((results: { name: string; path: string; isDirectory: boolean }[]) => {
         setFilePickerResults(results || [])
         setFilePickerIndex(0)
       }).catch(() => {
@@ -1279,17 +1280,17 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
   const handleModelSelect = useCallback(async (modelValue: string) => {
     if (isCodexSession && modelValue !== currentModel) {
-      const ok = await window.batAppAPI.dialog.confirm(t('claude.codexModelChangeWarning'))
+      const ok = await host.dialog.confirm(t('claude.codexModelChangeWarning'))
       if (!ok) return
     }
     // V2: warn that model change will recreate session and re-apply context
     if (!isCodexSession && isV2Session && modelValue !== currentModel) {
-      const ok = await window.batAppAPI.dialog.confirm(t('claude.v2ModelChangeWarning'))
+      const ok = await host.dialog.confirm(t('claude.v2ModelChangeWarning'))
       if (!ok) return
     }
     // V1: warn about 1M model cache inefficiency
     if (!isCodexSession && !isV2Session && modelValue.includes('[1m]') && modelValue !== currentModel) {
-      const ok = await window.batAppAPI.dialog.confirm(t('claude.v1Model1mWarning'))
+      const ok = await host.dialog.confirm(t('claude.v1Model1mWarning'))
       if (!ok) return
     }
     setShowModelList(false)
@@ -1774,7 +1775,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       const elapsed = Date.now() - timestamp
       if (totalInput > 150_000 && elapsed > 60 * 60 * 1000) {
         const mins = Math.floor(elapsed / 60000)
-        const ok = await window.batAppAPI.dialog.confirm(
+        const ok = await host.dialog.confirm(
           `⚠️ Cache expired\n\nLast turn had ${(totalInput / 1000).toFixed(0)}k input tokens, but ${mins} minutes have passed (cache TTL: 60 min).\n\nThis request will re-process all tokens at full price, which may incur significant costs.\n\nContinue?`
         )
         if (!ok) return
@@ -2156,7 +2157,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   // Read plan file content when ExitPlanMode permission appears
   useEffect(() => {
     if (pendingPermission?.toolName === 'ExitPlanMode' && pendingPermission.input.planFilePath) {
-      window.batAppAPI.fs.readFile(String(pendingPermission.input.planFilePath)).then(r => {
+      host.fs.readFile(String(pendingPermission.input.planFilePath)).then(r => {
         if (r.content) setPlanFileContent(r.content)
       }).catch(() => {})
     } else {
@@ -2328,7 +2329,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const current = attachedImages
     if (current.length >= MAX_IMAGES || current.some(img => img.path === filePath)) return
     try {
-      const dataUrl = await window.batAppAPI.image.readAsDataUrl(filePath)
+      const dataUrl = await host.image.readAsDataUrl(filePath)
       setAttachedImages(prev => {
         if (prev.length >= MAX_IMAGES) return prev
         if (prev.some(img => img.path === filePath)) return prev
@@ -2369,7 +2370,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           return
         }
         if (!isRemoteConnected) {
-          const filePath = await window.batAppAPI.clipboard.saveImage()
+          const filePath = await host.clipboard.saveImage()
           if (filePath) {
             await addImageByPath(filePath)
           }
@@ -2404,7 +2405,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         }
         continue
       }
-      const filePath = window.batAppAPI.shell.getPathForFile(file)
+      const filePath = host.shell.getPathForFile(file)
       if (!filePath) continue
       if (file.type.startsWith('image/')) {
         await addImageByPath(filePath)
@@ -2563,7 +2564,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               {planPath && (
                 <div className="claude-plan-block">
                   <div className="claude-plan-open-btn" onClick={() => {
-                    window.batAppAPI.fs.readFile(planPath).then(r => {
+                    host.fs.readFile(planPath).then(r => {
                       if (r.content) setContentModal({ title: 'Plan', content: r.content, markdown: true })
                     }).catch(() => {})
                   }}>
@@ -3599,7 +3600,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       {window.batAppAPI?.debug?.isDebugMode && activePlanFile && dismissedPlanFileRef.current !== activePlanFile && (
         <div className="claude-plan-file-bar">
           <span className="claude-plan-file-label" style={{ cursor: 'pointer' }} onClick={() => {
-            window.batAppAPI.fs.readFile(activePlanFile).then(r => {
+            host.fs.readFile(activePlanFile).then(r => {
               if (r.content) setContentModal({ title: 'Plan', content: r.content, markdown: true })
             }).catch(() => {})
           }} title={activePlanFile}>
@@ -3648,7 +3649,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
             <button
               className="claude-worktree-btn"
               onClick={async () => {
-                if (!await window.batAppAPI.dialog.confirm(`Merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}?`)) return
+                if (!await host.dialog.confirm(`Merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then use host folder (${worktreeInfo.gitRoot}) to merge worktree folder (${worktreeInfo.worktreePath}). Steps:\n1. Stage and commit all changes in the worktree folder with a meaningful commit message\n2. Switch to host folder (${worktreeInfo.gitRoot}) and merge the worktree branch (${worktreeInfo.branchName}) into ${worktreeInfo.sourceBranch}\nDo not push to remote. Do not create a PR.`
                 await window.batAppAPI.claude.sendMessage(sessionId, cmd)
               }}
@@ -3657,7 +3658,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
             <button
               className="claude-worktree-btn"
               onClick={async () => {
-                if (!await window.batAppAPI.dialog.confirm(`Push ${worktreeInfo.branchName} directly to origin/main?`)) return
+                if (!await host.dialog.confirm(`Push ${worktreeInfo.branchName} directly to origin/main?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then push directly to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Pull origin/main and resolve any conflicts if needed\n3. Push to origin/main\nDo not create a PR. Do not ask for confirmation.`
                 await window.batAppAPI.claude.sendMessage(sessionId, cmd)
               }}
