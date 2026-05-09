@@ -10,8 +10,9 @@ mod path_guard;
 
 use commands::{
     app as app_cmd, clipboard as clipboard_cmd, debug as debug_cmd, dialog as dialog_cmd,
-    fs as fs_cmd, git as git_cmd, image as image_cmd, pty as pty_cmd, settings,
-    shell as shell_cmd, update as update_cmd, workspace as workspace_cmd,
+    fs as fs_cmd, git as git_cmd, image as image_cmd, notification as notification_cmd,
+    pty as pty_cmd, settings, shell as shell_cmd, update as update_cmd,
+    workspace as workspace_cmd,
 };
 
 pub fn run() {
@@ -20,6 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(pty_cmd::PtyState::default())
+        .manage(notification_cmd::NotificationState::default())
         .invoke_handler(tauri::generate_handler![
             settings::settings_load,
             settings::settings_save,
@@ -63,6 +65,13 @@ pub fn run() {
             app_cmd::app_focus_next_window,
             app_cmd::app_open_new_instance,
             app_cmd::app_set_dock_badge,
+            notification_cmd::notification_list,
+            notification_cmd::notification_mark_read,
+            notification_cmd::notification_mark_all_read,
+            notification_cmd::notification_mark_window_read,
+            notification_cmd::notification_clear,
+            notification_cmd::notification_focus_latest_unread,
+            notification_cmd::notification_focus_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running better-agent-terminal");

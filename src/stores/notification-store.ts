@@ -1,3 +1,5 @@
+import { host } from '../host-api'
+
 export interface NotificationEntry {
   id: string
   sessionId: string
@@ -42,10 +44,10 @@ class NotificationStore {
     if (this.subscribed) return
     this.subscribed = true
     try {
-      this.entries = await window.batAppAPI.notification.list()
+      this.entries = await host.notification.list()
       this.emit()
     } catch { /* ignore */ }
-    this.unsubscribePush = window.batAppAPI.notification.onUpdate((entries) => {
+    this.unsubscribePush = host.notification.onUpdate((entries) => {
       this.entries = entries
       this.emit()
     })
@@ -58,23 +60,23 @@ class NotificationStore {
   }
 
   async markRead(id: string): Promise<void> {
-    await window.batAppAPI.notification.markRead(id)
+    await host.notification.markRead(id)
   }
 
   async markAllRead(): Promise<void> {
-    await window.batAppAPI.notification.markAllRead()
+    await host.notification.markAllRead()
   }
 
   async clear(): Promise<void> {
-    await window.batAppAPI.notification.clear()
+    await host.notification.clear()
   }
 
   async focusEntry(id: string): Promise<void> {
-    await window.batAppAPI.notification.focusEntry(id)
+    await host.notification.focusEntry(id)
   }
 
   async focusLatestUnread(): Promise<{ id: string; windowId: string } | null> {
-    return window.batAppAPI.notification.focusLatestUnread()
+    return host.notification.focusLatestUnread()
   }
 }
 

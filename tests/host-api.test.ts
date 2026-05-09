@@ -110,6 +110,13 @@ async function run() {
       if (cmd === 'app_focus_next_window') return false as unknown as T
       if (cmd === 'app_open_new_instance') return { alreadyOpen: true } as unknown as T
       if (cmd === 'app_set_dock_badge') return undefined as unknown as T
+      if (cmd === 'notification_list') return [] as unknown as T
+      if (cmd === 'notification_mark_read') return true as unknown as T
+      if (cmd === 'notification_mark_all_read') return true as unknown as T
+      if (cmd === 'notification_mark_window_read') return true as unknown as T
+      if (cmd === 'notification_clear') return true as unknown as T
+      if (cmd === 'notification_focus_latest_unread') return null as unknown as T
+      if (cmd === 'notification_focus_entry') return null as unknown as T
       throw new Error(`unexpected invoke: ${cmd}`)
     }
     setWindow({ __TAURI_INTERNALS__: { invoke } })
@@ -215,6 +222,26 @@ async function run() {
     assert.deepEqual(newInst, { alreadyOpen: true })
     await mod.host.app.setDockBadge(7)
 
+    // notification.* — in-memory store on the Rust side.
+    assert.deepEqual(await mod.host.notification.list(), [])
+    assert.equal(await mod.host.notification.markRead('n1'), true)
+    assert.equal(await mod.host.notification.markAllRead(), true)
+    assert.equal(await mod.host.notification.markWindowRead(), true)
+    assert.equal(await mod.host.notification.clear(), true)
+    assert.equal(await mod.host.notification.focusLatestUnread(), null)
+    assert.equal(await mod.host.notification.focusEntry('n1'), null)
+    // onUpdate returns a synchronous unsubscriber; the underlying
+    // listen() never resolves in this stub-free environment, but
+    // the unsub is still callable.
+    const unsubNotif = mod.host.notification.onUpdate(() => {})
+    assert.equal(typeof unsubNotif, 'function')
+    unsubNotif()
+
+    // system.onResume — Tauri build returns a no-op unsub.
+    const unsubResume = mod.host.system.onResume(() => {})
+    assert.equal(typeof unsubResume, 'function')
+    assert.equal(unsubResume(), undefined)
+
     assert.deepEqual(invokeCalls, [
       { cmd: 'settings_load', args: undefined },
       { cmd: 'settings_save', args: { data: '{"theme":"dark"}' } },
@@ -262,6 +289,13 @@ async function run() {
       { cmd: 'app_focus_next_window', args: undefined },
       { cmd: 'app_open_new_instance', args: { profileId: 'profile-x' } },
       { cmd: 'app_set_dock_badge', args: { count: 7 } },
+      { cmd: 'notification_list', args: undefined },
+      { cmd: 'notification_mark_read', args: { id: 'n1' } },
+      { cmd: 'notification_mark_all_read', args: undefined },
+      { cmd: 'notification_mark_window_read', args: undefined },
+      { cmd: 'notification_clear', args: undefined },
+      { cmd: 'notification_focus_latest_unread', args: undefined },
+      { cmd: 'notification_focus_entry', args: { id: 'n1' } },
     ])
   }
 
@@ -270,10 +304,10 @@ async function run() {
     const invoke: TauriInvoke = async () => undefined as unknown as never
     setWindow({ __TAURI_INTERNALS__: { invoke } })
     const mod = await loadFreshAdapter()
-    // notification is still unported — use it as the canary for
+    // worktree is still unported — use it as the canary for
     // "namespace not yet implemented" behaviour.
-    assert.throws(() => (mod.host as { notification: { show: () => unknown } }).notification.show(),
-      /notification\.show is not yet implemented under Tauri/)
+    assert.throws(() => (mod.host as { worktree: { list: () => unknown } }).worktree.list(),
+      /worktree\.list is not yet implemented under Tauri/)
     // Within a ported namespace, individually unported entries (e.g.
     // pty.restart) still throw the same way.
     assert.throws(() => (mod.host as { pty: { restart: () => unknown } }).pty.restart(),

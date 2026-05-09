@@ -13,6 +13,7 @@ pub mod dialog;
 pub mod fs;
 pub mod git;
 pub mod image;
+pub mod notification;
 pub mod pty;
 pub mod settings;
 pub mod shell;

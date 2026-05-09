@@ -137,6 +137,20 @@ function listenAdapter<T>(
 
 type PtyOutputPayload = { id: string; data: string }
 type PtyExitPayload = { id: string; exitCode: number }
+type NotificationEntry = {
+  id: string
+  sessionId: string
+  windowId: string | null
+  profileId: string | null
+  workspaceName: string
+  cwd: string
+  reason: 'completed' | 'error' | 'aborted'
+  result?: string
+  error?: string
+  timestamp: number
+  read: boolean
+  agentKind?: 'claude' | 'codex' | 'openai'
+}
 
 function createTauriHost(): BatAppAPI {
   // Build a partial implementation: only ported namespaces are real; the rest
@@ -243,6 +257,30 @@ function createTauriHost(): BatAppAPI {
       getDetachedId: () => null,
       onDetached: () => () => {},
       onReattached: () => () => {},
+    },
+    notification: {
+      // In-memory store on the Rust side — see
+      // src-tauri/src/commands/notification.rs. Push updates fire
+      // via the "notification:update" Tauri event.
+      list: () => getInvoke()<NotificationEntry[]>('notification_list'),
+      markRead: (id: string) => getInvoke()<boolean>('notification_mark_read', { id }),
+      markAllRead: () => getInvoke()<boolean>('notification_mark_all_read'),
+      markWindowRead: () => getInvoke()<boolean>('notification_mark_window_read'),
+      clear: () => getInvoke()<boolean>('notification_clear'),
+      focusLatestUnread: () =>
+        getInvoke()<{ id: string; windowId: string } | null>('notification_focus_latest_unread'),
+      focusEntry: (id: string) =>
+        getInvoke()<{ id: string; windowId: string } | null>('notification_focus_entry', { id }),
+      onUpdate: (cb: (entries: NotificationEntry[]) => void) =>
+        listenAdapter<NotificationEntry[]>('notification:update', cb),
+    },
+    system: {
+      // Sleep/wake detection isn't wired up on the Tauri side yet —
+      // tauri-plugin-os surfaces platform info but not power events.
+      // Returning a no-op unsub keeps subscribers happy; the
+      // Electron-side App.tsx handler that re-checks accounts on
+      // resume just doesn't fire.
+      onResume: (_cb: () => void) => () => {},
     },
     app: {
       // Single-window MVP: see src-tauri/src/commands/app.rs.
@@ -360,6 +398,7 @@ function permissiveValueFor(name: string, asFunction = true): unknown {
 const PORTED_NAMESPACES = new Set([
   'settings', 'shell', 'dialog', 'fs', 'clipboard', 'image',
   'pty', 'workspace', 'update', 'debug', 'git', 'app',
+  'notification', 'system',
 ])
 
 export function installTauriShim(): void {

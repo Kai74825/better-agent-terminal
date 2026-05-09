@@ -258,7 +258,7 @@ export default function App() {
       // Ctrl+Tab (Win + Mac): jump to window with most recent unread notification.
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'Tab' || e.code === 'Tab')) {
         e.preventDefault()
-        window.batAppAPI.notification.focusLatestUnread()
+        host.notification.focusLatestUnread()
         return
       }
 
@@ -479,7 +479,7 @@ export default function App() {
     initProfile()
 
     // Listen for system resume from sleep/hibernate — refresh remote connection status
-    const unsubSystemResume = window.batAppAPI.system.onResume(() => {
+    const unsubSystemResume = host.system.onResume(() => {
       window.batAppAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     })
 
