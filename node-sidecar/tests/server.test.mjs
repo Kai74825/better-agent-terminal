@@ -572,6 +572,66 @@ async function inProcess() {
     restoreSendEvent()
   }
 
+  // expectedContextWindowForModel mirror of TS-side
+  // CLAUDE_BUILTIN_MODEL_CONTEXT_WINDOWS. Drift guard already validates
+  // CLAUDE_BUILTIN_DEDUP_KEYS keys match the TS map; here we validate
+  // the per-key values + preset auto-compact entries.
+  const { CLAUDE_MODEL_CONTEXT_WINDOWS, expectedContextWindowForModel } = mod
+  assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-opus-4-7'), 1000000)
+  assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-haiku-4-5-20251001'), 200000)
+  assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-opus-4-7:auto-compact-200k'), 200000)
+  assert.equal(CLAUDE_MODEL_CONTEXT_WINDOWS.get('claude-opus-4-7:1m'), 1000000)
+  // expectedContextWindowForModel: hits map; falls back to base id by
+  // stripping [1m]; returns null for unknown.
+  assert.equal(expectedContextWindowForModel('claude-opus-4-7'), 1000000)
+  assert.equal(expectedContextWindowForModel('claude-opus-4-7[1m]'), 1000000)
+  assert.equal(expectedContextWindowForModel('claude-opus-4-6[1m]'), 1000000)
+  assert.equal(expectedContextWindowForModel(undefined), null)
+  assert.equal(expectedContextWindowForModel('totally-unknown-model'), null)
+
+  // claude.getContextUsage: cached usage from stream_event + result.
+  // Inject a fake SDK that streams a message_start with usage, a result
+  // with final usage, then verify the handler returns the right shape.
+  __setSdkOverrideForTests({
+    query() {
+      const messages = [
+        { type: 'system', subtype: 'init', session_id: 'cu-sdk', cwd: '/x' },
+        { type: 'stream_event', session_id: 'cu-sdk', parent_tool_use_id: null, event: { type: 'message_start', message: { usage: { input_tokens: 100, cache_creation_input_tokens: 50, cache_read_input_tokens: 200, output_tokens: 0 } } } },
+        { type: 'assistant', session_id: 'cu-sdk', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } },
+        { type: 'result', subtype: 'success', session_id: 'cu-sdk', result: 'hi', stop_reason: 'end_turn',
+          total_cost_usd: 0.0042, num_turns: 1,
+          usage: { input_tokens: 150, cache_creation_input_tokens: 50, cache_read_input_tokens: 250, output_tokens: 30 } },
+      ]
+      return (async function*() { for (const m of messages) yield m })()
+    },
+  })
+  try {
+    // Pre-turn: getContextUsage returns null (no usage cached yet).
+    await dispatch({ jsonrpc: '2.0', id: 290, method: 'claude.startSession',
+      params: { sessionId: 'cu-1', options: { cwd: '/x', model: 'claude-sonnet-4-6' } } })
+    const preReply = await dispatch({ jsonrpc: '2.0', id: 291, method: 'claude.getContextUsage', params: { sessionId: 'cu-1' } })
+    assert.equal(preReply.result, null)
+    // Run a turn. result.usage should override the mid-stream estimate.
+    await dispatch({ jsonrpc: '2.0', id: 292, method: 'claude.sendMessage', params: { sessionId: 'cu-1', prompt: 'hi' } })
+    const postReply = await dispatch({ jsonrpc: '2.0', id: 293, method: 'claude.getContextUsage', params: { sessionId: 'cu-1' } })
+    const cu = postReply.result
+    assert.ok(cu, 'expected non-null context usage after turn')
+    assert.equal(cu.totalTokens, 150 + 50 + 250)  // input + creation + read
+    assert.equal(cu.maxTokens, 1000000)  // claude-sonnet-4-6 = 1M
+    assert.equal(cu.percentage, Math.round((450 / 1000000) * 100))
+    assert.equal(cu.model, 'claude-sonnet-4-6')
+    assert.equal(cu.apiUsage.input_tokens, 150)
+    assert.equal(cu.apiUsage.output_tokens, 30)
+    assert.equal(cu.apiUsage.cache_creation_input_tokens, 50)
+    assert.equal(cu.apiUsage.cache_read_input_tokens, 250)
+    assert.deepEqual(cu.categories, [{ name: 'Context', tokens: 450, color: '#8B5CF6' }])
+  } finally {
+    __setSdkOverrideForTests(undefined)
+  }
+  // Unknown sessionId → null (renderer interprets as "no data yet").
+  const unknownReply = await dispatch({ jsonrpc: '2.0', id: 294, method: 'claude.getContextUsage', params: { sessionId: 'doesnt-exist' } })
+  assert.equal(unknownReply.result, null)
+
   // SDK-backed read APIs: getSupportedCommands / getSupportedAgents /
   // getAccountInfo. Same dual-mode contract as getSupportedModels —
   // returns SDK data when available, empty/null fallback when not. Lock

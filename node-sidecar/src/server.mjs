@@ -92,6 +92,11 @@ function ensureSession(sessionId) {
       // Guard against concurrent sendMessage calls — same contract as the
       // Electron isStreaming flag.
       streaming: false,
+      // Cached usage stats updated from stream_event message_start /
+      // message_delta + the final SDKResultSuccess.usage. Surfaced to
+      // the renderer via claude.getContextUsage between turns; null
+      // until the first turn completes.
+      lastUsage: null,
     }
     sessions.set(sessionId, s)
   }
@@ -203,8 +208,27 @@ registerHandler('claude.sendMessage', async (params) => {
         // We mirror Electron's filter: only content_block_delta blocks
         // with text/thinking deltas get forwarded; other stream events
         // (message_start / message_delta usage updates / etc) are
-        // ignored at this layer for now.
+        // ignored at this layer except for usage tracking below.
         const ev = msg.event
+        // Usage tracking — pull from message_start / message_delta so
+        // the in-progress turn's context usage is visible to
+        // claude.getContextUsage even mid-stream.
+        if (ev && (ev.type === 'message_start' || ev.type === 'message_delta')) {
+          const u = ev.usage || ev.message?.usage
+          if (u && !msg.parent_tool_use_id) {
+            const inputTotal = (u.input_tokens || 0)
+              + (u.cache_creation_input_tokens || 0)
+              + (u.cache_read_input_tokens || 0)
+            s.lastUsage = {
+              input_tokens: u.input_tokens || 0,
+              output_tokens: u.output_tokens || s.lastUsage?.output_tokens || 0,
+              cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: u.cache_read_input_tokens || 0,
+              totalTokens: inputTotal,
+              model: s.model || s.lastUsage?.model || null,
+            }
+          }
+        }
         if (ev && ev.type === 'content_block_delta') {
           const d = ev.delta
           if (d?.text) {
@@ -261,6 +285,24 @@ registerHandler('claude.sendMessage', async (params) => {
           }
         }
       } else if (t === 'result') {
+        // Capture authoritative usage from the result. This overrides
+        // mid-stream estimates with the final number for the turn.
+        if (msg.usage) {
+          const u = msg.usage
+          const inputTotal = (u.input_tokens || 0)
+            + (u.cache_creation_input_tokens || 0)
+            + (u.cache_read_input_tokens || 0)
+          s.lastUsage = {
+            input_tokens: u.input_tokens || 0,
+            output_tokens: u.output_tokens || 0,
+            cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+            cache_read_input_tokens: u.cache_read_input_tokens || 0,
+            totalTokens: inputTotal,
+            model: s.model || s.lastUsage?.model || null,
+            totalCostUsd: msg.total_cost_usd ?? s.lastUsage?.totalCostUsd ?? 0,
+            numTurns: msg.num_turns ?? s.lastUsage?.numTurns ?? 0,
+          }
+        }
         if (msg.subtype === 'success') {
           sendEvent('claude:result', { sessionId, result: msg })
           sendEvent('claude:turn-end', { sessionId, payload: { reason: 'completed', result: msg.result, sdkSessionId: msg.session_id } })
@@ -588,7 +630,41 @@ registerHandler('claude.getSessionMeta', async (params) => {
     autoCompactWindow: s.autoCompactWindow,
   }
 })
-registerHandler('claude.getContextUsage', async () => null)
+// claude.getContextUsage: surface the cached usage from the last
+// stream_event / result for this session in a shape the renderer's
+// ContextUsagePopup understands (subset of SDKControlGetContextUsageResponse:
+// categories[], totalTokens, maxTokens, percentage, model, plus
+// optional apiUsage). We return null if no turn has completed yet —
+// renderer interprets that as "no data yet" and hides the popup.
+//
+// Live mid-turn data via the SDK control method (instance.getContextUsage())
+// would require streaming-input mode, which we don't implement yet.
+// Cached values cover the common case where the user opens the popup
+// between turns.
+registerHandler('claude.getContextUsage', async (params) => {
+  const sessionId = params?.sessionId
+  if (typeof sessionId !== 'string') return null
+  const s = sessions.get(sessionId)
+  if (!s || !s.lastUsage) return null
+  const u = s.lastUsage
+  const model = u.model || s.model || null
+  const maxTokens = expectedContextWindowForModel(model) || 200000
+  const totalTokens = u.totalTokens || 0
+  const percentage = maxTokens > 0 ? Math.round((totalTokens / maxTokens) * 100) : 0
+  return {
+    categories: [{ name: 'Context', tokens: totalTokens, color: '#8B5CF6' }],
+    totalTokens,
+    maxTokens,
+    percentage,
+    model: model || 'unknown',
+    apiUsage: {
+      input_tokens: u.input_tokens || 0,
+      output_tokens: u.output_tokens || 0,
+      cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+      cache_read_input_tokens: u.cache_read_input_tokens || 0,
+    },
+  }
+})
 registerHandler('claude.getWorktreeStatus', async (params) => {
   const sessionId = String(params?.sessionId ?? '')
   if (!sessionId) return null
@@ -751,7 +827,37 @@ const CLAUDE_BUILTIN_DEDUP_KEYS = [
   'claude-sonnet-4-6[1m]',
   'claude-haiku-4-5-20251001',
 ]
-export { CLAUDE_BUILTIN_MODELS, CLAUDE_BUILTIN_DEDUP_KEYS }
+
+// Mirror of src/utils/claude-model-presets.ts CLAUDE_BUILTIN_MODEL_CONTEXT_WINDOWS,
+// plus the auto-compact preset entries. Drift guard (test suite) re-reads
+// the TS file and sorted-equals the keys against this map. Used by
+// claude.getContextUsage to compute the maxTokens budget.
+const CLAUDE_MODEL_CONTEXT_WINDOWS = new Map([
+  ['claude-opus-4-7', 1000000],
+  ['claude-opus-4-7[1m]', 1000000],
+  ['claude-opus-4-6', 1000000],
+  ['claude-opus-4-6[1m]', 1000000],
+  ['claude-sonnet-4-6', 1000000],
+  ['claude-sonnet-4-6[1m]', 1000000],
+  ['claude-haiku-4-5-20251001', 200000],
+  // Preset variants — auto-compact wraps the underlying claude-opus-4-7,
+  // so context window budget is the auto-compact target.
+  ['claude-opus-4-7:auto-compact-200k', 200000],
+  ['claude-opus-4-7:auto-compact-300k', 300000],
+  ['claude-opus-4-7:auto-compact-400k', 400000],
+  ['claude-opus-4-7:1m', 1000000],
+])
+
+function expectedContextWindowForModel(model) {
+  if (!model) return null
+  if (CLAUDE_MODEL_CONTEXT_WINDOWS.has(model)) return CLAUDE_MODEL_CONTEXT_WINDOWS.get(model)
+  // Fallback: strip any [1m] suffix and try base id.
+  const base = model.replace(/\[1m\]$/, '')
+  if (CLAUDE_MODEL_CONTEXT_WINDOWS.has(base)) return CLAUDE_MODEL_CONTEXT_WINDOWS.get(base)
+  return null
+}
+
+export { CLAUDE_BUILTIN_MODELS, CLAUDE_BUILTIN_DEDUP_KEYS, CLAUDE_MODEL_CONTEXT_WINDOWS, expectedContextWindowForModel }
 
 // --- remote.* / tunnel.* stubs --------------------------------------------
 //
