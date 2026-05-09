@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 import { registerHandler } from '../lib/protocol.mjs'
 import { resolveDataDir } from '../lib/data-paths.mjs'
+import { invalidateAccountMetadataCache } from './claude-readonly.mjs'
 
 export const AUTH_STATUS_TIMEOUT_MS = 10_000
 // auth login is interactive (browser-based OAuth, ~30-60s typical), so
@@ -168,6 +169,10 @@ registerHandler('claude.authLogin', async () => {
 registerHandler('claude.authLogout', async () => {
   return new Promise((resolve) => {
     spawnClaudeCli(['auth', 'logout'], { timeout: AUTH_STATUS_TIMEOUT_MS }, (err) => {
+      // Always flush the per-process metadata cache — the account is
+      // gone (or might be), so getAccountInfo / getSupportedModels etc.
+      // must be re-fetched on next call.
+      invalidateAccountMetadataCache()
       if (err) resolve({ success: false, error: err.message })
       else resolve({ success: true })
     })
@@ -179,12 +184,16 @@ registerHandler('claude.accountSwitch', async (params) => {
   if (typeof params?.accountId !== 'string') {
     throw new Error('claude.accountSwitch: missing accountId')
   }
+  // Even when the actual switch op is still a stub, flush so a future
+  // real impl doesn't have to remember to invalidate too.
+  invalidateAccountMetadataCache()
   return false
 })
 registerHandler('claude.accountRemove', async (params) => {
   if (typeof params?.accountId !== 'string') {
     throw new Error('claude.accountRemove: missing accountId')
   }
+  invalidateAccountMetadataCache()
   return false
 })
 registerHandler('claude.accountMarkWarningShown', async () => true)

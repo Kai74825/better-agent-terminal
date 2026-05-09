@@ -377,7 +377,11 @@ async function inProcess() {
   // builtins when it isn't (release without bundled node_modules).
   // Either way: every builtin must be present + tagged source:'builtin',
   // and every additional entry must be tagged source:'sdk'.
-  const { __setSdkOverrideForTests } = mod
+  const { __setSdkOverrideForTests, __resetMetadataCacheForTests } = mod
+  // Process-lifetime metadata cache could mask state changes between
+  // assertion blocks. Clear before the first round so each block sees
+  // a cold rebuild.
+  __resetMetadataCacheForTests()
   const modelsReply = await dispatch({
     jsonrpc: '2.0', id: 60, method: 'claude.getSupportedModels',
     params: { sessionId: 'irrelevant' },
@@ -405,6 +409,7 @@ async function inProcess() {
   // builtins. Pin this with the override hook so dev passing can never
   // mask a release regression.
   __setSdkOverrideForTests(null)
+  __resetMetadataCacheForTests()
   try {
     const fallbackReply = await dispatch({
       jsonrpc: '2.0', id: 61, method: 'claude.getSupportedModels',
@@ -416,6 +421,7 @@ async function inProcess() {
     }
   } finally {
     __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
   }
 
   // Positive augmentation contract with a fake SDK: one model dupes a
@@ -439,6 +445,7 @@ async function inProcess() {
     },
   }
   __setSdkOverrideForTests(fakeSdk)
+  __resetMetadataCacheForTests()
   try {
     const augReply = await dispatch({
       jsonrpc: '2.0', id: 62, method: 'claude.getSupportedModels',
@@ -459,6 +466,70 @@ async function inProcess() {
     )
   } finally {
     __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
+  }
+
+  // Metadata cache contract. The 4 metadata RPCs (getSupportedModels /
+  // getSupportedCommands / getSupportedAgents / getAccountInfo) cache
+  // their result for 5 minutes per process. On macOS each cold call
+  // costs ~4-5s (sdk.query() spawns the bundled claude binary), so a
+  // panel mount that fires all 4 was paying ~17s — caching cuts that
+  // to ~4s on first mount and ~0ms on every subsequent mount.
+  //
+  // We pin three contracts:
+  //   (a) Second call within TTL must NOT invoke the SDK builder.
+  //   (b) __resetMetadataCacheForTests forces a rebuild.
+  //   (c) Concurrent calls share the in-flight promise — only one
+  //       SDK build runs even if 4 callers fire simultaneously.
+  let modelsBuildCount = 0
+  let commandsBuildCount = 0
+  __setSdkOverrideForTests({
+    query() {
+      return {
+        async supportedModels() {
+          modelsBuildCount++
+          return [{ value: 'cache-test-model', displayName: 'cache', description: 'test' }]
+        },
+        async supportedCommands() {
+          commandsBuildCount++
+          return [{ name: 'cache-cmd', description: 'cache test' }]
+        },
+      }
+    },
+  })
+  __resetMetadataCacheForTests()
+  try {
+    // First call: builder runs.
+    await dispatch({ jsonrpc: '2.0', id: 70, method: 'claude.getSupportedModels' })
+    assert.equal(modelsBuildCount, 1, 'first call should build')
+    // Second + third call within TTL: no extra builder runs.
+    await dispatch({ jsonrpc: '2.0', id: 71, method: 'claude.getSupportedModels' })
+    await dispatch({ jsonrpc: '2.0', id: 72, method: 'claude.getSupportedModels' })
+    assert.equal(modelsBuildCount, 1, 'second/third call must hit cache')
+    // Reset → next call rebuilds.
+    __resetMetadataCacheForTests()
+    await dispatch({ jsonrpc: '2.0', id: 73, method: 'claude.getSupportedModels' })
+    assert.equal(modelsBuildCount, 2, 'after reset, builder must run again')
+
+    // Concurrent-call dedup: 4 callers in-flight simultaneously share
+    // the same builder run.
+    __resetMetadataCacheForTests()
+    commandsBuildCount = 0
+    const racers = await Promise.all([
+      dispatch({ jsonrpc: '2.0', id: 74, method: 'claude.getSupportedCommands' }),
+      dispatch({ jsonrpc: '2.0', id: 75, method: 'claude.getSupportedCommands' }),
+      dispatch({ jsonrpc: '2.0', id: 76, method: 'claude.getSupportedCommands' }),
+      dispatch({ jsonrpc: '2.0', id: 77, method: 'claude.getSupportedCommands' }),
+    ])
+    assert.equal(commandsBuildCount, 1,
+      `4 concurrent callers should share one build, ran ${commandsBuildCount} times`)
+    // All callers got the same shape.
+    for (const r of racers) {
+      assert.equal(r.result[0].name, 'cache-cmd')
+    }
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
   }
 
   // Per-session state round-trip via dispatch. Verifies setters mutate
@@ -1763,6 +1834,7 @@ async function inProcess() {
       }
     },
   })
+  __resetMetadataCacheForTests()
   try {
     const cmdsReply = await dispatch({ jsonrpc: '2.0', id: 270, method: 'claude.getSupportedCommands' })
     assert.equal(cmdsReply.result.length, 2)
@@ -1775,10 +1847,12 @@ async function inProcess() {
     assert.equal(accountReply.result.subscriptionType, 'pro')
   } finally {
     __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
   }
   // SDK-unavailable fallback contract: empty array / null shape so the
   // renderer's pickers degrade gracefully instead of throwing.
   __setSdkOverrideForTests(null)
+  __resetMetadataCacheForTests()
   try {
     const cmdsFallback = await dispatch({ jsonrpc: '2.0', id: 273, method: 'claude.getSupportedCommands' })
     assert.deepEqual(cmdsFallback.result, [])
@@ -1788,6 +1862,7 @@ async function inProcess() {
     assert.equal(accountFallback.result, null)
   } finally {
     __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
   }
   // SDK throws → handler must catch + return fallback (don't crash the
   // renderer panel). Verifies the catch arms.
@@ -1800,6 +1875,7 @@ async function inProcess() {
       }
     },
   })
+  __resetMetadataCacheForTests()
   try {
     const r1 = await dispatch({ jsonrpc: '2.0', id: 276, method: 'claude.getSupportedCommands' })
     assert.deepEqual(r1.result, [])
@@ -1809,6 +1885,7 @@ async function inProcess() {
     assert.equal(r3.result, null)
   } finally {
     __setSdkOverrideForTests(undefined)
+    __resetMetadataCacheForTests()
   }
 
   // stream_event → claude:stream mapping for real-time text/thinking

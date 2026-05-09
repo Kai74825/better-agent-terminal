@@ -99,7 +99,11 @@ export {
 // directly (e.g. mod.compareVersions, mod.findClaudeCliPath), so they
 // must keep flowing out of server.mjs.
 export { compareVersions } from './handlers/update.mjs'
-export { findClaudeCliPath, listSessionsFallback } from './handlers/claude-readonly.mjs'
+export {
+  findClaudeCliPath,
+  listSessionsFallback,
+  __resetMetadataCacheForTests,
+} from './handlers/claude-readonly.mjs'
 export {
   fetchAuthStatus,
   readAccountIndex,

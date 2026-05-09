@@ -139,6 +139,71 @@ registerHandler('claude.listSessions', async (params) => {
   return listSessionsFallback(cwd)
 })
 
+// Per-process metadata cache.
+//
+// Each of the 4 handlers below (getSupportedModels / Commands / Agents
+// / AccountInfo) used to spin up a fresh `sdk.query({prompt:'',cwd:'/'})`
+// on every call. On macOS that's ~4-5s per call because the SDK spawns
+// the bundled `claude` binary as a subprocess. ClaudeAgentPanel mount
+// fires all four in sequence → ~17s of cold start (verified via
+// node-sidecar/scripts/bench-startup.mjs).
+//
+// Cache strategy: process-lifetime in-memory map with a 5-minute TTL.
+// Key insight — these values rarely change within a session:
+//   - supportedModels: rebuilt from SDK + builtins; only changes if
+//     the SDK ships a new model list (i.e. across SDK upgrades).
+//   - supportedCommands / supportedAgents: derived from
+//     ~/.claude/{commands,agents} + project .claude/{commands,agents}.
+//     Stable within a session; user adding a new file is rare and a
+//     5-min TTL bounds the staleness.
+//   - accountInfo: pinned to the active account. Invalidated explicitly
+//     on accountSwitch / accountRemove via invalidateAccountMetadataCache.
+//
+// The cache also de-dupes concurrent calls: if two panel mounts hit
+// the same key simultaneously, they share the in-flight promise so we
+// only spawn the SDK subprocess once.
+const META_CACHE_TTL_MS = 5 * 60 * 1000
+const metaCache = new Map()  // key → { value, ts, inflight }
+
+async function cachedSdkRead(key, build) {
+  const now = Date.now()
+  const entry = metaCache.get(key)
+  if (entry && entry.value !== undefined && now - entry.ts < META_CACHE_TTL_MS) {
+    return entry.value
+  }
+  if (entry?.inflight) return entry.inflight
+  const inflight = (async () => {
+    try {
+      const value = await build()
+      metaCache.set(key, { value, ts: Date.now(), inflight: null })
+      return value
+    } catch (err) {
+      // On error we don't poison the cache — next call retries cold.
+      metaCache.set(key, { value: undefined, ts: 0, inflight: null })
+      throw err
+    }
+  })()
+  metaCache.set(key, { value: entry?.value, ts: entry?.ts ?? 0, inflight })
+  return inflight
+}
+
+// Invalidate the parts of the cache that change when the active
+// account flips. Called from claude.accountSwitch / accountRemove.
+export function invalidateAccountMetadataCache() {
+  metaCache.delete('getAccountInfo')
+  // Models / commands / agents could in theory differ per-account
+  // (different feature flags), so flush them too — a fresh login
+  // triggering a brief reload is fine.
+  metaCache.delete('getSupportedModels')
+  metaCache.delete('getSupportedCommands')
+  metaCache.delete('getSupportedAgents')
+}
+// Test hook: clear the cache so tests can verify cold-path behaviour
+// without restarting the module.
+export function __resetMetadataCacheForTests() {
+  metaCache.clear()
+}
+
 // Returns the builtin claude model list, optionally augmented with
 // SDK-discovered models when @anthropic-ai/claude-agent-sdk is
 // importable. Builtin entries are always present and tagged source:
@@ -149,63 +214,71 @@ registerHandler('claude.listSessions', async (params) => {
 //
 // In release builds without bundled node_modules, the SDK import will
 // fail and we silently return builtins. Drift guard test still applies.
-registerHandler('claude.getSupportedModels', async () => {
-  const builtins = CLAUDE_BUILTIN_MODELS.map(m => ({ ...m, source: 'builtin' }))
-  try {
-    const sdk = await loadAnthropicSdk()
-    if (!sdk) return builtins
-    const dedupKeys = new Set(CLAUDE_BUILTIN_DEDUP_KEYS)
-    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
-    const sdkModels = await instance.supportedModels()
-    const sdkFiltered = (Array.isArray(sdkModels) ? sdkModels : [])
-      .filter(m => m && typeof m.value === 'string'
-        && !dedupKeys.has(m.value)
-        && !dedupKeys.has(`${m.value}[1m]`))
-      .map(m => ({ ...m, source: 'sdk' }))
-    return [...builtins, ...sdkFiltered]
-  } catch {
-    return builtins
-  }
-})
+registerHandler('claude.getSupportedModels', async () =>
+  cachedSdkRead('getSupportedModels', async () => {
+    const builtins = CLAUDE_BUILTIN_MODELS.map(m => ({ ...m, source: 'builtin' }))
+    try {
+      const sdk = await loadAnthropicSdk()
+      if (!sdk) return builtins
+      const dedupKeys = new Set(CLAUDE_BUILTIN_DEDUP_KEYS)
+      const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+      const sdkModels = await instance.supportedModels()
+      const sdkFiltered = (Array.isArray(sdkModels) ? sdkModels : [])
+        .filter(m => m && typeof m.value === 'string'
+          && !dedupKeys.has(m.value)
+          && !dedupKeys.has(`${m.value}[1m]`))
+        .map(m => ({ ...m, source: 'sdk' }))
+      return [...builtins, ...sdkFiltered]
+    } catch {
+      return builtins
+    }
+  })
+)
 // getSupportedCommands / getSupportedAgents / getAccountInfo follow the
 // same SDK-augmentation pattern as getSupportedModels: try the SDK
 // first, fall back to the previous stub shape (empty list / null) if
 // the SDK isn't reachable. The Query instance is short-lived — we
 // instantiate it just to call the read method, no actual prompt sent,
 // matching what getSupportedModels does.
-registerHandler('claude.getSupportedCommands', async () => {
-  try {
-    const sdk = await loadAnthropicSdk()
-    if (!sdk || typeof sdk.query !== 'function') return []
-    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
-    const cmds = await instance.supportedCommands()
-    return Array.isArray(cmds) ? cmds : []
-  } catch {
-    return []
-  }
-})
-registerHandler('claude.getSupportedAgents', async () => {
-  try {
-    const sdk = await loadAnthropicSdk()
-    if (!sdk || typeof sdk.query !== 'function') return []
-    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
-    const agents = await instance.supportedAgents()
-    return Array.isArray(agents) ? agents : []
-  } catch {
-    return []
-  }
-})
-registerHandler('claude.getAccountInfo', async () => {
-  try {
-    const sdk = await loadAnthropicSdk()
-    if (!sdk || typeof sdk.query !== 'function') return null
-    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
-    const info = await instance.accountInfo()
-    return info ?? null
-  } catch {
-    return null
-  }
-})
+registerHandler('claude.getSupportedCommands', async () =>
+  cachedSdkRead('getSupportedCommands', async () => {
+    try {
+      const sdk = await loadAnthropicSdk()
+      if (!sdk || typeof sdk.query !== 'function') return []
+      const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+      const cmds = await instance.supportedCommands()
+      return Array.isArray(cmds) ? cmds : []
+    } catch {
+      return []
+    }
+  })
+)
+registerHandler('claude.getSupportedAgents', async () =>
+  cachedSdkRead('getSupportedAgents', async () => {
+    try {
+      const sdk = await loadAnthropicSdk()
+      if (!sdk || typeof sdk.query !== 'function') return []
+      const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+      const agents = await instance.supportedAgents()
+      return Array.isArray(agents) ? agents : []
+    } catch {
+      return []
+    }
+  })
+)
+registerHandler('claude.getAccountInfo', async () =>
+  cachedSdkRead('getAccountInfo', async () => {
+    try {
+      const sdk = await loadAnthropicSdk()
+      if (!sdk || typeof sdk.query !== 'function') return null
+      const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+      const info = await instance.accountInfo()
+      return info ?? null
+    } catch {
+      return null
+    }
+  })
+)
 
 registerHandler('claude.getWorktreeStatus', async (params) => {
   const sessionId = String(params?.sessionId ?? '')
