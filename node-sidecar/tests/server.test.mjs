@@ -2485,6 +2485,85 @@ async function inProcess() {
     }
   }
 
+  // remote-protocol allowlists — must stay in lockstep with
+  // electron/remote/protocol.ts. Read both files, parse out the Set
+  // literals, diff. Any channel/event added to one side without the
+  // other will fail authorization at runtime when the WebSocket server
+  // lands, so we lock parity here.
+  {
+    const protocol = await import('../src/lib/remote-protocol.mjs')
+    const electronSrcPath = resolve(here, '..', '..', 'electron', 'remote', 'protocol.ts')
+    const electronSrc = await readFile(electronSrcPath, 'utf-8')
+
+    function parseSet(varName) {
+      // Match `export const <name> = new Set([ ... ])` and pull strings
+      // out of the array literal. Tolerates JS comments inside the
+      // array so we can keep the // PTY / // Claude section labels.
+      const re = new RegExp(`export const ${varName}\\s*=\\s*new Set\\(\\[([\\s\\S]*?)\\]\\)`)
+      const m = electronSrc.match(re)
+      if (!m) throw new Error(`could not locate ${varName} in electron/remote/protocol.ts`)
+      const body = m[1].replace(/\/\/[^\n]*\n/g, '\n')
+      const items = []
+      for (const sm of body.matchAll(/'([^']+)'/g)) items.push(sm[1])
+      return new Set(items)
+    }
+
+    const electronChannels = parseSet('PROXIED_CHANNELS')
+    const electronEvents = parseSet('PROXIED_EVENTS')
+
+    function diffSets(label, a, b) {
+      const onlyA = [...a].filter(x => !b.has(x))
+      const onlyB = [...b].filter(x => !a.has(x))
+      assert.deepEqual(onlyA, [], `${label}: in electron but not sidecar — ${onlyA.join(', ')}`)
+      assert.deepEqual(onlyB, [], `${label}: in sidecar but not electron — ${onlyB.join(', ')}`)
+    }
+
+    diffSets('PROXIED_CHANNELS', electronChannels, protocol.PROXIED_CHANNELS)
+    diffSets('PROXIED_EVENTS', electronEvents, protocol.PROXIED_EVENTS)
+    // Sanity: the sets are non-trivial.
+    assert.ok(protocol.PROXIED_CHANNELS.size > 50, `expected >50 channels, got ${protocol.PROXIED_CHANNELS.size}`)
+    assert.ok(protocol.PROXIED_EVENTS.size > 15, `expected >15 events, got ${protocol.PROXIED_EVENTS.size}`)
+
+    // Handler-registry contract: register / has / invoke / reset.
+    const { registerRemoteHandler, hasRemoteHandler, invokeRemoteHandler, __resetRemoteHandlersForTests, __remoteHandlerCountForTests } = protocol
+    __resetRemoteHandlersForTests()
+    assert.equal(__remoteHandlerCountForTests(), 0)
+    assert.equal(hasRemoteHandler('test:foo'), false)
+
+    let calls = 0
+    registerRemoteHandler('test:foo', async (ctx, ...args) => {
+      calls++
+      return { ctx, args }
+    })
+    assert.equal(__remoteHandlerCountForTests(), 1)
+    assert.equal(hasRemoteHandler('test:foo'), true)
+
+    // Default ctx: windowId=null, isRemote=false.
+    const r1 = await invokeRemoteHandler('test:foo', ['hi', 42])
+    assert.deepEqual(r1.ctx, { windowId: null, isRemote: false })
+    assert.deepEqual(r1.args, ['hi', 42])
+    // Custom ctx propagates.
+    const r2 = await invokeRemoteHandler('test:foo', [], 'win-1', true)
+    assert.deepEqual(r2.ctx, { windowId: 'win-1', isRemote: true })
+    assert.deepEqual(r2.args, [])
+    // Non-array args coerced to [] (mirror Electron's tolerance).
+    const r3 = await invokeRemoteHandler('test:foo', null)
+    assert.deepEqual(r3.args, [])
+    assert.equal(calls, 3)
+
+    // Unknown channel throws synchronously (matching Electron's behavior).
+    await assert.rejects(invokeRemoteHandler('test:nope', []), /No handler for channel: test:nope/)
+
+    // Validation: empty channel / non-function handler must throw.
+    assert.throws(() => registerRemoteHandler('', () => {}), /non-empty string/)
+    assert.throws(() => registerRemoteHandler('x', null), /must be a function/)
+
+    // Reset clears the registry.
+    __resetRemoteHandlersForTests()
+    assert.equal(__remoteHandlerCountForTests(), 0)
+    assert.equal(hasRemoteHandler('test:foo'), false)
+  }
+
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
   const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod
