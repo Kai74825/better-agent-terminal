@@ -504,9 +504,45 @@ registerHandler('claude.getSupportedModels', async () => {
     return builtins
   }
 })
-registerHandler('claude.getSupportedCommands', async () => [])
-registerHandler('claude.getSupportedAgents', async () => [])
-registerHandler('claude.getAccountInfo', async () => null)
+// getSupportedCommands / getSupportedAgents / getAccountInfo follow the
+// same SDK-augmentation pattern as getSupportedModels: try the SDK
+// first, fall back to the previous stub shape (empty list / null) if
+// the SDK isn't reachable. The Query instance is short-lived — we
+// instantiate it just to call the read method, no actual prompt sent,
+// matching what getSupportedModels does.
+registerHandler('claude.getSupportedCommands', async () => {
+  try {
+    const sdk = await loadAnthropicSdk()
+    if (!sdk || typeof sdk.query !== 'function') return []
+    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+    const cmds = await instance.supportedCommands()
+    return Array.isArray(cmds) ? cmds : []
+  } catch {
+    return []
+  }
+})
+registerHandler('claude.getSupportedAgents', async () => {
+  try {
+    const sdk = await loadAnthropicSdk()
+    if (!sdk || typeof sdk.query !== 'function') return []
+    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+    const agents = await instance.supportedAgents()
+    return Array.isArray(agents) ? agents : []
+  } catch {
+    return []
+  }
+})
+registerHandler('claude.getAccountInfo', async () => {
+  try {
+    const sdk = await loadAnthropicSdk()
+    if (!sdk || typeof sdk.query !== 'function') return null
+    const instance = sdk.query({ prompt: '', options: { cwd: '/' } })
+    const info = await instance.accountInfo()
+    return info ?? null
+  } catch {
+    return null
+  }
+})
 // Session state lookups read from the per-session map populated by
 // startSession + the various setters above. When no session exists for
 // the given id we return null to match Electron's behaviour.

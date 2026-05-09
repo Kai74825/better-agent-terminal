@@ -572,6 +572,140 @@ async function inProcess() {
     restoreSendEvent()
   }
 
+  // SDK-backed read APIs: getSupportedCommands / getSupportedAgents /
+  // getAccountInfo. Same dual-mode contract as getSupportedModels —
+  // returns SDK data when available, empty/null fallback when not. Lock
+  // both branches with override hooks so dev-machine SDK-presence
+  // doesn't mask a regression in the release fallback path.
+  __setSdkOverrideForTests({
+    query() {
+      return {
+        async supportedCommands() {
+          return [
+            { name: 'help', description: 'Show help', argumentHint: '' },
+            { name: 'clear', description: 'Clear context' },
+          ]
+        },
+        async supportedAgents() {
+          return [{ name: 'general-purpose', description: 'General agent' }]
+        },
+        async accountInfo() {
+          return { email: 'fake@example.com', subscriptionType: 'pro' }
+        },
+      }
+    },
+  })
+  try {
+    const cmdsReply = await dispatch({ jsonrpc: '2.0', id: 270, method: 'claude.getSupportedCommands' })
+    assert.equal(cmdsReply.result.length, 2)
+    assert.equal(cmdsReply.result[0].name, 'help')
+    const agentsReply = await dispatch({ jsonrpc: '2.0', id: 271, method: 'claude.getSupportedAgents' })
+    assert.equal(agentsReply.result.length, 1)
+    assert.equal(agentsReply.result[0].name, 'general-purpose')
+    const accountReply = await dispatch({ jsonrpc: '2.0', id: 272, method: 'claude.getAccountInfo' })
+    assert.equal(accountReply.result.email, 'fake@example.com')
+    assert.equal(accountReply.result.subscriptionType, 'pro')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+  }
+  // SDK-unavailable fallback contract: empty array / null shape so the
+  // renderer's pickers degrade gracefully instead of throwing.
+  __setSdkOverrideForTests(null)
+  try {
+    const cmdsFallback = await dispatch({ jsonrpc: '2.0', id: 273, method: 'claude.getSupportedCommands' })
+    assert.deepEqual(cmdsFallback.result, [])
+    const agentsFallback = await dispatch({ jsonrpc: '2.0', id: 274, method: 'claude.getSupportedAgents' })
+    assert.deepEqual(agentsFallback.result, [])
+    const accountFallback = await dispatch({ jsonrpc: '2.0', id: 275, method: 'claude.getAccountInfo' })
+    assert.equal(accountFallback.result, null)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+  }
+  // SDK throws → handler must catch + return fallback (don't crash the
+  // renderer panel). Verifies the catch arms.
+  __setSdkOverrideForTests({
+    query() {
+      return {
+        async supportedCommands() { throw new Error('boom') },
+        async supportedAgents() { throw new Error('boom') },
+        async accountInfo() { throw new Error('boom') },
+      }
+    },
+  })
+  try {
+    const r1 = await dispatch({ jsonrpc: '2.0', id: 276, method: 'claude.getSupportedCommands' })
+    assert.deepEqual(r1.result, [])
+    const r2 = await dispatch({ jsonrpc: '2.0', id: 277, method: 'claude.getSupportedAgents' })
+    assert.deepEqual(r2.result, [])
+    const r3 = await dispatch({ jsonrpc: '2.0', id: 278, method: 'claude.getAccountInfo' })
+    assert.equal(r3.result, null)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+  }
+
+  // Abort path: while a query is mid-stream (fake SDK yields slowly),
+  // claude.abortSession must propagate to the AbortController so the
+  // SDK's iterator terminates promptly. Verifies the renderer's stop
+  // button actually stops a running turn.
+  const abortCaptured = []
+  const restoreAbortEmit = mod.__setSendEventForTests((n, p) => abortCaptured.push({ name: n, payload: p }))
+  let signalSeenByFakeSdk = null
+  const slowFakeSdk = {
+    query({ options }) {
+      signalSeenByFakeSdk = options?.abortController?.signal ?? null
+      return (async function*() {
+        // Yield init synchronously so we know the loop entered.
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-abort', cwd: '/x' }
+        // Then "stream" forever, checking the abort signal each iteration.
+        // 50 iterations * 25ms = 1.25s ceiling without abort; abort
+        // should cut us off long before that.
+        for (let i = 0; i < 50; i++) {
+          if (signalSeenByFakeSdk?.aborted) {
+            // Mirror real SDK behaviour: throw AbortError when aborted.
+            throw new Error('aborted')
+          }
+          await new Promise(r => setTimeout(r, 25))
+          yield { type: 'assistant', session_id: 'sdk-abort', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: `chunk-${i}` }] } }
+        }
+        yield { type: 'result', subtype: 'success', session_id: 'sdk-abort', result: 'done', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
+      })()
+    },
+  }
+  __setSdkOverrideForTests(slowFakeSdk)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 260, method: 'claude.startSession',
+      params: { sessionId: 'abort-1', options: { cwd: '/x' } } })
+    // Kick off sendMessage but don't await yet — it'll block on the
+    // generator. abortSession needs to execute concurrently.
+    const sendPromise = dispatch({ jsonrpc: '2.0', id: 261, method: 'claude.sendMessage',
+      params: { sessionId: 'abort-1', prompt: 'tell me a long story' } })
+    // Wait long enough for a few chunks to stream so we KNOW the abort
+    // happens mid-flight (not before the loop even started).
+    await new Promise(r => setTimeout(r, 80))
+    const beforeAbort = abortCaptured.length
+    assert.ok(beforeAbort >= 2, `expected ≥2 events before abort, got ${beforeAbort}`)
+    const abortReply = await dispatch({ jsonrpc: '2.0', id: 262, method: 'claude.abortSession',
+      params: { sessionId: 'abort-1' } })
+    assert.equal(abortReply.result.ok, true)
+    // sendMessage must complete promptly after abort — use a 1s ceiling
+    // (much tighter than the 1.25s the fake SDK would otherwise run).
+    const settled = await Promise.race([
+      sendPromise,
+      new Promise(r => setTimeout(() => r({ timedOut: true }), 1000)),
+    ])
+    assert.ok(!settled.timedOut, 'sendMessage did not settle within 1s of abortSession')
+    // signal must have been propagated to the SDK so the fake iterator
+    // saw .aborted=true.
+    assert.ok(signalSeenByFakeSdk?.aborted, 'abort signal never reached the fake SDK iterator')
+    // turn-end with reason:'aborted' must be present.
+    const turnEnd = abortCaptured.find(e => e.name === 'claude:turn-end')
+    assert.ok(turnEnd, 'expected claude:turn-end after abort')
+    assert.equal(turnEnd.payload.payload.reason, 'aborted')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreAbortEmit()
+  }
+
   // Tool-use / tool-result event mapping. The SDK emits assistant
   // messages whose content arrays carry tool_use blocks, and follow-up
   // user messages whose content arrays carry tool_result blocks. We
