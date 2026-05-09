@@ -39,8 +39,14 @@ async function run(): Promise<void> {
     return
   }
 
-  const proc = spawn(exePath, [], { stdio: 'ignore', windowsHide: true })
+  // Capture stderr so we can sniff for Rust panics (`thread '...' panicked`)
+  // or sidecar-bridge bring-up failures. stdout stays piped so launching
+  // the WebView doesn't block on a full pipe.
+  const proc = spawn(exePath, [], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let exitedEarly: number | null = null
+  let stderr = ''
+  proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+  proc.stdout?.on('data', () => { /* drain */ })
   proc.on('exit', code => {
     if (exitedEarly === null) exitedEarly = code ?? -1
   })
@@ -51,7 +57,14 @@ async function run(): Promise<void> {
   await sleep(3000)
 
   if (exitedEarly !== null) {
-    throw new Error(`tauri-launch: exe exited early with code ${exitedEarly}`)
+    throw new Error(`tauri-launch: exe exited early with code ${exitedEarly}; stderr=${stderr}`)
+  }
+
+  // Sniff for Rust panics on stderr. WebView2 sometimes emits warnings on
+  // a fresh user data dir — those don't include "panicked" so we can
+  // afford a strict substring match.
+  if (/thread '[^']*' panicked/.test(stderr)) {
+    throw new Error(`tauri-launch: panic detected on stderr:\n${stderr}`)
   }
 
   // Tear down. We don't assert on the exit code after kill — Windows
@@ -60,7 +73,7 @@ async function run(): Promise<void> {
   // Give the OS a moment to reap the process so the test runner can exit.
   await sleep(500)
 
-  console.log('tauri-launch: passed (binary loaded, no early crash)')
+  console.log('tauri-launch: passed (binary loaded, no early crash, no panics)')
 }
 
 run().catch(err => {
