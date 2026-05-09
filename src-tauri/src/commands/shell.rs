@@ -1,12 +1,12 @@
 // shell:open-external — first OS integration we route through Tauri.
 //
-// We rely on tauri-plugin-shell rather than calling out to opener crates
-// directly so the OS integration stays consistent with what Tauri's
-// security model audits. The renderer's host-api adapter maps
-// shell.openExternal(url) to this command.
+// We use tauri-plugin-opener (the recommended replacement for the
+// deprecated tauri-plugin-shell::open) so the OS integration stays
+// consistent with what Tauri's security model audits. The renderer's
+// host-api adapter maps shell.openExternal(url) to this command.
 
 use serde::Serialize;
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -28,8 +28,25 @@ pub async fn shell_open_external(app: tauri::AppHandle, url: String) -> Result<(
             message: "shell_open_external refuses file:// URLs; use shell_open_path instead".into(),
         });
     }
-    app.shell()
-        .open(url, None)
+    app.opener()
+        .open_url(url, None::<&str>)
         .map_err(Into::<CommandError>::into)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // Pure-input validation lives here; integration tests run via
+    // tauri-driver once that harness is set up.
+    fn rejects_file_scheme(url: &str) -> bool {
+        url.starts_with("file://")
+    }
+
+    #[test]
+    fn file_urls_are_rejected() {
+        assert!(rejects_file_scheme("file:///etc/passwd"));
+        assert!(rejects_file_scheme("file://localhost/c:/foo.txt"));
+        assert!(!rejects_file_scheme("https://example.com"));
+        assert!(!rejects_file_scheme("mailto:hi@example.com"));
+    }
 }

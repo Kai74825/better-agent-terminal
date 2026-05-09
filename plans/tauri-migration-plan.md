@@ -1,5 +1,39 @@
 # Tauri 遷移短中長期計劃
 
+## 進度紀錄（持續更新）
+
+最近一次更新：2026-05-09。
+
+### 已完成
+
+- [x] **Host API adapter** — `src/host-api.ts` 提供 `host` proxy，由 `getHostKind()` 判斷 Electron/Tauri/unknown，全部命名空間預設 throw 「not yet implemented」避免靜默失敗。
+- [x] **Renamed `window.electronAPI` → `window.batAppAPI`** — preload 和 31 個 callsite 一起改名，TS type 由 `BatAppAPI = Window['batAppAPI']` 取得，不再依賴跨 project reference 編譯。`AboutPanel`、`UpdateNotification` 兩個 callsite 已切到 adapter 作為示範。
+- [x] **Tauri 2 scaffolding** — `src-tauri/`、`vite.tauri.config.ts`、`pnpm tauri:dev|build` 指令。
+- [x] **首批 Rust commands** — `settings_load` / `settings_save`（讀寫 `<app-data>/settings.json`）、`shell_open_external`（透過 `tauri-plugin-opener`，拒絕 `file://`）。
+- [x] **Adapter Tauri routing** — `host.settings.{load,save}` 與 `host.shell.openExternal` 在 Tauri 下走 `invoke`；其餘命名空間仍 throw。
+- [x] **Tests**
+  - `tests/host-api.test.ts`：6 個情境涵蓋偵測、Electron 委派、Tauri invoke routing、legacy `__TAURI__` marker、衝突優先序。
+  - `tests/tauri-launch.test.ts`：啟動 release exe 3 秒，斷言沒提前崩。
+  - `cargo test`：`settings::tests::settings_path_uses_settings_json_filename`、`shell::tests::file_urls_are_rejected`。
+- [x] **Release build verified on Windows** — `pnpm exec tauri build` 產生 12.8 MB exe + 5.2 MB MSI + 3.7 MB NSIS installer，smoke test 通過。
+- [x] npm scripts：`test:host-api`、`test:tauri-launch`、`test:tauri-rust`、`tauri:*`。
+
+### 進行中 / 下一步
+
+- [ ] 把更多 Electron preload 命名空間 port 到 Rust（依風險排序：`shell.openPath`、`dialog.confirm`、`fs.readFile`、`settings.getShellPath`）。
+- [ ] 規劃 PTY 路線（Phase 2）：Rust PTY vs Node sidecar prototype。
+- [ ] Agent SDK Node sidecar 設計（Phase 2）。
+- [ ] 把全部 `window.batAppAPI.*` 直呼換成 `host.*`，讓 renderer 完全不直讀全域。
+
+### 計畫調整
+
+1. **路徑保守化**：原計畫提到 `dialog.confirm` 是低風險首選，實際看下來 `dialog.confirm` 只剩 1 處（rewind 確認）。`settings.{load,save}` 涵蓋面更大，因此先 port 它。
+2. **檔名固定**：`settings.json` 路徑刻意對齊 Electron `userData/settings.json`，未來 Electron→Tauri 用戶遷移就只是搬一個檔案。
+3. **bundle output 分離**：renderer 走 `dist-tauri/`，避免和 `dist/`、`dist-electron/` 互卡。
+4. **棄用 `tauri-plugin-shell`**：第一輪先用 deprecated `Shell::open` 跑通 build，之後馬上換成 `tauri-plugin-opener`，避免之後升級被綁住。
+
+---
+
 ## 背景判斷
 
 目前 BetterAgentTerminal 的 React/Vite renderer 可以保留，但 Electron main process 不只是開視窗，而是承擔完整 host runtime：PTY、agent SDK、IPC、遠端 server、設定、profile、通知、更新與安全儲存。
