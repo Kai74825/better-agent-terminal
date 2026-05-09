@@ -2564,6 +2564,89 @@ async function inProcess() {
     assert.equal(hasRemoteHandler('test:foo'), false)
   }
 
+  // remote-secrets — port of electron/remote/secrets.ts. The sidecar
+  // version always writes `{enc:false, data:<JSON>}` (no safeStorage in
+  // pure-Node) but must (a) round-trip JSON / string, (b) read legacy
+  // plaintext objects, (c) refuse `enc:true` blobs left by an Electron
+  // build with a clear null result, (d) handle missing/corrupt files,
+  // (e) write with mode 0600 on POSIX.
+  {
+    const secrets = await import('../src/lib/remote-secrets.mjs')
+    const { readFileSync, writeFileSync, statSync, mkdtempSync, rmSync } = await import('node:fs')
+    const { join, sep } = await import('node:path')
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'bat-remote-secrets-'))
+    try {
+      // (a) JSON round-trip.
+      const jsonPath = join(tmpRoot, 'a.json')
+      secrets.writeEncryptedJson(jsonPath, { token: 't', port: 9876, list: [1, 2, 3] })
+      const back = secrets.readEncryptedJson(jsonPath)
+      assert.deepEqual(back, { token: 't', port: 9876, list: [1, 2, 3] })
+
+      // Envelope shape on disk: {enc:false, data:'<json string>'}.
+      const onDisk = JSON.parse(readFileSync(jsonPath, 'utf-8'))
+      assert.equal(onDisk.enc, false)
+      assert.equal(typeof onDisk.data, 'string')
+      assert.deepEqual(JSON.parse(onDisk.data), { token: 't', port: 9876, list: [1, 2, 3] })
+
+      // (b) Legacy plaintext (envelope-less object).
+      const legacyPath = join(tmpRoot, 'legacy.json')
+      writeFileSync(legacyPath, JSON.stringify({ token: 'old', plain: true }), 'utf-8')
+      const legacyRead = secrets.readEncryptedJson(legacyPath)
+      assert.deepEqual(legacyRead, { token: 'old', plain: true })
+
+      // (c) enc:true blob from an Electron build — refuse with null,
+      // never throw. Caller regenerates.
+      const encryptedPath = join(tmpRoot, 'enc.json')
+      writeFileSync(encryptedPath, JSON.stringify({ enc: true, data: 'AAAA' }), 'utf-8')
+      assert.equal(secrets.readEncryptedJson(encryptedPath), null)
+
+      // (d) Missing file → null, no throw.
+      assert.equal(secrets.readEncryptedJson(join(tmpRoot, 'missing.json')), null)
+
+      // Corrupt JSON → null + warn (warn captured below to avoid noise).
+      const corruptPath = join(tmpRoot, 'corrupt.json')
+      writeFileSync(corruptPath, '{ not: json', 'utf-8')
+      const origWarn = console.warn
+      console.warn = () => {}
+      try {
+        assert.equal(secrets.readEncryptedJson(corruptPath), null)
+
+        // Inner-JSON corrupt envelope → null.
+        const innerBad = join(tmpRoot, 'inner-bad.json')
+        writeFileSync(innerBad, JSON.stringify({ enc: false, data: '{ not json' }), 'utf-8')
+        assert.equal(secrets.readEncryptedJson(innerBad), null)
+      } finally {
+        console.warn = origWarn
+      }
+
+      // (e) Mode 0600 on POSIX. Windows reports 0666 here so we skip.
+      if (process.platform !== 'win32') {
+        const stat = statSync(jsonPath)
+        const mode = stat.mode & 0o777
+        assert.equal(mode, 0o600, `expected 0600, got ${mode.toString(8)}`)
+      }
+
+      // String wrappers.
+      const strPath = join(tmpRoot, 's.json')
+      secrets.writeEncryptedString(strPath, 'super-secret-token')
+      assert.equal(secrets.readEncryptedString(strPath), 'super-secret-token')
+
+      // Round-trip: writing a bare string via writeEncryptedJson and
+      // reading via readEncryptedString returns the string (handles the
+      // `typeof obj === 'string'` branch in the wrapper).
+      const bareStrPath = join(tmpRoot, 'bare.json')
+      secrets.writeEncryptedJson(bareStrPath, 'just-a-string')
+      assert.equal(secrets.readEncryptedString(bareStrPath), 'just-a-string')
+
+      // readEncryptedString of a JSON object without `value` field → null.
+      const objPath = join(tmpRoot, 'obj.json')
+      secrets.writeEncryptedJson(objPath, { other: 'field' })
+      assert.equal(secrets.readEncryptedString(objPath), null)
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  }
+
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
   const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod
