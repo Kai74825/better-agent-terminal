@@ -364,6 +364,24 @@ pub fn claude_reset_session(
 }
 
 #[tauri::command]
+pub fn claude_fork_session(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    session_id: String,
+) -> Result<Value, BridgeError> {
+    // Fork can take up to 60s in pathological cases (the SDK has to run a
+    // full one-turn query to persist the new transcript). Use a generous
+    // timeout to match the sidecar's internal limit + slack.
+    call_with_timeout(
+        &app,
+        &state,
+        "claude.forkSession",
+        json!({ "sessionId": session_id }),
+        Duration::from_secs(90),
+    )
+}
+
+#[tauri::command]
 pub fn claude_rewind_to_prompt(
     app: AppHandle,
     state: State<'_, SidecarState>,

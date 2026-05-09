@@ -284,6 +284,73 @@ registerHandler('claude.rewindToPrompt', async (params) => {
   return { newSdkSessionId, removedPromptCount }
 })
 
+// claude.forkSession: ask the SDK to fork the current SDK session id —
+// produces a new sdkSessionId whose transcript starts identical to the
+// original at the time of the fork. Mirror of
+// electron/claude-agent-manager.ts:2733. Underlying contract is the
+// SDK's `forkSession: true` query option: spawn a one-turn query with
+// `resume: currentSdkId, forkSession: true, maxTurns: 1, prompt: ' '`,
+// capture the new session_id off `system:init`, but **wait until the
+// result message** before bailing — the CLI only persists the forked
+// transcript file (`<newId>.jsonl`) after at least one turn completes.
+// Aborting on init leaves an unresumable id.
+//
+// 60s safety timeout aborts a runaway fork so we don't hang the
+// session forever.
+const FORK_TIMEOUT_MS = 60_000
+registerHandler('claude.forkSession', async (params) => {
+  const sessionId = params?.sessionId
+  if (typeof sessionId !== 'string' || !sessionId) return null
+  const session = sessions.get(sessionId)
+  const currentSdkId = session?.sdkSessionId
+  if (!currentSdkId) return null
+  const sdk = await loadAnthropicSdk()
+  if (!sdk || typeof sdk.query !== 'function') return null
+  const cwd = (session?.options && typeof session.options === 'object' && typeof session.options.cwd === 'string')
+    ? session.options.cwd
+    : process.cwd()
+  const claudeCodePath = resolveClaudeCliBinary()
+  const abortController = new AbortController()
+  const timeoutHandle = setTimeout(() => {
+    if (!abortController.signal.aborted) {
+      try { abortController.abort() } catch { /* already aborted */ }
+    }
+  }, FORK_TIMEOUT_MS)
+  let newSdkSessionId = null
+  try {
+    const generator = sdk.query({
+      prompt: ' ',
+      options: {
+        abortController,
+        cwd,
+        resume: currentSdkId,
+        forkSession: true,
+        maxTurns: 1,
+        ...(claudeCodePath ? { pathToClaudeCodeExecutable: claudeCodePath } : {}),
+      },
+    })
+    for await (const msg of generator) {
+      if (msg?.type === 'system' && msg.subtype === 'init' && typeof msg.session_id === 'string') {
+        newSdkSessionId = msg.session_id
+      } else if (msg?.type === 'result') {
+        // Wait for result before breaking — that's the signal the CLI
+        // has finished writing the new transcript file.
+        break
+      }
+    }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err)
+    const isAbort = abortController.signal.aborted || /aborted/i.test(errMsg)
+    if (!isAbort) {
+      process.stderr.write(`[sidecar] claude.forkSession: ${errMsg}\n`)
+    }
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
+  if (!newSdkSessionId) return null
+  return { newSdkSessionId }
+})
+
 // Real SDK-driven sendMessage. Each call kicks off a fresh single-shot
 // query() with `resume: <previousSdkSessionId>` so the SDK preserves
 // context across turns. Streaming-input mode + control methods

@@ -722,6 +722,100 @@ async function inProcess() {
     rmSync(projTmp, { recursive: true, force: true })
   }
 
+  // claude.forkSession: copy the current SDK transcript into a new SDK
+  // session id by running a one-turn `forkSession: true` query. Drive the
+  // SDK with a fake that yields a `system:init` carrying a new session_id,
+  // then a `result` (the handler must wait for result before returning so
+  // the CLI has time to persist the forked transcript). Assert the
+  // captured queryOptions include forkSession + resume + maxTurns + cwd
+  // + abortController, and that the handler returns { newSdkSessionId }.
+  const forkCaptured = []
+  const restoreForkSend = mod.__setSendEventForTests(() => {})
+  const fakeSdkFork = {
+    query({ prompt, options }) {
+      forkCaptured.push({ prompt, options })
+      const messages = [
+        { type: 'system', subtype: 'init', session_id: 'forked-sdk-id', cwd: options.cwd, model: 'claude-opus-4-7', permissionMode: 'default' },
+        { type: 'result', subtype: 'success', session_id: 'forked-sdk-id', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 },
+      ]
+      return (async function*() { for (const m of messages) yield m })()
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkFork)
+  try {
+    // Bring up a session with a current sdkSessionId via resumeSession so
+    // the fork has something to copy from.
+    await dispatch({ jsonrpc: '2.0', id: 400, method: 'claude.resumeSession',
+      params: { sessionId: 'fork-1', sdkSessionId: 'sdk-original-abc',
+        options: { cwd: '/fork-cwd' } } })
+
+    const reply = await dispatch({ jsonrpc: '2.0', id: 401, method: 'claude.forkSession',
+      params: { sessionId: 'fork-1' } })
+    assert.ok(reply.result, `expected result, got ${JSON.stringify(reply)}`)
+    assert.equal(reply.result.newSdkSessionId, 'forked-sdk-id')
+    // Original session record is unchanged — fork doesn't mutate the
+    // current session's sdkSessionId. The renderer creates a separate
+    // session record for the fork.
+    assert.equal(mod.sessions.get('fork-1').sdkSessionId, 'sdk-original-abc')
+
+    // Captured query() must carry the SDK fork contract.
+    assert.equal(forkCaptured.length, 1)
+    const opts = forkCaptured[0].options
+    assert.equal(opts.forkSession, true, 'forkSession flag must be set')
+    assert.equal(opts.resume, 'sdk-original-abc', 'resume must point at the current sdk id')
+    assert.equal(opts.maxTurns, 1, 'maxTurns:1 keeps the fork query short')
+    assert.equal(opts.cwd, '/fork-cwd')
+    assert.ok(opts.abortController, 'abortController must be supplied for timeout')
+    assert.equal(forkCaptured[0].prompt, ' ', 'prompt must be a single space')
+
+    // Missing sessionId → null (no-op).
+    const noSidReply = await dispatch({ jsonrpc: '2.0', id: 402, method: 'claude.forkSession',
+      params: {} })
+    assert.equal(noSidReply.result, null)
+
+    // Unknown session → null.
+    const unknownReply = await dispatch({ jsonrpc: '2.0', id: 403, method: 'claude.forkSession',
+      params: { sessionId: 'never-started' } })
+    assert.equal(unknownReply.result, null)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreForkSend()
+  }
+
+  // Session without sdkSessionId yet → null (nothing to fork from).
+  await dispatch({ jsonrpc: '2.0', id: 404, method: 'claude.startSession',
+    params: { sessionId: 'fork-empty', options: { cwd: '/x' } } })
+  // Note: startSession creates session record but sdkSessionId is empty
+  // until a query has run. The fake SDK isn't installed here, so even if
+  // we did have an id, the SDK loader returns null in test env.
+  const noIdReply = await dispatch({ jsonrpc: '2.0', id: 405, method: 'claude.forkSession',
+    params: { sessionId: 'fork-empty' } })
+  assert.equal(noIdReply.result, null)
+
+  // Fork that never yields a session_id → null. Drive a fake SDK whose
+  // generator yields only a `result` with no preceding `system:init`.
+  const restoreForkSend2 = mod.__setSendEventForTests(() => {})
+  const fakeSdkForkNoInit = {
+    query() {
+      return (async function*() {
+        yield { type: 'result', subtype: 'success', session_id: 'whatever', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
+      })()
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkForkNoInit)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 406, method: 'claude.resumeSession',
+      params: { sessionId: 'fork-no-init', sdkSessionId: 'sdk-no-init',
+        options: { cwd: '/x' } } })
+    const noInitReply = await dispatch({ jsonrpc: '2.0', id: 407, method: 'claude.forkSession',
+      params: { sessionId: 'fork-no-init' } })
+    assert.equal(noInitReply.result, null,
+      'no system:init means no new session_id captured → null')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreForkSend2()
+  }
+
   // Parity test: queryOptions must include the same keys Electron sets.
   // Without these, the sidecar session loses the claude_code system
   // prompt + tool preset → no Bash/Read/Edit etc. Capture the raw

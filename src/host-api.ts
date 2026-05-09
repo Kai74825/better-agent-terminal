@@ -425,6 +425,15 @@ function createTauriHost(): BatAppAPI {
           return (sessionId: string, promptIndex: number) =>
             getInvoke()<unknown>('claude_rewind_to_prompt', { sessionId, promptIndex })
         }
+        // forkSession: ask the SDK to copy the current SDK transcript into a
+        // new SDK session id so the renderer can branch the conversation
+        // without losing the original. Returns { newSdkSessionId } on
+        // success, or null when the fork couldn't run (no current id, SDK
+        // missing, abort).
+        if (key === 'forkSession') {
+          return (sessionId: string) =>
+            getInvoke()<unknown>('claude_fork_session', { sessionId })
+        }
         // resumeSession: rehydrate an existing SDK session id so the next
         // sendMessage continues that conversation instead of starting
         // fresh. Renderer panels call this on remount when they have a
