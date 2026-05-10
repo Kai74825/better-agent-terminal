@@ -114,7 +114,7 @@ export async function listOpenAISessions() {
     }
   }
   results.sort((a, b) => b.timestamp - a.timestamp)
-  return results
+  return results.slice(0, 50)
 }
 
 // --- handlers --------------------------------------------------------------

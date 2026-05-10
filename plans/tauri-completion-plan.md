@@ -48,6 +48,7 @@
 - 2026-05-10：開始 M3 OpenAI parity。`openai.getApiKeyStatus/setApiKey/clearApiKey` sidecar handler 不再是 stub，會在 Tauri data dir 寫入/清除 `openai-api-key.bin`，並保留 `OPENAI_API_KEY` 與 Codex OAuth token fallback；Settings 的 OpenAI key 設定在 Tauri 下開始有實際持久化效果。
 - 2026-05-10：Account management stub reduction。`claude.accountMarkWarningShown` sidecar handler 會持久化 `claude-accounts.json` 的 `switchWarningShown=true`，不再只是回傳成功；Tauri Settings 的帳號切換一次性警告不會因重開 app 重複出現。完整 account import/switch/remove 仍待安全憑證儲存方案。
 - 2026-05-10：補 M0 regression guard。`tests/host-api.test.ts` 加入 critical Tauri command canary，明確要求 fs watch/resolve、Claude stopTask、Codex sandbox/approval、settings/image/clipboard/pty、OpenAI key 與 worktree create/rehydrate 等已 port 路徑必須走 Tauri invoke，避免未來退回 permissive no-op。
+- 2026-05-10：補 OpenAI session list Electron parity。Tauri sidecar `openai.listSessions` 現在與 Electron `listAllSessions()` 一樣依 mtime 排序後最多回 50 筆，避免長期使用者歷史資料過多時讓 Settings/Agent session picker 一次載入過量項目；sidecar 測試已覆蓋排序與 50 筆上限。
 
 ## 目前判斷
 

@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
@@ -392,6 +392,17 @@ async function inProcess() {
     // as message lines (matches Electron's behaviour) — assert >= 3.
     assert.ok(ours.messageCount >= 3, `unexpected count: ${ours.messageCount}`)
     assert.equal(typeof ours.timestamp, 'number')
+
+    for (let i = 0; i < 55; i += 1) {
+      const bulkFile = join(fakeDayDir, `bulk-${String(i).padStart(2, '0')}.jsonl`)
+      writeFileSync(bulkFile, JSON.stringify({ type: 'user', payload: { content: `bulk ${i}` } }) + '\n')
+      const ts = new Date(Date.UTC(9999, 0, 1, 0, i, 0))
+      utimesSync(bulkFile, ts, ts)
+    }
+    const capped = await listOpenAISessions()
+    assert.equal(capped.length, 50, 'OpenAI session list should match Electron 50-session cap')
+    assert.equal(capped[0].sdkSessionId, 'bulk-54')
+    assert.equal(capped.at(-1)?.sdkSessionId, 'bulk-05')
   } finally {
     rmSync(join(OPENAI_SESSIONS_ROOT, fakeYear), { recursive: true, force: true })
   }
