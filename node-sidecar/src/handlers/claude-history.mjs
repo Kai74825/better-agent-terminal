@@ -12,6 +12,147 @@ import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { warn as logWarn } from '../lib/logger.mjs'
 import { resolveClaudeCliBinary } from './claude-auth.mjs'
 
+function historyProjectDirCandidates(cwd) {
+  const encoded = String(cwd || process.cwd()).replace(/[^a-zA-Z0-9]/g, '-')
+  const dirs = [join(__resolveProjectsDir(), encoded)]
+  if (process.platform === 'win32' && encoded.length > 0) {
+    const lower = encoded[0].toLowerCase() + encoded.slice(1)
+    const upper = encoded[0].toUpperCase() + encoded.slice(1)
+    if (lower !== encoded) dirs.push(join(__resolveProjectsDir(), lower))
+    if (upper !== encoded) dirs.push(join(__resolveProjectsDir(), upper))
+  }
+  return dirs
+}
+
+async function readHistoryFile(sdkSessionId, cwd) {
+  for (const dir of historyProjectDirCandidates(cwd)) {
+    try {
+      return await readFile(join(dir, `${sdkSessionId}.jsonl`), 'utf-8')
+    } catch {
+      // Try the next project-dir casing candidate.
+    }
+  }
+  return null
+}
+
+function textFromContent(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text)
+    .join('\n')
+    .trim()
+}
+
+function historyItemsFromJsonl(raw, sessionId) {
+  const items = []
+  const toolIndexMap = new Map()
+  for (const line of String(raw || '').split('\n')) {
+    if (!line.trim()) continue
+    let obj
+    try { obj = JSON.parse(line) } catch { continue }
+    const ts = obj.timestamp ? new Date(obj.timestamp).getTime() : Date.now()
+    if (obj.type === 'user' && obj.message?.role === 'user') {
+      const content = obj.message.content
+      const text = textFromContent(content)
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+            const idx = toolIndexMap.get(block.tool_use_id)
+            if (idx !== undefined) {
+              const tool = items[idx]
+              tool.status = block.is_error ? 'error' : 'completed'
+              const resultText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+              tool.result = (resultText || '').slice(0, 2000)
+            }
+          }
+        }
+      }
+      const isNoise = !text
+        || text === '[Request interrupted by user for tool use]'
+        || text.startsWith('<local-command-caveat>')
+      if (!isNoise) {
+        items.push({
+          id: obj.uuid || `hist-user-${items.length}`,
+          sessionId,
+          role: 'user',
+          content: text,
+          timestamp: ts,
+        })
+      }
+      continue
+    }
+    if (obj.type === 'assistant' && obj.message?.role === 'assistant') {
+      const content = obj.message.content
+      if (!Array.isArray(content)) continue
+      const thinking = content
+        .filter(b => b && b.type === 'thinking')
+        .map(b => (typeof b.thinking === 'string' ? b.thinking : ''))
+        .join('\n')
+        .trim()
+      const text = textFromContent(content)
+        .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
+        .replace(/Full transcript available at:.*$/gm, '')
+        .trim()
+      if ((text || thinking) && text !== 'No response requested.') {
+        items.push({
+          id: `${obj.uuid || 'hist'}-text-${items.length}`,
+          sessionId,
+          role: 'assistant',
+          content: text || '',
+          ...(thinking ? { thinking } : {}),
+          ...(obj.parent_tool_use_id ? { parentToolUseId: obj.parent_tool_use_id } : {}),
+          timestamp: ts,
+        })
+      }
+      for (const block of content) {
+        if (block && block.type === 'tool_use' && typeof block.id === 'string') {
+          const toolItem = {
+            id: block.id,
+            sessionId,
+            toolName: block.name,
+            input: block.input || {},
+            status: 'completed',
+            ...(obj.parent_tool_use_id ? { parentToolUseId: obj.parent_tool_use_id } : {}),
+            timestamp: ts,
+          }
+          toolIndexMap.set(block.id, items.length)
+          items.push(toolItem)
+        }
+      }
+      continue
+    }
+    if (obj.type === 'system') {
+      const text = textFromContent(obj.message?.content)
+      if (text && !text.startsWith('{') && text.length > 5) {
+        items.push({
+          id: obj.uuid || `hist-sys-${items.length}`,
+          sessionId,
+          role: 'system',
+          content: text,
+          timestamp: ts,
+        })
+      }
+    }
+  }
+  return items
+}
+
+export async function loadSessionHistory(sessionId, sdkSessionId, cwd) {
+  sendEvent('claude:resume-loading', { sessionId, loading: true })
+  try {
+    const raw = await readHistoryFile(sdkSessionId, cwd)
+    const items = raw ? historyItemsFromJsonl(raw, sessionId) : []
+    sendEvent('claude:history', { sessionId, items })
+  } catch (err) {
+    logWarn(`claude.loadSessionHistory: ${err instanceof Error ? err.message : String(err)}`)
+    sendEvent('claude:history', { sessionId, items: [] })
+  } finally {
+    sendEvent('claude:resume-loading', { sessionId, loading: false })
+  }
+}
+
 // claude.rewindToPrompt: cut the SDK session's JSONL transcript at a
 // given user-prompt index, write a fresh transcript under a new
 // SDK session id, and rewire the in-memory session to the new id so

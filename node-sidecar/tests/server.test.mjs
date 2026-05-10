@@ -1179,11 +1179,10 @@ async function inProcess() {
     restoreSendEvent()
   }
 
-  // Streaming-input mode: a single sdk.query() persists across multiple
-  // sendMessage calls. The SDK CLI subprocess stays alive — second/third
-  // turns pay only the API roundtrip cost, not the 3-4s cold-start. Fake
-  // SDK drains the prompt iterable so each push delivers a user message
-  // through the same generator.
+  // Consecutive sends rebuild the SDK query with resume=<sdkSessionId>.
+  // Some real Claude CLI/SDK builds close the async generator after a
+  // result frame; rebuilding between turns avoids leaving a second prompt
+  // queued with no consumer.
   const persistentCaptured = []
   const restorePersistentSend = mod.__setSendEventForTests((name, payload) => persistentCaptured.push({ name, payload }))
   const fakeSdkStreaming = {
@@ -1213,25 +1212,27 @@ async function inProcess() {
   try {
     await dispatch({ jsonrpc: '2.0', id: 224, method: 'claude.startSession',
       params: { sessionId: 'stream-1', options: { cwd: '/s' } } })
-    // Two consecutive sends — must reuse the same query() invocation.
+    // Two consecutive sends — the second must rebuild with resume.
     const r1 = await dispatch({ jsonrpc: '2.0', id: 225, method: 'claude.sendMessage',
       params: { sessionId: 'stream-1', prompt: 'first' } })
     assert.equal(r1.result.ok, true)
     const r2 = await dispatch({ jsonrpc: '2.0', id: 226, method: 'claude.sendMessage',
       params: { sessionId: 'stream-1', prompt: 'second' } })
     assert.equal(r2.result.ok, true)
-    assert.equal(fakeSdkStreaming.queryCalls, 1, 'streaming-input mode must NOT spawn a second sdk.query')
-    // Both turns produced result events from the same generator.
+    assert.equal(fakeSdkStreaming.queryCalls, 2, 'second turn should rebuild sdk.query')
+    const queryArgs = persistentCaptured.filter(c => c.name === '__queryArgs')
+    assert.equal(queryArgs[0].payload.resume, null)
+    assert.equal(queryArgs[1].payload.resume, 'sdk-stream-1')
+    // Both turns still produced result events.
     const results = persistentCaptured.filter(c => c.name === 'claude:result')
-    assert.equal(results.length, 2, 'expected 2 result events across persistent query')
+    assert.equal(results.length, 2, 'expected 2 result events across rebuilt queries')
     assert.equal(results[0].payload.result.result, 'reply-1-1')
-    assert.equal(results[1].payload.result.result, 'reply-1-2')
-    // Session has live query attached + currentQuery exposed for the
-    // claude-readonly handlers (supportedCommands / accountInfo).
+    assert.equal(results[1].payload.result.result, 'reply-2-1')
+    // Completed turns close the live query. A running turn still exposes
+    // currentQuery for readonly/control handlers until the result arrives.
     const ss = mod.sessions.get('stream-1')
-    assert.ok(ss.liveQuery, 'expected live query on session after sendMessage')
-    assert.equal(ss.liveQuery.isClosed, false)
-    assert.ok(ss.currentQuery, 'currentQuery must mirror liveQuery.generator for readonly handlers')
+    assert.equal(ss.liveQuery, null)
+    assert.equal(ss.currentQuery, null)
   } finally {
     __setSdkOverrideForTests(undefined)
     restorePersistentSend()
@@ -1286,7 +1287,7 @@ async function inProcess() {
     const [q1, q2] = await Promise.all([p1, p2])
     assert.equal(q1.result.ok, true)
     assert.equal(q2.result.ok, true)
-    assert.equal(fakeSdkQueued.queryCalls, 1, 'queued sends should reuse the persistent query')
+    assert.equal(fakeSdkQueued.queryCalls, 2, 'queued sends should rebuild safely after each completed turn')
     assert.deepEqual(queuedCaptured, ['first', 'second'])
   } finally {
     __setSdkOverrideForTests(undefined)
@@ -1699,10 +1700,21 @@ async function inProcess() {
   // first; defaults permissionMode to bypassPermissions; respects
   // overrides supplied via options.
   const resumeCaptured = []
-  const restoreResumeSend = mod.__setSendEventForTests(() => {})
+  const resumeQueryCaptured = []
+  const resumeProjectsDir = mkdtempSync(join(tmpdir(), 'sidecar-resume-history-'))
+  const setProjectsDirForResume = mod.__setProjectsDirOverrideForTests
+  setProjectsDirForResume(resumeProjectsDir)
+  const resumeCwd = '/r'
+  const resumeProjectDir = join(resumeProjectsDir, resumeCwd.replace(/[^a-zA-Z0-9]/g, '-'))
+  mkdirSync(resumeProjectDir, { recursive: true })
+  writeFileSync(join(resumeProjectDir, 'sdk-historic-xyz.jsonl'), [
+    JSON.stringify({ type: 'user', uuid: 'hist-u-1', timestamp: '2026-05-10T00:00:00.000Z', message: { role: 'user', content: 'ping' } }),
+    JSON.stringify({ type: 'assistant', uuid: 'hist-a-1', timestamp: '2026-05-10T00:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'pong' }] } }),
+  ].join('\n') + '\n')
+  const restoreResumeSend = mod.__setSendEventForTests((name, payload) => resumeCaptured.push({ name, payload }))
   const fakeSdkResume = {
     query({ options }) {
-      resumeCaptured.push({ options })
+      resumeQueryCaptured.push({ options })
       const messages = [
         { type: 'system', subtype: 'init', session_id: options.resume || 'fresh-sdk' },
         { type: 'result', subtype: 'success', session_id: options.resume || 'fresh-sdk', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 },
@@ -1715,9 +1727,14 @@ async function inProcess() {
     // Resume a session that the renderer just restored from history.
     const resumeReply = await dispatch({ jsonrpc: '2.0', id: 295, method: 'claude.resumeSession',
       params: { sessionId: 'resume-1', sdkSessionId: 'sdk-historic-xyz',
-        options: { cwd: '/r', model: 'claude-sonnet-4-6' } } })
+        options: { cwd: resumeCwd, model: 'claude-sonnet-4-6' } } })
     assert.equal(resumeReply.result.ok, true)
     assert.equal(resumeReply.result.sdkSessionId, 'sdk-historic-xyz')
+    const resumeLoadingEvents = resumeCaptured.filter(e => e.name === 'claude:resume-loading')
+    assert.deepEqual(resumeLoadingEvents.map(e => e.payload.loading), [true, false])
+    const historyEvent = resumeCaptured.find(e => e.name === 'claude:history')
+    assert.ok(historyEvent, 'resumeSession must emit claude:history')
+    assert.deepEqual(historyEvent.payload.items.map(i => `${i.role}:${i.content}`), ['user:ping', 'assistant:pong'])
     // Default permissionMode must be bypassPermissions for resumed sessions.
     const resumed = mod.sessions.get('resume-1')
     assert.equal(resumed.permissionMode, 'bypassPermissions')
@@ -1728,8 +1745,8 @@ async function inProcess() {
     // historical conversation context.
     await dispatch({ jsonrpc: '2.0', id: 296, method: 'claude.sendMessage',
       params: { sessionId: 'resume-1', prompt: 'continue' } })
-    assert.equal(resumeCaptured.length, 1)
-    assert.equal(resumeCaptured[0].options.resume, 'sdk-historic-xyz')
+    assert.equal(resumeQueryCaptured.length, 1)
+    assert.equal(resumeQueryCaptured[0].options.resume, 'sdk-historic-xyz')
 
     // Resume must reject missing sdkSessionId or sessionId.
     const noSdkReply = await dispatch({ jsonrpc: '2.0', id: 297, method: 'claude.resumeSession',
@@ -1746,6 +1763,8 @@ async function inProcess() {
     assert.equal(mod.sessions.get('resume-2').permissionMode, 'plan')
   } finally {
     __setSdkOverrideForTests(undefined)
+    setProjectsDirForResume(null)
+    rmSync(resumeProjectsDir, { recursive: true, force: true })
     restoreResumeSend()
   }
 

@@ -63,6 +63,7 @@
 - 2026-05-10：降低 Tauri update check UI 阻塞風險。`update.check` 會透過 sidecar 打 GitHub Releases API，已改成 async command + `spawn_blocking`，UpdateNotification 查詢不再佔住 Tauri command handler。
 - 2026-05-10：降低 Tauri `settings.detectCx` UI 阻塞風險。`detectCx` 會讀 settings、查 PATH 並執行 `cx --version`，已改成 async command + `spawn_blocking`；設定頁偵測 semantic-navigation binary 不再佔住 Tauri command handler。
 - 2026-05-10：降低 Tauri settings 檔案 I/O 阻塞風險。`settings.load/save/clearTerminalHistory` 已改成 async command + `spawn_blocking`；啟動讀設定、設定儲存與清 terminal history 不再佔住 Tauri command handler。
+- 2026-05-10：修正 Tauri Claude 第二輪送訊息與 resume 歷史缺口。sidecar 在每個 Claude turn 完成後會關閉 LiveQuery，下一輪用已捕捉的 `sdkSessionId` 重建 `resume` query，避免第二次 prompt 卡在沒有 consumer 的 persistent stream；`claude.resumeSession/startSession` 也會載入 `.claude/projects/*.jsonl` 並 emit `claude:resume-loading` / `claude:history`，讓歷史討論回到 UI。
 
 ## 目前判斷
 

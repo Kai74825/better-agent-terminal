@@ -10,6 +10,7 @@ import { registerHandler, sendEvent } from '../lib/protocol.mjs'
 import { sessions, ensureSession, buildSessionMeta } from '../lib/state.mjs'
 import { expectedContextWindowForModel } from '../lib/models.mjs'
 import { closeLiveQuery } from './claude-send.mjs'
+import { loadSessionHistory } from './claude-history.mjs'
 import { warn as logWarn } from '../lib/logger.mjs'
 import { worktreeRehydrate } from './worktree.mjs'
 
@@ -66,6 +67,12 @@ registerHandler('claude.startSession', async (params) => {
     if (typeof s.options.sdkSessionId === 'string') s.sdkSessionId = s.options.sdkSessionId
     applyWorktreeOptions(sessionId, s)
   }
+  if (s.sdkSessionId) {
+    const historyCwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string')
+      ? s.options.cwd
+      : process.cwd()
+    await loadSessionHistory(sessionId, s.sdkSessionId, historyCwd)
+  }
   return { ok: true, sessionId }
 })
 
@@ -112,6 +119,10 @@ registerHandler('claude.resumeSession', async (params) => {
     if (typeof s.options.codexApprovalPolicy === 'string') s.codexApprovalPolicy = s.options.codexApprovalPolicy
     applyWorktreeOptions(sessionId, s)
   }
+  const historyCwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string')
+    ? s.options.cwd
+    : process.cwd()
+  await loadSessionHistory(sessionId, sdkSessionIdToResume, historyCwd)
   return { ok: true, sessionId, sdkSessionId: sdkSessionIdToResume }
 })
 

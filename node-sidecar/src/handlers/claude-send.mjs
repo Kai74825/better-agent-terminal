@@ -325,6 +325,13 @@ async function performSendMessage(params) {
   try {
     const result = await live.push(userMessage)
     const elapsedMs = Date.now() - startedAt
+    // Some real Claude CLI/SDK builds finish the async generator after a
+    // result frame even when streaming input was requested. Reusing that
+    // just-finished LiveQuery can leave the next user prompt queued with no
+    // consumer. Close after each completed turn and let the next send
+    // rebuild with resume=<sdkSessionId>; stopTask/control methods remain
+    // available while the turn is actually running.
+    closeLiveQuery(s)
     if (result?.subtype === 'success') {
       logInfo(`claude.sendMessage(${sid}): completed ok elapsedMs=${elapsedMs}`)
       return { ok: true }
