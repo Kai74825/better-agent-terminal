@@ -243,6 +243,14 @@ async function run() {
     await mod.host.settings.save('{"theme":"dark"}')
     await mod.host.shell.openExternal('https://example.com')
     await mod.host.shell.openPath('C:/Users/me/project')
+    assert.equal(
+      mod.host.shell.getPathForFile({ path: 'C:\\Users\\me\\drop' } as unknown as File),
+      'C:\\Users\\me\\drop',
+    )
+    assert.equal(
+      mod.host.shell.getPathForFile({ webkitRelativePath: 'drop/file.txt' } as unknown as File),
+      null,
+    )
     const ok = await mod.host.dialog.confirm('Proceed?', 'Heads up')
     assert.equal(ok, true)
     // title is optional — the adapter passes undefined through.

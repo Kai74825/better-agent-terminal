@@ -74,6 +74,26 @@ function notImplemented(name: string): never {
   throw new Error(`host-api: ${name} is not yet implemented under Tauri`)
 }
 
+function isAbsoluteLocalPath(value: string): boolean {
+  return /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/.test(value)
+}
+
+function getPathFromDroppedFile(file: File): string | null {
+  const candidate = file as File & {
+    path?: unknown
+    mozFullPath?: unknown
+    webkitRelativePath?: unknown
+  }
+  for (const value of [candidate.path, candidate.mozFullPath]) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (trimmed && isAbsoluteLocalPath(trimmed)) return trimmed
+    }
+  }
+  // webkitRelativePath is relative to the dropped folder, not a host path.
+  return null
+}
+
 // We import @tauri-apps/api lazily so nothing in this module pulls Tauri's
 // runtime when we're under Electron — the tree-shaker can keep it out of the
 // renderer bundle entirely if isTauri() is never true at build time.
@@ -176,10 +196,11 @@ function createTauriHost(): BatAppAPI {
     shell: {
       openExternal: (url: string) => getInvoke()<void>('shell_open_external', { url }),
       openPath: (path: string) => getInvoke()<void>('shell_open_path', { path }),
-      // Tauri 2 webview has no equivalent of Electron's webUtils.getPathForFile —
-      // a File from a browser drop event doesn't expose its on-disk path.
-      // Returning null lets drop handlers gracefully fall back to dataURL.
-      getPathForFile: () => null,
+      // Tauri keeps browser onDrop working via dragDropEnabled=false. In that
+      // mode most WebViews expose only a File object, but some platforms still
+      // attach a non-standard absolute path. Use it when present; otherwise
+      // return null so callers can fall back to dataURL or native pickers.
+      getPathForFile: (file: File) => getPathFromDroppedFile(file),
     },
     dialog: {
       confirm: (message: string, title?: string) =>
