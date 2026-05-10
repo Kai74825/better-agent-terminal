@@ -56,6 +56,7 @@
 - 2026-05-10：降低 Tauri worktree command UI 阻塞風險。`worktree.create/remove/status/merge/rehydrate` Rust commands 改成 async command，將 blocking sidecar bridge 放進 `spawn_blocking`，避免 git worktree 建立/移除或 sidecar cold start 佔住 Tauri command handler。
 - 2026-05-10：降低其他 Tauri sidecar bridge UI 阻塞風險。`openai.*`、`remote.*`、`tunnel.getConnection`、`agent.listPresets` Rust commands 改成 async command，將 blocking sidecar bridge 放進 `spawn_blocking`；設定頁、remote 狀態輪詢與 agent preset 查詢不再佔住 Tauri command handler。
 - 2026-05-10：降低 Tauri fs command UI 阻塞風險。`fs.resolvePathLinks/watch/unwatch` 的 sidecar bridge 與 `fs.search` 的同步目錄 walk 改進 `spawn_blocking`，避免 markdown path link resolve、FileTree watcher 或搜尋慢路徑佔住 Tauri command handler。
+- 2026-05-10：降低 Tauri Claude startup/metadata UI 阻塞風險。`claude.authStatus/accountList/startSession/listSessions/getSupported*/getAccountInfo/scanSkills/fetchSubagentMessages/resumeSession` Rust commands 改成 async command，將 blocking sidecar bridge 放進 `spawn_blocking`；panel mount、metadata refresh 與 session restore 不再佔住 Tauri command handler。
 
 ## 目前判斷
 

@@ -48,6 +48,32 @@ fn call_with_timeout(
     state.call_with_emit(&cfg, Some(sink), method, params, timeout)
 }
 
+async fn call_blocking(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    method: &'static str,
+    params: Value,
+) -> Result<Value, BridgeError> {
+    call_with_timeout_blocking(app, state, method, params, DEFAULT_TIMEOUT).await
+}
+
+async fn call_with_timeout_blocking(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+    method: &'static str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, BridgeError> {
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        call_with_timeout(&app, &state, method, params, timeout)
+    })
+    .await
+    .map_err(|err| BridgeError {
+        message: format!("{method} worker failed: {err}"),
+    })?
+}
+
 #[tauri::command]
 pub fn claude_ping(
     app: AppHandle,
@@ -58,35 +84,36 @@ pub fn claude_ping(
 }
 
 #[tauri::command]
-pub fn claude_auth_status(
+pub async fn claude_auth_status(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.authStatus", Value::Null)
+    call_blocking(app, state, "claude.authStatus", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_account_list(
+pub async fn claude_account_list(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountList", Value::Null)
+    call_blocking(app, state, "claude.accountList", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_start_session(
+pub async fn claude_start_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    call_with_timeout(
-        &app,
-        &state,
+    call_with_timeout_blocking(
+        app,
+        state,
         "claude.startSession",
         json!({ "sessionId": session_id, "options": options.unwrap_or(Value::Null) }),
         SESSION_TIMEOUT,
     )
+    .await
 }
 
 #[tauri::command]
@@ -239,76 +266,80 @@ pub fn claude_account_mark_warning_shown(
 // --- read-only metadata ---------------------------------------------------
 
 #[tauri::command]
-pub fn claude_get_cli_path(
+pub async fn claude_get_cli_path(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getCliPath", Value::Null)
+    call_blocking(app, state, "claude.getCliPath", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_list_sessions(
+pub async fn claude_list_sessions(
     app: AppHandle,
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.listSessions", json!({ "cwd": cwd }))
+    call_blocking(app, state, "claude.listSessions", json!({ "cwd": cwd })).await
 }
 
 #[tauri::command]
-pub fn claude_get_supported_models(
+pub async fn claude_get_supported_models(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getSupportedModels",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_supported_commands(
+pub async fn claude_get_supported_commands(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getSupportedCommands",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_supported_agents(
+pub async fn claude_get_supported_agents(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getSupportedAgents",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_account_info(
+pub async fn claude_get_account_info(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getAccountInfo",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
@@ -368,12 +399,12 @@ pub fn claude_get_worktree_status(
 }
 
 #[tauri::command]
-pub fn claude_scan_skills(
+pub async fn claude_scan_skills(
     app: AppHandle,
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.scanSkills", json!({ "cwd": cwd }))
+    call_blocking(app, state, "claude.scanSkills", json!({ "cwd": cwd })).await
 }
 
 #[tauri::command]
@@ -637,7 +668,7 @@ pub fn claude_is_resting(
 }
 
 #[tauri::command]
-pub fn claude_fetch_subagent_messages(
+pub async fn claude_fetch_subagent_messages(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
@@ -648,13 +679,14 @@ pub fn claude_fetch_subagent_messages(
     // take up to a couple of seconds. Bump past the default 15s to be
     // safe — failure path returns [] so the renderer just shows "no
     // messages" instead of throwing.
-    call_with_timeout(
-        &app,
-        &state,
+    call_with_timeout_blocking(
+        app,
+        state,
         "claude.fetchSubagentMessages",
         json!({ "sessionId": session_id, "agentToolUseId": agent_tool_use_id }),
         Duration::from_secs(30),
     )
+    .await
 }
 
 #[tauri::command]
@@ -676,16 +708,16 @@ pub fn claude_rewind_to_prompt(
 }
 
 #[tauri::command]
-pub fn claude_resume_session(
+pub async fn claude_resume_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     sdk_session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.resumeSession",
         json!({
             "sessionId": session_id,
@@ -693,6 +725,7 @@ pub fn claude_resume_session(
             "options": options,
         }),
     )
+    .await
 }
 
 #[tauri::command]
