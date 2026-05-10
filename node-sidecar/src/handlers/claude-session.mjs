@@ -7,6 +7,8 @@
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
 import { sessions, ensureSession, buildSessionMeta } from '../lib/state.mjs'
 import { expectedContextWindowForModel } from '../lib/models.mjs'
+import { closeLiveQuery } from './claude-send.mjs'
+import { warn as logWarn } from '../lib/logger.mjs'
 
 registerHandler('claude.startSession', async (params) => {
   const sessionId = params?.sessionId
@@ -53,6 +55,10 @@ registerHandler('claude.resumeSession', async (params) => {
   if (existing?.abortController) {
     try { existing.abortController.abort() } catch { /* already aborted */ }
   }
+  // Tear down any persistent SDK subprocess before swapping the record.
+  // The new session's first sendMessage will rebuild a LiveQuery with
+  // the freshly stashed sdkSessionId so the SDK rehydrates context.
+  closeLiveQuery(existing)
   // Drop the prior record (if any) and rebuild from the resume options.
   sessions.delete(sessionId)
   const s = ensureSession(sessionId)
@@ -87,7 +93,9 @@ registerHandler('claude.restSession', async (params) => {
   if (session.abortController) {
     try { session.abortController.abort() } catch { /* already aborted */ }
   }
-  session.abortController = null
+  // Resting kills the persistent SDK subprocess so the user pays no
+  // CPU/tokens while paused. wake / next sendMessage will rebuild.
+  closeLiveQuery(session)
   session.streaming = false
   session.isResting = true
   sendEvent('claude:message', {
@@ -126,6 +134,7 @@ registerHandler('claude.stopSession', async (params) => {
   if (s?.abortController) {
     try { s.abortController.abort() } catch { /* already aborted */ }
   }
+  closeLiveQuery(s)
   const existed = sessions.delete(sessionId)
   return { ok: true, existed }
 })
@@ -140,6 +149,11 @@ registerHandler('claude.abortSession', async (params) => {
     try { session.abortController.abort() } catch { /* already aborted */ }
   }
   if (session) {
+    // Abort fires error → drain loop closes liveQuery, but close
+    // explicitly to wake any pending push() promise straight away
+    // (otherwise renderer's spinner waits for the SDK throw to
+    // propagate through the iterator).
+    closeLiveQuery(session)
     session.active = false
     // claude:turn-end is also emitted by sendMessage's catch, but we
     // emit here too in case abort is called after streaming finished
@@ -182,6 +196,21 @@ registerHandler('claude.setPermissionMode', async (params) => {
   if (typeof mode !== 'string') return false
   const s = ensureSession(sessionId)
   s.permissionMode = mode
+  // Mid-session mode change: forward to the running CLI via the SDK
+  // control method when the LiveQuery is open. SDK's permissionMode
+  // enum doesn't include 'bypassPlan' — that's a sidecar-only mode
+  // mapped to 'plan' inside buildQueryOptions. If the control method
+  // fails (older CLI builds without the streaming-input control
+  // protocol), close the live query so the next sendMessage rebuilds
+  // with the new mode in queryOptions.
+  if (s.liveQuery && !s.liveQuery.isClosed) {
+    const sdkMode = mode === 'bypassPlan' ? 'plan' : mode
+    try { await s.liveQuery.setPermissionMode(sdkMode) }
+    catch (err) {
+      logWarn(`setPermissionMode control failed for ${sessionId}: ${err?.message || err}`)
+      closeLiveQuery(s)
+    }
+  }
   // Mirror Electron's claude:modeChange event so listeners refresh.
   sendEvent('claude:modeChange', { sessionId, mode })
   return true
@@ -193,6 +222,21 @@ registerHandler('claude.setModel', async (params) => {
   const s = ensureSession(sessionId)
   if (typeof params?.model === 'string') s.model = params.model
   if (typeof params?.autoCompactWindow === 'number') s.autoCompactWindow = params.autoCompactWindow
+  // autoCompactWindow is read by the SDK-spawned CLI from env at boot,
+  // so changing it requires a rebuild — close the live query.
+  // Model swap goes through the control method first; only rebuild on
+  // failure.
+  if (s.liveQuery && !s.liveQuery.isClosed) {
+    if (typeof params?.autoCompactWindow === 'number') {
+      closeLiveQuery(s)
+    } else if (typeof params?.model === 'string') {
+      try { await s.liveQuery.setModel(s.model) }
+      catch (err) {
+        logWarn(`setModel control failed for ${sessionId}: ${err?.message || err}`)
+        closeLiveQuery(s)
+      }
+    }
+  }
   return true
 })
 
@@ -207,6 +251,11 @@ registerHandler('claude.setEffort', async (params) => {
 registerHandler('claude.resetSession', async (params) => {
   const sessionId = params?.sessionId
   if (typeof sessionId !== 'string' || !sessionId) return false
+  const prior = sessions.get(sessionId)
+  if (prior?.abortController) {
+    try { prior.abortController.abort() } catch { /* already aborted */ }
+  }
+  closeLiveQuery(prior)
   // Drop the session record entirely. Next startSession recreates it.
   const existed = sessions.delete(sessionId)
   // Mirror Electron's claude:session-reset notification so renderer
