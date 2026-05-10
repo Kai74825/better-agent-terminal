@@ -291,12 +291,17 @@ fn start_pty_session(
 }
 
 #[tauri::command]
-pub fn pty_create(
+pub async fn pty_create(
     app: AppHandle,
     state: State<'_, PtyState>,
     options: CreatePtyOptions,
 ) -> Result<String, CommandError> {
-    start_pty_session(&app, state.handle(), options)
+    let handle = state.handle();
+    tauri::async_runtime::spawn_blocking(move || start_pty_session(&app, handle, options))
+        .await
+        .map_err(|e| CommandError {
+            message: format!("pty.create worker failed: {e}"),
+        })?
 }
 
 #[tauri::command]
@@ -348,15 +353,30 @@ pub fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), CommandErr
 }
 
 #[tauri::command]
-pub fn pty_restart(
+pub async fn pty_restart(
     app: AppHandle,
     state: State<'_, PtyState>,
     id: String,
     cwd: String,
     shell: Option<String>,
 ) -> Result<bool, CommandError> {
+    let handle = state.handle();
+    tauri::async_runtime::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
+        .await
+        .map_err(|e| CommandError {
+            message: format!("pty.restart worker failed: {e}"),
+        })?
+}
+
+fn pty_restart_impl(
+    app: AppHandle,
+    handle: Arc<Mutex<HashMap<String, PtySession>>>,
+    id: String,
+    cwd: String,
+    shell: Option<String>,
+) -> Result<bool, CommandError> {
     let kind = {
-        let mut map = state.inner.lock().map_err(|e| CommandError {
+        let mut map = handle.lock().map_err(|e| CommandError {
             message: e.to_string(),
         })?;
         let Some(mut session) = map.remove(&id) else {
@@ -369,7 +389,7 @@ pub fn pty_restart(
 
     start_pty_session(
         &app,
-        state.handle(),
+        handle,
         CreatePtyOptions {
             id,
             cwd,
