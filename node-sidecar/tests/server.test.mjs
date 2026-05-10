@@ -3654,6 +3654,81 @@ async function inProcess() {
     }
   }
 
+  // github.* — port of the Electron github:* handlers (checkCli, prList,
+  // issueList, prView, issueView, prComment, issueComment). Wraps the
+  // `gh` CLI; reads return parsed JSON or `{error}`, writes return
+  // `{success:true}` or `{error}`. checkCli must return a result shape
+  // regardless of whether `gh` is installed. The other handlers can't be
+  // exercised end-to-end without a real GitHub login, so the tests
+  // focus on (a) shape contract for missing args and (b) checkCli's
+  // graceful-degrade contract.
+  {
+    const protocol = await import('../src/lib/remote-protocol.mjs')
+
+    // (a) checkCli returns a typed object regardless of gh availability.
+    //     Both fields must be booleans. installed:false => authenticated:false.
+    const cliReply = await dispatch({ jsonrpc: '2.0', id: 1000, method: 'github.checkCli', params: {} })
+    assert.equal(typeof cliReply.result, 'object')
+    assert.equal(typeof cliReply.result.installed, 'boolean')
+    assert.equal(typeof cliReply.result.authenticated, 'boolean')
+    if (!cliReply.result.installed) {
+      assert.equal(cliReply.result.authenticated, false,
+        'authenticated must be false when gh is not installed')
+    }
+
+    // (b) Read handlers — missing cwd → {error: 'missing cwd'}. Confirms
+    //     the handler validates params before spawning gh.
+    const missingCwd = await Promise.all([
+      dispatch({ jsonrpc: '2.0', id: 1001, method: 'github.prList', params: {} }),
+      dispatch({ jsonrpc: '2.0', id: 1002, method: 'github.issueList', params: {} }),
+      dispatch({ jsonrpc: '2.0', id: 1003, method: 'github.prView', params: { number: 1 } }),
+      dispatch({ jsonrpc: '2.0', id: 1004, method: 'github.issueView', params: { number: 1 } }),
+      dispatch({ jsonrpc: '2.0', id: 1005, method: 'github.prComment', params: { number: 1, body: 'x' } }),
+      dispatch({ jsonrpc: '2.0', id: 1006, method: 'github.issueComment', params: { number: 1, body: 'x' } }),
+    ])
+    for (const r of missingCwd) {
+      assert.equal(typeof r.result, 'object')
+      assert.equal(r.result.error, 'missing cwd')
+    }
+
+    // (c) View / comment handlers — missing number → {error: 'missing number'}.
+    const missingNum = await Promise.all([
+      dispatch({ jsonrpc: '2.0', id: 1010, method: 'github.prView', params: { cwd: '.' } }),
+      dispatch({ jsonrpc: '2.0', id: 1011, method: 'github.issueView', params: { cwd: '.' } }),
+      dispatch({ jsonrpc: '2.0', id: 1012, method: 'github.prComment', params: { cwd: '.', body: 'x' } }),
+      dispatch({ jsonrpc: '2.0', id: 1013, method: 'github.issueComment', params: { cwd: '.', body: 'x' } }),
+    ])
+    for (const r of missingNum) {
+      assert.equal(r.result.error, 'missing number')
+    }
+
+    // (d) Comment handlers — missing body → {error: 'missing body'}. Confirms
+    //     all three required-field validations fire before the spawn.
+    const missingBody = await Promise.all([
+      dispatch({ jsonrpc: '2.0', id: 1020, method: 'github.prComment', params: { cwd: '.', number: 1 } }),
+      dispatch({ jsonrpc: '2.0', id: 1021, method: 'github.issueComment', params: { cwd: '.', number: 1 } }),
+    ])
+    for (const r of missingBody) {
+      assert.equal(r.result.error, 'missing body')
+    }
+
+    // (e) Number type validation — string '1' is rejected since pickNumber
+    //     only accepts typeof 'number'. This catches param-shape drift
+    //     between the renderer and the handler.
+    const stringNum = await dispatch({ jsonrpc: '2.0', id: 1030, method: 'github.prView',
+      params: { cwd: '.', number: '1' } })
+    assert.equal(stringNum.result.error, 'missing number',
+      'string-typed number must be rejected (renderer must send a JS number)')
+
+    // (f) End-to-end via remote bridge: `github:check-cli` → github.checkCli.
+    //     Verifies the kebab→camel auto-translation in remote-bridge picks
+    //     up the new handler module without explicit wiring.
+    const remoteCli = await protocol.invokeRemoteHandler('github:check-cli', [])
+    assert.equal(typeof remoteCli, 'object')
+    assert.equal(typeof remoteCli.installed, 'boolean')
+    assert.equal(typeof remoteCli.authenticated, 'boolean')
+  }
+
   // remote-secrets — port of electron/remote/secrets.ts. The sidecar
   // version always writes `{enc:false, data:<JSON>}` (no safeStorage in
   // pure-Node) but must (a) round-trip JSON / string, (b) read legacy

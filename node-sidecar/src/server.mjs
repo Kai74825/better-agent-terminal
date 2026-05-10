@@ -60,6 +60,7 @@ import './handlers/update.mjs'
 import './handlers/image.mjs'
 import './handlers/fs.mjs'
 import './handlers/git.mjs'
+import './handlers/github.mjs'
 
 // Remote invoke bridge — must run after every handler module has called
 // registerHandler(). It introspects PROXIED_CHANNELS and auto-wires each
