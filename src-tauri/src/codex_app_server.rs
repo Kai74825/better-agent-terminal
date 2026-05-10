@@ -993,6 +993,48 @@ impl CodexAppServerState {
         session.approval_policy = normalize_approval(Some(&policy));
         Some(json!(true))
     }
+
+    pub fn reconfigure_session(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<Value, BridgeError> {
+        let (thread_id, model, cwd, approval_policy, sandbox_mode, meta) = {
+            let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            let thread_id = session
+                .thread_id
+                .clone()
+                .ok_or_else(|| bridge_error("Codex thread not started"))?;
+            (
+                thread_id,
+                session.model.clone(),
+                session.cwd.clone(),
+                session.approval_policy.clone(),
+                session.sandbox_mode.clone(),
+                session.metadata(),
+            )
+        };
+        let connection = self.ensure_connection(app).map_err(bridge_error)?;
+        connection
+            .request(
+                "thread/resume",
+                json!({
+                    "threadId": thread_id,
+                    "model": model,
+                    "cwd": cwd,
+                    "approvalPolicy": approval_policy,
+                    "sandbox": app_server_sandbox(&sandbox_mode),
+                    "serviceName": "better_agent_terminal",
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .map_err(bridge_error)?;
+        emit(app, "claude:status", session_id, "meta", meta);
+        Ok(json!(true))
+    }
 }
 
 fn handle_server_message(
@@ -1436,6 +1478,9 @@ mod tests {
     fn app_server_sandbox_uses_protocol_values() {
         assert_eq!(app_server_sandbox("read-only"), "read-only");
         assert_eq!(app_server_sandbox("workspace-write"), "workspace-write");
-        assert_eq!(app_server_sandbox("danger-full-access"), "danger-full-access");
+        assert_eq!(
+            app_server_sandbox("danger-full-access"),
+            "danger-full-access"
+        );
     }
 }

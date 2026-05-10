@@ -76,6 +76,7 @@
 - 2026-05-10：修正舊 Codex session 永久落回 sidecar 的 routing。`agentPreset=codex-agent` 在 Rust app-server `thread/resume` 失敗時，會先打 `sidecar:metric` 記錄 stale `sdkSessionId` 與錯誤，再用 Rust app-server fresh start 新 thread；只有 fresh start 也失敗才 fallback Node sidecar，避免舊 rollout id 讓後續每輪 send 都停在 sidecar path。
 - 2026-05-10：修正 Codex panel 復用舊 sidecar state 後未綁定 Rust runtime。Tauri + `codex-agent` mount 時若 `getSessionState` 讀到舊 state，現在只用來先補 UI，不再提前 return；仍會繼續 `resumeSession/startSession` 讓 Rust Codex app-server 成為 session owner，避免後續 send 因 `codex_state.is_owned=false` 落回 Node sidecar。
 - 2026-05-10：修正 Rust Codex app-server sandbox protocol mapping。log 顯示 app-server 拒收 `dangerFullAccess`，實際 schema 需要 `danger-full-access` / `workspace-write` / `read-only`；已改回 kebab-case 並加 Rust regression test，避免 resume/fresh start 因 sandbox enum 失敗後 fallback Node sidecar。
+- 2026-05-10：讓 Rust Codex sandbox/approval 切換可對下一輪 prompt 生效。`setCodexSandboxMode` / `setCodexApprovalPolicy` 在 Rust-owned Codex session 會更新本地 session state 後，用同一個 thread id 呼叫 app-server `thread/resume` 重送 sandbox/approval/model/cwd，避免 UI 顯示已切換但 app-server thread 仍沿用舊設定。
 
 ## 目前判斷
 

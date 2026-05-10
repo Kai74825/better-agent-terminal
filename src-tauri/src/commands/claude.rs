@@ -622,8 +622,18 @@ pub async fn claude_set_codex_sandbox_mode(
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
-    if let Some(value) = codex_state.set_sandbox_mode(&session_id, mode.clone()) {
-        return Ok(value);
+    if codex_state.is_owned(&session_id) {
+        let codex = (*codex_state).clone();
+        let codex_app = app.clone();
+        let codex_session_id = session_id.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let _ = codex.set_sandbox_mode(&codex_session_id, mode);
+            codex.reconfigure_session(&codex_app, &codex_session_id)
+        })
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("codex app-server setSandboxMode worker failed: {err}"),
+        })?;
     }
     call_blocking(
         app,
@@ -644,8 +654,18 @@ pub async fn claude_set_codex_approval_policy(
     session_id: String,
     policy: String,
 ) -> Result<Value, BridgeError> {
-    if let Some(value) = codex_state.set_approval_policy(&session_id, policy.clone()) {
-        return Ok(value);
+    if codex_state.is_owned(&session_id) {
+        let codex = (*codex_state).clone();
+        let codex_app = app.clone();
+        let codex_session_id = session_id.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            let _ = codex.set_approval_policy(&codex_session_id, policy);
+            codex.reconfigure_session(&codex_app, &codex_session_id)
+        })
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("codex app-server setApprovalPolicy worker failed: {err}"),
+        })?;
     }
     call_blocking(
         app,
