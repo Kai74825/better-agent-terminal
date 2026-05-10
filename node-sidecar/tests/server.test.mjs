@@ -4090,6 +4090,115 @@ async function inProcess() {
     }
   }
 
+  // fs.watch / fs.unwatch — port of the Electron fs:watch / fs:unwatch
+  // stateful handlers. Watches a directory recursively, debounces
+  // 500ms, then emits `fs:changed` events with the absolute path. The
+  // map is process-wide so a leak between tests would carry over —
+  // __closeAllWatchersForTests() at the end is mandatory.
+  {
+    const { mkdtempSync, rmSync, writeFileSync } = await import('fs')
+    const pathMod = await import('path')
+    const { join } = pathMod
+    const osMod = await import('os')
+    const { tmpdir } = osMod
+    const fsWatchMod = await import('../src/handlers/fs-watch.mjs')
+    const watchRoot = mkdtempSync(join(tmpdir(), 'sidecar-fswatch-'))
+    const captured = []
+    const restoreSend = mod.__setSendEventForTests((name, payload) => {
+      captured.push({ name, payload })
+    })
+    try {
+      // (a) watch a brand-new directory → true; idempotent second call → true.
+      const w1 = await dispatch({ jsonrpc: '2.0', id: 1300, method: 'fs.watch',
+        params: { dirPath: watchRoot } })
+      assert.equal(w1.result, true)
+      assert.equal(fsWatchMod.__watcherCountForTests(), 1)
+      const w2 = await dispatch({ jsonrpc: '2.0', id: 1301, method: 'fs.watch',
+        params: { dirPath: watchRoot } })
+      assert.equal(w2.result, true, 'second watch on same path → true (no-op)')
+      assert.equal(fsWatchMod.__watcherCountForTests(), 1, 'second watch must not double-attach')
+
+      // (b) sensitive path → false; no watcher attached.
+      const sshPath = join(osMod.homedir(), '.ssh')
+      const wSensitive = await dispatch({ jsonrpc: '2.0', id: 1302, method: 'fs.watch',
+        params: { dirPath: sshPath } })
+      assert.equal(wSensitive.result, false, 'sensitive path must be refused')
+      assert.equal(fsWatchMod.__watcherCountForTests(), 1, 'refused watcher must not be added to map')
+
+      // (c) missing dirPath → false.
+      const wEmpty = await dispatch({ jsonrpc: '2.0', id: 1303, method: 'fs.watch', params: {} })
+      assert.equal(wEmpty.result, false)
+
+      // (d) Bare-string param (Electron-style positional) — also works.
+      const watchRoot2 = mkdtempSync(join(tmpdir(), 'sidecar-fswatch2-'))
+      const wBare = await dispatch({ jsonrpc: '2.0', id: 1304, method: 'fs.watch', params: watchRoot2 })
+      assert.equal(wBare.result, true)
+      assert.equal(fsWatchMod.__watcherCountForTests(), 2)
+      // Clean up the second tmpdir's watcher before the event-flow test
+      // so the captured events array stays scoped to watchRoot.
+      const u2 = await dispatch({ jsonrpc: '2.0', id: 1305, method: 'fs.unwatch', params: watchRoot2 })
+      assert.equal(u2.result, true)
+      assert.equal(fsWatchMod.__watcherCountForTests(), 1)
+      rmSync(watchRoot2, { recursive: true, force: true })
+
+      // (e) Event flow: write a file, wait for 500ms debounce, expect
+      //     exactly one fs:changed event with abs(watchRoot) payload.
+      //     Burst of multiple writes inside the debounce window must
+      //     coalesce into a single event.
+      captured.length = 0
+      writeFileSync(join(watchRoot, 'a.txt'), 'first', 'utf-8')
+      writeFileSync(join(watchRoot, 'b.txt'), 'second', 'utf-8')
+      writeFileSync(join(watchRoot, 'c.txt'), 'third', 'utf-8')
+      // Wait > 500ms debounce + slack for fs.watch event delivery.
+      await new Promise(r => setTimeout(r, 800))
+      const fsChanged = captured.filter(e => e.name === 'fs:changed')
+      assert.ok(fsChanged.length >= 1, 'expected at least one fs:changed event')
+      assert.equal(typeof fsChanged[0].payload, 'string')
+      const expectedAbs = pathMod.resolve(watchRoot)
+      assert.equal(fsChanged[0].payload, expectedAbs,
+        'fs:changed payload must be abs path of watched dir')
+      // Debounce contract: 3 writes in < 500ms must coalesce. Allow
+      // up to 2 events because fs.watch on some fs (Linux inotify
+      // multi-event close) can split bursts across debounce windows
+      // when writeFileSync emits separate events. The strict ≤ 1
+      // is too brittle; ≤ 2 catches "no debounce at all" (would be 3+).
+      assert.ok(fsChanged.length <= 2,
+        `debounce must coalesce burst writes; got ${fsChanged.length} events`)
+
+      // (f) unwatch — silences subsequent events. Write again, wait,
+      //     captured must NOT grow.
+      const u1 = await dispatch({ jsonrpc: '2.0', id: 1310, method: 'fs.unwatch',
+        params: { dirPath: watchRoot } })
+      assert.equal(u1.result, true)
+      assert.equal(fsWatchMod.__watcherCountForTests(), 0, 'unwatch must clear the map entry')
+      captured.length = 0
+      writeFileSync(join(watchRoot, 'after-unwatch.txt'), 'x', 'utf-8')
+      await new Promise(r => setTimeout(r, 700))
+      const afterUnwatch = captured.filter(e => e.name === 'fs:changed')
+      assert.equal(afterUnwatch.length, 0,
+        'no fs:changed events after unwatch')
+
+      // (g) unwatch a never-watched path → true (idempotent, never throws).
+      const uMissing = await dispatch({ jsonrpc: '2.0', id: 1311, method: 'fs.unwatch',
+        params: { dirPath: '/nonexistent/never-watched' } })
+      assert.equal(uMissing.result, true)
+
+      // (h) watch a nonexistent path → false (fs.watch throws ENOENT,
+      //     handler swallows). Map is unchanged.
+      const wMissing = await dispatch({ jsonrpc: '2.0', id: 1312, method: 'fs.watch',
+        params: { dirPath: '/definitely/does/not/exist/here' } })
+      assert.equal(wMissing.result, false)
+      assert.equal(fsWatchMod.__watcherCountForTests(), 0)
+    } finally {
+      // Drop every watcher so node --test can exit cleanly. Restoring
+      // the sendEvent stub is also mandatory or downstream tests
+      // capture events meant for stdout.
+      fsWatchMod.__closeAllWatchersForTests()
+      restoreSend()
+      rmSync(watchRoot, { recursive: true, force: true })
+    }
+  }
+
   // remote-secrets — port of electron/remote/secrets.ts. The sidecar
   // version always writes `{enc:false, data:<JSON>}` (no safeStorage in
   // pure-Node) but must (a) round-trip JSON / string, (b) read legacy
