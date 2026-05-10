@@ -25,6 +25,7 @@
 - 2026-05-10：收斂 `SettingsPanel` direct host calls。OpenAI key、Claude account switching、remote/tunnel status/server、外部連結開啟已改走 `host.*`，讓設定頁在 Tauri 下使用同一層 adapter。
 - 2026-05-10：收斂 dock badge direct host calls。settings/workspace store 的 dock badge 更新已改走 `host.app.setDockBadge`，保留失敗時不阻塞 store 更新的既有行為，避免 Tauri 下 pending action badge 繞過 host adapter。
 - 2026-05-10：收斂 `App.tsx` direct host calls。啟動時 auth status、remote profile connect、remote client polling/resume refresh、Windows window-cycle platform 判斷、全域 send-to-agent 已改走 `host.*`，主 App shell 不再直接依賴 Electron preload。
+- 2026-05-10：收斂 platform/systemVersion direct reads。`GitPanel` 的 path separator 與 `TerminalPanel` 的 Windows ConPTY build detection 已改讀 `host.platform` / `host.systemVersion`，renderer 同步平台資訊不再直接依賴 Electron preload。
 
 ## 目前判斷
 

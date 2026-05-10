@@ -26,8 +26,8 @@ interface ContextMenu {
 }
 
 function getWindowsBuildNumber(): number | undefined {
-  if (window.batAppAPI.platform !== 'win32') return undefined
-  const version = window.batAppAPI.systemVersion
+  if (host.platform !== 'win32') return undefined
+  const version = host.systemVersion
   const build = Number(version.split('.').pop())
   return Number.isFinite(build) ? build : undefined
 }
@@ -267,7 +267,7 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       convertEol: true,
       allowProposedApi: true,
       allowTransparency: true,
-      windowsPty: window.batAppAPI.platform === 'win32'
+      windowsPty: host.platform === 'win32'
         ? {
             backend: 'conpty',
             buildNumber: windowsBuildNumber

@@ -176,7 +176,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
         const fileEntry = changedFiles.find(f => f.file === filePath)
         if (fileEntry && (fileEntry.status === '??' || fileEntry.status === 'A')) {
           const base = gitRoot || activePath
-          const sep = window.batAppAPI.platform === 'win32' ? '\\' : '/'
+          const sep = host.platform === 'win32' ? '\\' : '/'
           const fullPath = base + sep + filePath.replace(/[/\\]/g, sep)
           const result = await host.fs.readFile(fullPath)
           if (result.content) {
@@ -200,7 +200,7 @@ export function GitPanel({ workspaceFolderPath, worktreePaths = [] }: Readonly<G
     setViewMode('file')
     if (fileContent !== null) return // already loaded
     const base = gitRoot || activePath
-    const sep = window.batAppAPI.platform === 'win32' ? '\\' : '/'
+    const sep = host.platform === 'win32' ? '\\' : '/'
     const fullPath = base + sep + selectedFile.replace(/[/\\]/g, sep)
     const result = await host.fs.readFile(fullPath)
     setFileContent(result.content || result.error || 'Unable to read file')
