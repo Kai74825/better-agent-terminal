@@ -71,6 +71,34 @@ pub fn settings_save(app: tauri::AppHandle, data: String) -> Result<(), CommandE
     Ok(())
 }
 
+fn clear_terminal_history_dir(history_dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(history_dir) else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy() == ".zsh-wrapper" {
+            continue;
+        }
+        let path = entry.path();
+        let result = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        let _ = result;
+    }
+    true
+}
+
+#[tauri::command]
+pub fn settings_clear_terminal_history(app: tauri::AppHandle) -> Result<bool, CommandError> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SettingsError::AppDataDir(e.to_string()))?;
+    Ok(clear_terminal_history_dir(&dir.join("terminal-history")))
+}
+
 // settings:get-shell-path — resolve a shell type to a concrete executable.
 //
 // Mirrors the Electron handler in server-core/register-handlers.ts:
@@ -451,5 +479,33 @@ mod tests {
         // surface an error string the handler maps to result.error.
         let r = cx_run_version("/no/such/path/cx-fake");
         assert!(r.is_err(), "expected Err for missing binary");
+    }
+
+    #[test]
+    fn clear_terminal_history_removes_entries_but_keeps_zsh_wrapper() {
+        let root =
+            std::env::temp_dir().join(format!("bat-clear-terminal-history-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".zsh-wrapper")).unwrap();
+        fs::write(root.join("abc_history"), b"history").unwrap();
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested").join("old"), b"x").unwrap();
+
+        assert!(clear_terminal_history_dir(&root));
+        assert!(root.join(".zsh-wrapper").exists());
+        assert!(!root.join("abc_history").exists());
+        assert!(!root.join("nested").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn clear_terminal_history_missing_dir_is_success() {
+        let root = std::env::temp_dir().join(format!(
+            "bat-clear-terminal-history-missing-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        assert!(clear_terminal_history_dir(&root));
     }
 }

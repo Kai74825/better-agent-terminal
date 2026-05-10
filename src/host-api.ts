@@ -163,9 +163,7 @@ function createTauriHost(): BatAppAPI {
       // `shellType` in the invoke payload.
       getShellPath: (shell: string) =>
         getInvoke()<string>('settings_get_shell_path', { shellType: shell }),
-      // Not yet ported — defer to Electron-shaped errors so callers see a
-      // consistent failure mode.
-      clearTerminalHistory: () => notImplemented('settings.clearTerminalHistory'),
+      clearTerminalHistory: () => getInvoke()<boolean>('settings_clear_terminal_history'),
       detectCx: () => getInvoke()<{
         enabled: boolean
         detected: boolean
