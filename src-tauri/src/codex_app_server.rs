@@ -204,9 +204,9 @@ fn normalize_sandbox(value: Option<&str>) -> String {
 
 fn app_server_sandbox(value: &str) -> &'static str {
     match value {
-        "read-only" => "readOnly",
-        "danger-full-access" => "dangerFullAccess",
-        _ => "workspaceWrite",
+        "read-only" => "read-only",
+        "danger-full-access" => "danger-full-access",
+        _ => "workspace-write",
     }
 }
 
@@ -1426,4 +1426,16 @@ fn handle_turn_completed(
         "payload",
         json!({ "reason": reason, "result": result }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_server_sandbox_uses_protocol_values() {
+        assert_eq!(app_server_sandbox("read-only"), "read-only");
+        assert_eq!(app_server_sandbox("workspace-write"), "workspace-write");
+        assert_eq!(app_server_sandbox("danger-full-access"), "danger-full-access");
+    }
 }
