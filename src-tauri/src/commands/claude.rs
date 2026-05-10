@@ -823,8 +823,21 @@ pub async fn claude_set_effort(
 pub async fn claude_reset_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        let codex = (*codex_state).clone();
+        let codex_app = app.clone();
+        let codex_session_id = session_id.clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            codex.reset_session(&codex_app, codex_session_id)
+        })
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("codex app-server reset worker failed: {err}"),
+        })?;
+    }
     call_blocking(
         app,
         state,
@@ -909,8 +922,12 @@ pub async fn claude_clear_archive(
 pub async fn claude_rest_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(value) = codex_state.rest_session(&app, &session_id) {
+        return Ok(value);
+    }
     call_blocking(
         app,
         state,
@@ -924,8 +941,12 @@ pub async fn claude_rest_session(
 pub async fn claude_wake_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(value) = codex_state.wake_session(&session_id) {
+        return Ok(value);
+    }
     call_blocking(
         app,
         state,
@@ -939,8 +960,12 @@ pub async fn claude_wake_session(
 pub async fn claude_is_resting(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(value) = codex_state.is_resting(&session_id) {
+        return Ok(value);
+    }
     call_blocking(
         app,
         state,

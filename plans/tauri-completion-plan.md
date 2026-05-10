@@ -84,6 +84,7 @@
 - 2026-05-11：擴大 Rust Codex app-server routing 到已建立 worktree 的 `codex-agent-worktree`。若 options 內已有 `worktreePath`，Rust runtime 會使用該路徑作為 effective cwd 並 emit `claude:worktree-info`；若缺少 `worktreePath`，仍 fallback Node sidecar，保留 sidecar 自動建立 worktree 的既有行為。
 - 2026-05-11：補 Rust-owned Codex worktree 的 sidecar rehydrate。`claude.startSession/resumeSession` 由 Rust app-server 接手 `codex-agent-worktree` 前，會 best-effort 呼叫 `worktree.rehydrate`，讓既有 Diff/close cleanup 等 worktree sidecar commands 在重開後仍有 activeWorktree state。
 - 2026-05-11：補 Rust-owned Codex metadata read-only route。`getSupportedModels` 對 Rust-owned Codex session 直接回 Codex model list，`getSupportedCommands/getSupportedAgents/getAccountInfo` 直接回空值，避免 Codex panel metadata refresh 落到 sidecar Claude SDK 路徑而顯示 Claude models 或產生不必要的 metadata latency。
+- 2026-05-11：補 Rust-owned Codex session controls。`resetSession` 會在 Rust app-server 建新 thread 並清空本地 turn/token/message state；`restSession` / `wakeSession` / `isResting` 由 Rust session state 直接處理，避免 Codex UI 控制落回 Node sidecar。
 
 ## 目前判斷
 

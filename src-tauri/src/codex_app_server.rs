@@ -139,6 +139,7 @@ struct CodexSession {
     last_turn_duration_ms: Option<u64>,
     messages: Vec<Value>,
     is_running: bool,
+    is_resting: bool,
 }
 
 impl CodexSession {
@@ -703,6 +704,7 @@ impl CodexAppServerState {
             last_turn_duration_ms: None,
             messages: Vec::new(),
             is_running: false,
+            is_resting: false,
         };
         self.inner
             .sessions
@@ -849,6 +851,7 @@ impl CodexAppServerState {
             last_turn_duration_ms: None,
             messages: Vec::new(),
             is_running: false,
+            is_resting: false,
         };
         self.inner
             .sessions
@@ -901,6 +904,7 @@ impl CodexAppServerState {
                 .get_mut(&session_id)
                 .ok_or_else(|| bridge_error("Codex session not started"))?;
             session.is_running = true;
+            session.is_resting = false;
             session.num_turns += 1;
             session.last_turn_started_at = Some(Instant::now());
             session.last_turn_first_token_ms = None;
@@ -1006,6 +1010,122 @@ impl CodexAppServerState {
         } else {
             json!({ "ok": true, "existed": false })
         }
+    }
+
+    pub fn reset_session(&self, app: &AppHandle, session_id: String) -> Result<Value, BridgeError> {
+        let (model, cwd, approval_policy, sandbox_mode, thread_id) = {
+            let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get(&session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            (
+                session.model.clone(),
+                session.cwd.clone(),
+                session.approval_policy.clone(),
+                session.sandbox_mode.clone(),
+                session.thread_id.clone(),
+            )
+        };
+        if let Some(thread_id) = thread_id {
+            self.inner
+                .thread_to_session
+                .lock()
+                .expect("codex thread map lock")
+                .remove(&thread_id);
+        }
+        let connection = self.ensure_connection(app).map_err(bridge_error)?;
+        let response = connection
+            .request(
+                "thread/start",
+                json!({
+                    "model": model,
+                    "cwd": cwd,
+                    "approvalPolicy": approval_policy,
+                    "sandbox": app_server_sandbox(&sandbox_mode),
+                    "serviceName": "better_agent_terminal",
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .map_err(bridge_error)?;
+        let new_thread_id = response
+            .get("thread")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .or_else(|| response.get("threadId").and_then(Value::as_str))
+            .ok_or_else(|| bridge_error("codex app-server reset returned no thread id"))?
+            .to_string();
+        let meta = {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get_mut(&session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            session.thread_id = Some(new_thread_id.clone());
+            session.active_turn_id = None;
+            session.assistant_text.clear();
+            session.thinking_text.clear();
+            session.input_tokens = 0;
+            session.output_tokens = 0;
+            session.cache_read_tokens = 0;
+            session.num_turns = 0;
+            session.last_turn_started_at = None;
+            session.last_turn_first_token_ms = None;
+            session.last_turn_duration_ms = None;
+            session.messages.clear();
+            session.is_running = false;
+            session.is_resting = false;
+            session.start_time = Instant::now();
+            session.metadata()
+        };
+        self.inner
+            .thread_to_session
+            .lock()
+            .expect("codex thread map lock")
+            .insert(new_thread_id, session_id.clone());
+        emit(
+            app,
+            "claude:session-reset",
+            &session_id,
+            "__none__",
+            Value::Null,
+        );
+        emit(app, "claude:status", &session_id, "meta", meta);
+        Ok(json!(true))
+    }
+
+    pub fn rest_session(&self, app: &AppHandle, session_id: &str) -> Option<Value> {
+        let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+        let session = sessions.get_mut(session_id)?;
+        session.is_resting = true;
+        session.is_running = false;
+        session.active_turn_id = None;
+        let msg = make_system_message(
+            session_id,
+            "Session is resting. Send a message to wake it up.".to_string(),
+        );
+        session.messages.push(msg.clone());
+        drop(sessions);
+        emit(app, "claude:message", session_id, "message", msg);
+        emit(
+            app,
+            "claude:turn-end",
+            session_id,
+            "payload",
+            json!({ "reason": "resting" }),
+        );
+        Some(json!(true))
+    }
+
+    pub fn wake_session(&self, session_id: &str) -> Option<Value> {
+        let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+        let session = sessions.get_mut(session_id)?;
+        session.is_resting = false;
+        Some(json!(true))
+    }
+
+    pub fn is_resting(&self, session_id: &str) -> Option<Value> {
+        let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+        let session = sessions.get(session_id)?;
+        Some(json!(session.is_resting))
     }
 
     pub fn get_session_state(&self, session_id: &str) -> Option<Value> {
