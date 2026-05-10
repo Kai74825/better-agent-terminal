@@ -3491,6 +3491,169 @@ async function inProcess() {
     }
   }
 
+  // git.* — port of the Electron git:* handlers (branch, log, diff,
+  // diffFiles, status, getRoot, getGithubUrl). All wrap `git` CLI via
+  // child_process; each handler returns a safe default (null / [] / '')
+  // when the cwd isn't a repo / git missing / timeout. Tests stand up a
+  // real one-commit repo in tmpdir, confirm happy paths against it,
+  // then exercise the empty-cwd / non-repo defaults.
+  {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('fs')
+    const { join } = await import('path')
+    const { tmpdir } = await import('os')
+    const { execSync } = await import('child_process')
+    const protocol = await import('../src/lib/remote-protocol.mjs')
+    const repoRoot = mkdtempSync(join(tmpdir(), 'sidecar-git-'))
+    let gitAvailable = true
+    try {
+      // Build a minimal repo: init, configure user, one commit, one
+      // staged change so `git status` and `git diff HEAD` have content.
+      try {
+        execSync('git --version', { stdio: 'ignore' })
+      } catch { gitAvailable = false }
+      if (gitAvailable) {
+        const gitOpts = { cwd: repoRoot, stdio: 'ignore' }
+        execSync('git init -q', gitOpts)
+        execSync('git config user.email "test@example.com"', gitOpts)
+        execSync('git config user.name "Test User"', gitOpts)
+        execSync('git config commit.gpgsign false', gitOpts)
+        writeFileSync(join(repoRoot, 'a.txt'), 'first\n')
+        execSync('git add a.txt', gitOpts)
+        execSync('git commit -m "initial commit" -q', gitOpts)
+        // Add an unstaged modification so `git status -uall` is non-empty.
+        writeFileSync(join(repoRoot, 'a.txt'), 'first\nmodified\n')
+        // And an untracked file.
+        writeFileSync(join(repoRoot, 'b.txt'), 'untracked\n')
+        // Configure a fake github remote so getGithubUrl has something
+        // to parse. We don't push — just `remote add` then read.
+        execSync('git remote add origin git@github.com:tonyq/test-repo.git', gitOpts)
+      }
+
+      // Skip git-specific assertions when the host has no git binary —
+      // CI without git would otherwise fail. The default-path
+      // assertions (no cwd / non-repo dir) still run.
+      if (gitAvailable) {
+        // (a) git.getRoot — returns the repo's top-level path. The
+        //     test compares paths case-insensitively + via path.resolve
+        //     because Windows symlinks tmpdir to a longer path
+        //     (C:\\Users\\...\\Local\\Temp vs C:\\Users\\...\\AppData\\
+        //     Local\\Temp) so a literal string compare is brittle.
+        const { resolve } = await import('path')
+        const rootReply = await dispatch({ jsonrpc: '2.0', id: 900, method: 'git.getRoot',
+          params: { cwd: repoRoot } })
+        assert.equal(typeof rootReply.result, 'string')
+        assert.equal(resolve(rootReply.result).toLowerCase(),
+          resolve(repoRoot).toLowerCase(),
+          'git.getRoot should resolve to the temp repo root')
+
+        // (b) git.branch — returns the current branch name. New repos
+        //     default to either `main` or `master` depending on git
+        //     version; just assert it's a non-empty string.
+        const branchReply = await dispatch({ jsonrpc: '2.0', id: 901, method: 'git.branch',
+          params: { cwd: repoRoot } })
+        assert.equal(typeof branchReply.result, 'string')
+        assert.ok(branchReply.result.length > 0, 'expected a branch name')
+
+        // (c) git.log — returns a parsed array with one entry.
+        const logReply = await dispatch({ jsonrpc: '2.0', id: 902, method: 'git.log',
+          params: { cwd: repoRoot } })
+        assert.ok(Array.isArray(logReply.result))
+        assert.equal(logReply.result.length, 1)
+        const entry = logReply.result[0]
+        assert.equal(typeof entry.hash, 'string')
+        assert.equal(entry.hash.length, 40)
+        assert.equal(entry.author, 'Test User')
+        assert.equal(entry.message, 'initial commit')
+        // count clamping: huge values clamp to 500.
+        const logBig = await dispatch({ jsonrpc: '2.0', id: 903, method: 'git.log',
+          params: { cwd: repoRoot, count: 999999 } })
+        assert.ok(Array.isArray(logBig.result))
+
+        // (d) git.diff — returns a non-empty diff string for the
+        //     unstaged change against HEAD.
+        const diffReply = await dispatch({ jsonrpc: '2.0', id: 904, method: 'git.diff',
+          params: { cwd: repoRoot } })
+        assert.equal(typeof diffReply.result, 'string')
+        assert.match(diffReply.result, /\+modified/, 'diff must show the added line')
+        // filePath filter narrows to one file (no-op here since only
+        // a.txt is modified, but verifies the arg passes through).
+        const diffFile = await dispatch({ jsonrpc: '2.0', id: 905, method: 'git.diff',
+          params: { cwd: repoRoot, filePath: 'a.txt' } })
+        assert.match(diffFile.result, /a\.txt/)
+
+        // (e) git.diffFiles — parsed name-status against HEAD.
+        const dfReply = await dispatch({ jsonrpc: '2.0', id: 906, method: 'git.diffFiles',
+          params: { cwd: repoRoot } })
+        assert.ok(Array.isArray(dfReply.result))
+        const aEntry = dfReply.result.find(e => e.file === 'a.txt')
+        assert.ok(aEntry, 'expected diffFiles entry for a.txt')
+        assert.equal(aEntry.status, 'M')
+
+        // (f) git.status — porcelain entries. b.txt is untracked,
+        //     a.txt is modified.
+        const stReply = await dispatch({ jsonrpc: '2.0', id: 907, method: 'git.status',
+          params: { cwd: repoRoot } })
+        assert.ok(Array.isArray(stReply.result))
+        const bEntry = stReply.result.find(e => e.file === 'b.txt')
+        assert.ok(bEntry, 'expected status entry for b.txt (untracked)')
+        assert.equal(bEntry.status, '??')
+        const aSt = stReply.result.find(e => e.file === 'a.txt')
+        assert.ok(aSt, 'expected status entry for a.txt (modified)')
+        assert.equal(aSt.status, 'M')
+
+        // (g) git.getGithubUrl — converts SSH remote to HTTPS URL.
+        const ghReply = await dispatch({ jsonrpc: '2.0', id: 908, method: 'git.getGithubUrl',
+          params: { folderPath: repoRoot } })
+        assert.equal(ghReply.result, 'https://github.com/tonyq/test-repo')
+        // folderPath fallback to cwd is also supported.
+        const ghReply2 = await dispatch({ jsonrpc: '2.0', id: 909, method: 'git.getGithubUrl',
+          params: { cwd: repoRoot } })
+        assert.equal(ghReply2.result, 'https://github.com/tonyq/test-repo')
+      }
+
+      // (h) Default-path assertions — work regardless of git availability.
+      //     Missing cwd → safe default (null / [] / '').
+      const noCwd = await Promise.all([
+        dispatch({ jsonrpc: '2.0', id: 910, method: 'git.branch', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 911, method: 'git.log', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 912, method: 'git.diff', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 913, method: 'git.diffFiles', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 914, method: 'git.status', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 915, method: 'git.getRoot', params: {} }),
+        dispatch({ jsonrpc: '2.0', id: 916, method: 'git.getGithubUrl', params: {} }),
+      ])
+      assert.equal(noCwd[0].result, null, 'git.branch missing cwd → null')
+      assert.deepEqual(noCwd[1].result, [], 'git.log missing cwd → []')
+      assert.equal(noCwd[2].result, '', 'git.diff missing cwd → ""')
+      assert.deepEqual(noCwd[3].result, [], 'git.diffFiles missing cwd → []')
+      assert.deepEqual(noCwd[4].result, [], 'git.status missing cwd → []')
+      assert.equal(noCwd[5].result, null, 'git.getRoot missing cwd → null')
+      assert.equal(noCwd[6].result, null, 'git.getGithubUrl missing folderPath → null')
+
+      // (i) Non-repo dir → same safe defaults (git CLI exits non-zero,
+      //     handler swallows). Use the tmpdir parent which is never a
+      //     repo. Skip on systems without git since the failure mode
+      //     would be ENOENT instead of git non-zero, but the result
+      //     should still be the safe default.
+      const nonRepoDir = tmpdir()
+      const nonRepo = await dispatch({ jsonrpc: '2.0', id: 917, method: 'git.branch',
+        params: { cwd: nonRepoDir } })
+      assert.equal(nonRepo.result, null, 'git.branch on non-repo dir → null')
+
+      // (j) End-to-end via remote bridge: `git:get-github-url` →
+      //     git.getGithubUrl. Skip when git missing — the handler
+      //     would still return null safely but the assertion is
+      //     about the bridge wiring, which works either way.
+      if (gitAvailable) {
+        const remoteGh = await protocol.invokeRemoteHandler('git:get-github-url',
+          [{ folderPath: repoRoot }])
+        assert.equal(remoteGh, 'https://github.com/tonyq/test-repo')
+      }
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true })
+    }
+  }
+
   // remote-secrets — port of electron/remote/secrets.ts. The sidecar
   // version always writes `{enc:false, data:<JSON>}` (no safeStorage in
   // pure-Node) but must (a) round-trip JSON / string, (b) read legacy
