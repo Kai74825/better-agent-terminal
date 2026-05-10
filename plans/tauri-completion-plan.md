@@ -79,6 +79,7 @@
 - 2026-05-10：讓 Rust Codex sandbox/approval 切換可對下一輪 prompt 生效。`setCodexSandboxMode` / `setCodexApprovalPolicy` 在 Rust-owned Codex session 會更新本地 session state 後，用同一個 thread id 呼叫 app-server `thread/resume` 重送 sandbox/approval/model/cwd，避免 UI 顯示已切換但 app-server thread 仍沿用舊設定。
 - 2026-05-10：調整 Tauri porting scope：OpenAI Direct / `openai-agent` 已判定為廢棄方向，不再列為 Tauri parity blocker。後續工作應移除或隱藏 OpenAI Direct 的 UI/route/setting 殘留，只保留 Codex 所需的 OpenAI/Codex auth fallback，不再實作 `OpenAIAgentManager` parity。
 - 2026-05-10：開始 OpenAI Direct cleanup。`openai-agent` 從 renderer `AgentPresetId` 移除，`MainPanel` 不再 lazy import 或掛載 `OpenAIAgentPanel`，並刪除未被引用的 `OpenAIAgentPanel.tsx`；舊 workspace 若殘留 `openai-agent`，不會再啟動 OpenAI Direct runtime panel。
+- 2026-05-10：補 OpenAI Direct 舊資料 migration。settings 載入時若 `defaultAgent=openai-agent` 會轉成 `codex-agent`；workspace 載入時若 workspace default 或 terminal preset 殘留 `openai-agent`，也會轉成 `codex-agent`，避免重開後建立無效 OpenAI Direct panel。
 
 ## 目前判斷
 

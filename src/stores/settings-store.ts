@@ -1,6 +1,7 @@
 import { host } from '../host-api'
 import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, EffortLevel, CodexEffortLevel } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
+import { getAgentPreset } from '../types/agent-presets'
 import { CODEX_EFFORT_LEVELS, FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
 import { CLAUDE_BUILTIN_MODELS, CLAUDE_OPUS_47_1M_PRESET, normalizeClaudeModelSelection } from '../utils/claude-model-presets'
 import { CODEX_MODELS } from '../utils/codex-models'
@@ -46,6 +47,12 @@ const defaultSettings: AppSettings = {
   remoteServerAutoStart: false,
   remoteServerPort: 9876,
   remoteServerBindInterface: 'localhost',
+}
+
+function normalizeDefaultAgent(value: unknown): AgentPresetId {
+  if (value === 'openai-agent') return 'codex-agent'
+  if (typeof value === 'string' && getAgentPreset(value)) return value as AgentPresetId
+  return defaultSettings.defaultAgent ?? 'claude-code'
 }
 
 class SettingsStore {
@@ -437,6 +444,7 @@ class SettingsStore {
         if (!parsed.defaultCodexEffort && CODEX_EFFORT_LEVELS.includes(parsed.defaultEffort)) {
           parsed.defaultCodexEffort = parsed.defaultEffort
         }
+        parsed.defaultAgent = normalizeDefaultAgent(parsed.defaultAgent)
         this.settings = { ...defaultSettings, ...parsed }
         this.notify()
       } catch (e) {

@@ -12,6 +12,12 @@ function setHostDockBadge(count: number): void {
   void host.app.setDockBadge(count).catch(() => {})
 }
 
+function normalizePersistedAgentPreset(value: unknown): AgentPresetId | undefined {
+  if (value === 'openai-agent') return 'codex-agent'
+  if (typeof value === 'string' && getAgentPreset(value)) return value as AgentPresetId
+  return undefined
+}
+
 class WorkspaceStore {
   private state: AppState = {
     workspaces: [],
@@ -643,7 +649,10 @@ class WorkspaceStore {
     try {
       const parsed = JSON.parse(data)
       // Restore terminals with empty runtime fields
-      const workspaces: Workspace[] = parsed.workspaces || []
+      const workspaces: Workspace[] = (parsed.workspaces || []).map((w: Workspace) => ({
+        ...w,
+        defaultAgent: normalizePersistedAgentPreset(w.defaultAgent),
+      }))
       const workspaceMap = new Map(workspaces.map((w: Workspace) => [w.id, w]))
       const terminals = (parsed.terminals || []).map((t: Partial<TerminalInstance>): TerminalInstance | null => {
         const ws = t.workspaceId ? workspaceMap.get(t.workspaceId) : undefined
@@ -653,20 +662,21 @@ class WorkspaceStore {
         }
         const cwd = ws.folderPath
         // For agent terminals, always derive title from preset to fix any persisted corruption
-        const presetTitle = t.agentPreset && t.agentPreset !== 'none'
-          ? (getAgentPreset(t.agentPreset)?.name || t.title || 'Terminal')
+        const agentPreset = normalizePersistedAgentPreset(t.agentPreset)
+        const presetTitle = agentPreset && agentPreset !== 'none'
+          ? (getAgentPreset(agentPreset)?.name || t.title || 'Terminal')
           : (t.title || 'Terminal')
         return {
           id: t.id || '',
           workspaceId: t.workspaceId || '',
           type: 'terminal' as const,
-          agentPreset: t.agentPreset,
+          agentPreset,
           title: presetTitle,
           alias: t.alias,
           cwd,
           sdkSessionId: t.sdkSessionId,
           model: t.model,
-          agentParams: normalizeAgentParams(t.agentPreset, t.agentParams),
+          agentParams: normalizeAgentParams(agentPreset, t.agentParams),
           sessionMeta: t.sessionMeta,
           procfilePath: t.procfilePath,
           scrollbackBuffer: [],
