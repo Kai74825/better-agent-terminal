@@ -14,6 +14,7 @@
 - 2026-05-10：Agent panels critical direct-call 收斂第一步。Claude/Codex/OpenAI 三個 panel 的 `stopTask`、`setCodexSandboxMode`、`setCodexApprovalPolicy` 已改走 `host.claude.*`，讓前面補好的 Tauri route 不再被 `window.batAppAPI` shim 旁路；其餘 direct calls 仍列在 M0/M3 持續收斂。
 - 2026-05-10：Tauri drag/drop path resolver 先補 best-effort adapter。`host.shell.getPathForFile(file)` 會讀 dropped `File` 上可能存在的非標準 absolute `path` / `mozFullPath` 欄位；沒有 absolute path 時仍回 `null`，保留 image dataURL / picker fallback。完整 native drag/drop event routing 仍未完成。
 - 2026-05-10：開始 M2 performance instrumentation。Rust sidecar bridge 會 emit `sidecar:metric` event，紀錄 `spawnProcess`、`ensureSpawned`、單次 method `call` 的 `elapsedMs` 與 `ok`，用來定位 mac cold start / first sendMessage 慢在 Node spawn、bridge ensure，還是 SDK method call。
+- 2026-05-10：把 `sidecar:metric` 接進 Tauri shim 的 renderer debug log。Tauri runtime 安裝 shim 時會 listen metric event 並寫入 `host.debug.log('[sidecar:metric]', payload)`，實機 debug.log 可直接看到 sidecar spawn/call timing。
 
 ## 目前判斷
 

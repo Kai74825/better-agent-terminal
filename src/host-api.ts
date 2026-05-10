@@ -40,6 +40,7 @@ export const isTauri = (): boolean => getHostKind() === 'tauri'
 // API is resolved on every access so renderer reloads (or test scenarios
 // that swap `window`) pick up the fresh reference without a manual reset.
 let tauriImpl: BatAppAPI | null = null
+let tauriMetricLoggerInstalled = false
 
 function resolveHost(): BatAppAPI {
   const kind = getHostKind()
@@ -157,6 +158,12 @@ function listenAdapter<T>(
 
 type PtyOutputPayload = { id: string; data: string }
 type PtyExitPayload = { id: string; exitCode: number }
+type SidecarMetricPayload = {
+  phase: string
+  method?: string
+  elapsedMs: number
+  ok: boolean
+}
 type NotificationEntry = {
   id: string
   sessionId: string
@@ -861,6 +868,14 @@ function createTauriHost(): BatAppAPI {
   }) as BatAppAPI
 }
 
+function installTauriMetricLogger(api: BatAppAPI): void {
+  if (tauriMetricLoggerInstalled) return
+  tauriMetricLoggerInstalled = true
+  listenAdapter<SidecarMetricPayload>('sidecar:metric', metric => {
+    void api.debug.log('[sidecar:metric]', metric)
+  })
+}
+
 // Permissive shim used to keep the React tree alive while we port the rest
 // of the host surface. Unlike createTauriHost(), this version returns
 // best-effort no-op values for unimplemented methods so synchronous reads
@@ -918,7 +933,9 @@ export function installTauriShim(): void {
   if (getHostKind() !== 'tauri') return
   const win = (globalThis as unknown as { window?: Record<string, unknown> }).window
   if (!win || win.batAppAPI) return
-  const real = createTauriHost() as unknown as Record<string, unknown>
+  const api = createTauriHost()
+  const real = api as unknown as Record<string, unknown>
+  installTauriMetricLogger(api)
   const platform = detectPlatform()
   const shim = new Proxy({}, {
     get(_t, prop) {
