@@ -603,8 +603,12 @@ pub async fn claude_get_session_meta(
 pub async fn claude_get_context_usage(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(Value::Null);
+    }
     call_blocking(
         app,
         state,
@@ -851,8 +855,12 @@ pub async fn claude_reset_session(
 pub async fn claude_fork_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(Value::Null);
+    }
     // Fork can take up to 60s in pathological cases (the SDK has to run a
     // full one-turn query to persist the new transcript). Use a generous
     // timeout to match the sidecar's internal limit + slack.
@@ -979,9 +987,13 @@ pub async fn claude_is_resting(
 pub async fn claude_fetch_subagent_messages(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     agent_tool_use_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!([]));
+    }
     // Subagent message fetch reads an on-disk transcript shard via the
     // SDK helper; in the worst case (cold SDK load + slow disk) this can
     // take up to a couple of seconds. Bump past the default 15s to be
@@ -1001,9 +1013,13 @@ pub async fn claude_fetch_subagent_messages(
 pub async fn claude_rewind_to_prompt(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     prompt_index: u32,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!({ "error": "Rewind not supported for this session type" }));
+    }
     call_blocking(
         app,
         state,
@@ -1147,10 +1163,14 @@ pub async fn claude_resume_session(
 pub async fn claude_resolve_permission(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     tool_use_id: String,
     result: Value,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!(false));
+    }
     call_blocking(
         app,
         state,
@@ -1166,10 +1186,14 @@ pub async fn claude_resolve_permission(
 pub async fn claude_resolve_ask_user(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     tool_use_id: String,
     answers: Value,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!(false));
+    }
     call_blocking(
         app,
         state,
