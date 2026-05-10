@@ -57,6 +57,7 @@ import './handlers/worktree.mjs'
 import './handlers/agent.mjs'
 import './handlers/remote-tunnel.mjs'
 import './handlers/update.mjs'
+import './handlers/image.mjs'
 
 // Remote invoke bridge — must run after every handler module has called
 // registerHandler(). It introspects PROXIED_CHANNELS and auto-wires each

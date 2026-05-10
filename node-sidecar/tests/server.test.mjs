@@ -3184,6 +3184,146 @@ async function inProcess() {
     assert.ok(Array.isArray(models), `expected array, got ${typeof models}`)
   }
 
+  // path-guard — port of electron/path-guard.ts and src-tauri/path_guard.rs.
+  // Same deny list across all three hosts so the sidecar can't be tricked
+  // into reading credential stores via image.readAsDataUrl (or a future
+  // fs.readFile handler) just because the renderer asks nicely.
+  {
+    const { isSensitivePath } = await import('../src/lib/path-guard.mjs')
+    const { homedir } = await import('os')
+    const home = homedir()
+    const sep = process.platform === 'win32' ? '\\' : '/'
+
+    // (a) Empty / non-string → sensitive (caller is broken).
+    assert.equal(isSensitivePath(''), true)
+    assert.equal(isSensitivePath(null), true)
+    assert.equal(isSensitivePath(undefined), true)
+    assert.equal(isSensitivePath(123), true)
+
+    // (b) Unrelated paths in the user's home / project tree are NOT
+    //     sensitive — Claude legitimately reads ~/.bashrc, /etc/hosts,
+    //     etc. Stricter scoping would belong at ctx.isRemote.
+    assert.equal(isSensitivePath(`${home}${sep}.bashrc`), false)
+    assert.equal(isSensitivePath(`${home}${sep}projects${sep}foo${sep}README.md`), false)
+    if (process.platform !== 'win32') {
+      assert.equal(isSensitivePath('/etc/hosts'), false)
+      assert.equal(isSensitivePath('/usr/local/bin/node'), false)
+    }
+
+    // (c) ~/.ssh and anything beneath blocked (directory containment).
+    assert.equal(isSensitivePath(`${home}${sep}.ssh`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.ssh${sep}id_rsa`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.ssh${sep}known_hosts`), true)
+    // Sibling directory must NOT match (prefix check guards against
+    // /home/user/.sshfs being treated as /home/user/.ssh).
+    assert.equal(isSensitivePath(`${home}${sep}.sshfs${sep}config`), false)
+
+    // (d) AWS / GCP / kube credential stores blocked.
+    assert.equal(isSensitivePath(`${home}${sep}.aws${sep}credentials`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.kube${sep}config`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.config${sep}gcloud${sep}application_default_credentials.json`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.netrc`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.claude${sep}.credentials.json`), true)
+
+    // (e) Private-key filename heuristic — id_rsa / id_ed25519 / *.pem
+    //     under any .ssh/ or keys/ directory anywhere in the tree.
+    assert.equal(isSensitivePath(`${home}${sep}work${sep}.ssh${sep}id_ed25519`), true)
+    assert.equal(isSensitivePath(`${home}${sep}.ssh${sep}id_rsa.pub`), true)
+    assert.equal(isSensitivePath(`/srv/keys/host.pem`.replaceAll('/', sep)), true)
+    // Same filename outside .ssh/keys is fine.
+    assert.equal(isSensitivePath(`${home}${sep}docs${sep}id_rsa.txt`), false)
+
+    // (f) System-wide files (POSIX only — Windows path normalisation
+    //     mangles forward slashes).
+    if (process.platform !== 'win32') {
+      assert.equal(isSensitivePath('/etc/shadow'), true)
+      assert.equal(isSensitivePath('/etc/sudoers'), true)
+      assert.equal(isSensitivePath('/root'), true)
+      assert.equal(isSensitivePath('/root/.bashrc'), true)
+    }
+  }
+
+  // image.readAsDataUrl — port of electron's `image:read-as-data-url`
+  // and Tauri's `image_read_as_data_url`. 10 MiB cap, ext→MIME map,
+  // path-guard refusal for sensitive paths, base64-encoded data URL.
+  {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('fs')
+    const { join } = await import('path')
+    const { tmpdir } = await import('os')
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'sidecar-img-'))
+    try {
+      // (a) Round-trip a tiny PNG → data:image/png;base64,<...>.
+      const pngBytes = Buffer.from([
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
+      ])
+      const pngPath = join(tmpRoot, 'tiny.png')
+      writeFileSync(pngPath, pngBytes)
+      const reply = await dispatch({ jsonrpc: '2.0', id: 700, method: 'image.readAsDataUrl',
+        params: { path: pngPath } })
+      assert.equal(typeof reply.result, 'string')
+      assert.match(reply.result, /^data:image\/png;base64,/)
+      const payload = reply.result.replace(/^data:image\/png;base64,/, '')
+      const decoded = Buffer.from(payload, 'base64')
+      assert.deepEqual([...decoded], [...pngBytes],
+        'data URL must round-trip back to the original bytes')
+
+      // (b) Bare-string params (Electron-style positional invoke through
+      //     the bridge) also works.
+      const stringReply = await dispatch({ jsonrpc: '2.0', id: 701, method: 'image.readAsDataUrl',
+        params: pngPath })
+      assert.match(stringReply.result, /^data:image\/png;base64,/)
+
+      // (c) Extension → MIME mapping. .jpg/.jpeg → image/jpeg, .gif →
+      //     image/gif, .webp → image/webp, anything else → image/png.
+      for (const [ext, mime] of [['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+                                  ['gif', 'image/gif'], ['webp', 'image/webp'],
+                                  ['bmp', 'image/png']]) {
+        const p = join(tmpRoot, `t.${ext}`)
+        writeFileSync(p, Buffer.from([0xFF]))
+        const r = await dispatch({ jsonrpc: '2.0', id: 702, method: 'image.readAsDataUrl',
+          params: { path: p } })
+        assert.match(r.result, new RegExp(`^data:${mime.replace('/', '\\/')};base64,`))
+      }
+
+      // (d) Missing path → JSON-RPC error.
+      const noPath = await dispatch({ jsonrpc: '2.0', id: 703, method: 'image.readAsDataUrl',
+        params: {} })
+      assert.match(noPath.error?.message || '', /missing path/)
+
+      // (e) >10 MiB → refused with "Image too large".
+      const bigPath = join(tmpRoot, 'big.png')
+      writeFileSync(bigPath, Buffer.alloc(10 * 1024 * 1024 + 1, 0))
+      const big = await dispatch({ jsonrpc: '2.0', id: 704, method: 'image.readAsDataUrl',
+        params: { path: bigPath } })
+      assert.match(big.error?.message || '', /Image too large/)
+
+      // (f) path-guard refuses sensitive paths. We exercise this with a
+      //     synthetic ~/.ssh/id_rsa-shaped path — it doesn't have to
+      //     exist on disk, the guard short-circuits before stat().
+      const { homedir } = await import('os')
+      const sshKey = join(homedir(), '.ssh', 'id_rsa')
+      const denied = await dispatch({ jsonrpc: '2.0', id: 705, method: 'image.readAsDataUrl',
+        params: { path: sshKey } })
+      assert.match(denied.error?.message || '', /sensitive path/)
+
+      // (g) Non-existent path → fs error surfaces (not a guard error).
+      const ghost = await dispatch({ jsonrpc: '2.0', id: 706, method: 'image.readAsDataUrl',
+        params: { path: join(tmpRoot, 'does-not-exist.png') } })
+      assert.ok(ghost.error?.message, 'expected an error message for missing file')
+      assert.doesNotMatch(ghost.error.message, /sensitive path/)
+
+      // (h) End-to-end via the remote bridge: invokeRemoteHandler with
+      //     'image:read-as-data-url' and `args[0] = {path}` reaches the
+      //     handler through the bridge. Mirrors the renderer→remote
+      //     client→host wire pattern.
+      const protocol = await import('../src/lib/remote-protocol.mjs')
+      const remoteResult = await protocol.invokeRemoteHandler('image:read-as-data-url', [{ path: pngPath }])
+      assert.match(remoteResult, /^data:image\/png;base64,/)
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  }
+
   // remote-secrets — port of electron/remote/secrets.ts. The sidecar
   // version always writes `{enc:false, data:<JSON>}` (no safeStorage in
   // pure-Node) but must (a) round-trip JSON / string, (b) read legacy
