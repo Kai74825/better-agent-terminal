@@ -44,10 +44,15 @@ export function PromptBox({ terminalId }: Readonly<PromptBoxProps>) {
     setHistoryIndex(-1)
     draftRef.current = ''
 
-    // Order: text first (no Enter) → attach image → Enter to submit
+    // Order: text first (no Enter) → attach image → Enter to submit.
+    // Sequential pty.write calls share one OS pipe so they're FIFO at
+    // the kernel — no inter-write delay needed for the text→Enter case.
+    // The clipboard-paste flow keeps two waits because they guard real
+    // races: 100 ms for OS clipboard to publish the image before the
+    // paste keystroke fires, and 800 ms for the terminal app to render
+    // the pasted image before Enter submits.
     if (content) {
       await host.pty.write(terminalId, content)
-      await new Promise(resolve => setTimeout(resolve, 100))
     }
 
     if (imagePath) {
