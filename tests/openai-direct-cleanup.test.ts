@@ -84,6 +84,11 @@ async function main() {
     'Electron handlers must not route sessions to OpenAI Direct manager',
   )
   assert.equal(
+    handlerSource.includes("agentKind === 'codex'") && handlerSource.includes('getCodexManager()?.listSessions(cwd)'),
+    true,
+    'Electron claude:list-sessions must route Codex session listing to Codex manager',
+  )
+  assert.equal(
     handlerSource.includes("sessionManagerMap.set(sessionId, 'openai')"),
     false,
     'legacy openai-agent sessions must not be assigned OpenAI Direct ownership',

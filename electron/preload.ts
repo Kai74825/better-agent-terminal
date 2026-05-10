@@ -231,8 +231,8 @@ const batAppAPI = {
       ipcRenderer.invoke('claude:resolve-permission', sessionId, toolUseId, result),
     resolveAskUser: (sessionId: string, toolUseId: string, answers: Record<string, string>) =>
       ipcRenderer.invoke('claude:resolve-ask-user', sessionId, toolUseId, answers),
-    listSessions: (cwd: string) =>
-      ipcRenderer.invoke('claude:list-sessions', cwd),
+    listSessions: (cwd: string, agentKind?: 'claude' | 'codex') =>
+      ipcRenderer.invoke('claude:list-sessions', cwd, agentKind),
     resumeSession: (sessionId: string, sdkSessionId: string, cwd: string, model?: string, apiVersion?: 'v1' | 'v2', useWorktree?: boolean, worktreePath?: string, worktreeBranch?: string, agentPreset?: string, codexSandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access', codexApprovalPolicy?: 'untrusted' | 'on-request' | 'never', permissionMode?: string, effort?: string) =>
       ipcRenderer.invoke('claude:resume-session', sessionId, sdkSessionId, cwd, model, apiVersion, useWorktree, worktreePath, worktreeBranch, agentPreset, codexSandboxMode, codexApprovalPolicy, permissionMode, effort),
     forkSession: (sessionId: string) =>

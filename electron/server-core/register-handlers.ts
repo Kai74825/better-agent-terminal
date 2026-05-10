@@ -451,7 +451,10 @@ export function registerProxiedHandlers(deps: ProxiedHandlersDeps): void {
   registerHandler('claude:get-context-usage', (_ctx, sessionId: string) => getManager(sessionId)?.getContextUsage(sessionId))
   registerHandler('claude:resolve-permission', (_ctx, sessionId: string, toolUseId: string, result: { behavior: string; updatedInput?: Record<string, unknown>; updatedPermissions?: unknown[]; message?: string; dontAskAgain?: boolean }) => getManager(sessionId)?.resolvePermission(sessionId, toolUseId, result))
   registerHandler('claude:resolve-ask-user', (_ctx, sessionId: string, toolUseId: string, answers: Record<string, string>) => getManager(sessionId)?.resolveAskUser(sessionId, toolUseId, answers))
-  registerHandler('claude:list-sessions', (_ctx, cwd: string) => getClaudeManager()?.listSessions(cwd))
+  registerHandler('claude:list-sessions', (_ctx, cwd: string, agentKind?: 'claude' | 'codex') => {
+    if (agentKind === 'codex') return getCodexManager()?.listSessions(cwd) ?? []
+    return getClaudeManager()?.listSessions(cwd) ?? []
+  })
   registerHandler('openai:list-sessions', () => [])
   registerHandler('openai:get-api-key-status', async () => ({ hasKey: await hasOpenAIKey() }))
   registerHandler('openai:set-api-key', async (_ctx, key: string) => { await setOpenAIKey(key); return true })

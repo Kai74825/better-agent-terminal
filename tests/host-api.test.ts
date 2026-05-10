@@ -512,6 +512,7 @@ async function run() {
     // Read-only metadata reaches the sidecar through stub returns.
     assert.equal(await mod.host.claude.getCliPath(), '')
     assert.deepEqual(await mod.host.claude.listSessions('/cwd'), [])
+    assert.deepEqual(await mod.host.claude.listSessions('/cwd', 'codex'), [])
     assert.deepEqual(await mod.host.claude.scanSkills('/cwd'), [])
     assert.equal(await mod.host.claude.cleanupWorktree('s-1', true), true)
     assert.equal(await mod.host.claude.setAutoContinue('s-1', { enabled: true }), true)
@@ -747,6 +748,7 @@ async function run() {
       { cmd: 'claude_account_mark_warning_shown', args: undefined },
       { cmd: 'claude_get_cli_path', args: undefined },
       { cmd: 'claude_list_sessions', args: { cwd: '/cwd', agentKind: undefined } },
+      { cmd: 'claude_list_sessions', args: { cwd: '/cwd', agentKind: 'codex' } },
       { cmd: 'claude_scan_skills', args: { cwd: '/cwd' } },
       { cmd: 'claude_cleanup_worktree', args: { sessionId: 's-1', deleteBranch: true } },
       { cmd: 'claude_set_auto_continue', args: { sessionId: 's-1', opts: { enabled: true } } },
