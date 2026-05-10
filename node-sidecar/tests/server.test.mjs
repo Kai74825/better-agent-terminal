@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
@@ -317,6 +317,43 @@ async function inProcess() {
     rmSync(fakeData, { recursive: true, force: true })
     if (savedDataDir2 === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
     else process.env.BAT_SIDECAR_DATA_DIR = savedDataDir2
+  }
+
+  // openai API key storage — sidecar should persist configured keys in
+  // BAT_SIDECAR_DATA_DIR and report hasKey=true afterward. clearApiKey
+  // removes only the configured key file; env/Codex OAuth fallbacks may
+  // still make hasKey true on a developer machine, so assert the file
+  // operation directly after clear.
+  {
+    const fakeOpenAIData = mkdtempSync(join(tmpdir(), 'sidecar-openai-key-'))
+    const savedDataDirOpenAI = process.env.BAT_SIDECAR_DATA_DIR
+    const savedOpenAIEnv = process.env.OPENAI_API_KEY
+    try {
+      process.env.BAT_SIDECAR_DATA_DIR = fakeOpenAIData
+      delete process.env.OPENAI_API_KEY
+
+      const setReply = await dispatch({
+        jsonrpc: '2.0',
+        id: 31,
+        method: 'openai.setApiKey',
+        params: { apiKey: 'sk-test-sidecar' },
+      })
+      assert.equal(setReply.result, true)
+      assert.equal(readFileSync(join(fakeOpenAIData, 'openai-api-key.bin'), 'utf-8'), 'sk-test-sidecar')
+
+      const statusReply = await dispatch({ jsonrpc: '2.0', id: 32, method: 'openai.getApiKeyStatus' })
+      assert.deepEqual(statusReply.result, { hasKey: true })
+
+      const clearReply = await dispatch({ jsonrpc: '2.0', id: 33, method: 'openai.clearApiKey' })
+      assert.equal(clearReply.result, true)
+      assert.equal(existsSync(join(fakeOpenAIData, 'openai-api-key.bin')), false)
+    } finally {
+      rmSync(fakeOpenAIData, { recursive: true, force: true })
+      if (savedDataDirOpenAI === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
+      else process.env.BAT_SIDECAR_DATA_DIR = savedDataDirOpenAI
+      if (savedOpenAIEnv === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = savedOpenAIEnv
+    }
   }
 
   // listOpenAISessions — fabricate a fake openai-sessions tree under the
