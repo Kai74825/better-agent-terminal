@@ -22,7 +22,9 @@ pub fn clipboard_write_text(app: tauri::AppHandle, text: String) -> Result<bool,
     app.clipboard()
         .write_text(text)
         .map(|_| true)
-        .map_err(|e| CommandError { message: e.to_string() })
+        .map_err(|e| CommandError {
+            message: e.to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -34,7 +36,9 @@ mod tests {
 
     #[test]
     fn command_error_serializes_message() {
-        let err = CommandError { message: "boom".into() };
+        let err = CommandError {
+            message: "boom".into(),
+        };
         let v = serde_json::to_value(&err).unwrap();
         assert_eq!(v, json!({ "message": "boom" }));
     }

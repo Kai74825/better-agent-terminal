@@ -24,7 +24,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -41,7 +41,9 @@ pub struct BridgeError {
 
 impl<E: std::fmt::Display> From<E> for BridgeError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -207,11 +209,15 @@ impl SidecarState {
             Ok(Err(msg)) => Err(BridgeError { message: msg }),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 handle.pending.take(id);
-                Err(BridgeError { message: format!("sidecar: timeout waiting for {method}") })
+                Err(BridgeError {
+                    message: format!("sidecar: timeout waiting for {method}"),
+                })
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 handle.pending.take(id);
-                Err(BridgeError { message: format!("sidecar: channel closed for {method}") })
+                Err(BridgeError {
+                    message: format!("sidecar: channel closed for {method}"),
+                })
             }
         }
     }
@@ -259,10 +265,7 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
         command.env(k, v);
     }
     let mut child = command.spawn().map_err(|e| BridgeError {
-        message: format!(
-            "sidecar: failed to spawn {}: {e}",
-            cfg.node_path.display()
-        ),
+        message: format!("sidecar: failed to spawn {}: {e}", cfg.node_path.display()),
     })?;
     let stdin = child.stdin.take().ok_or_else(|| BridgeError {
         message: "sidecar: failed to capture stdin".into(),
@@ -276,7 +279,8 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
 
     let pending: Arc<PendingTable> = Arc::new(PendingTable::default());
     let pending_for_reader = Arc::clone(&pending);
-    let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LIMIT)));
+    let stderr_tail: Arc<Mutex<VecDeque<String>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LIMIT)));
     let stderr_tail_for_stdout_reader = Arc::clone(&stderr_tail);
     let stderr_tail_for_stderr_reader = Arc::clone(&stderr_tail);
     let emit_for_stderr = emit.clone();
@@ -290,7 +294,9 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
         for line in reader.lines() {
             let Ok(line) = line else { break };
             {
-                let mut guard = stderr_tail_for_stderr_reader.lock().expect("stderr tail lock");
+                let mut guard = stderr_tail_for_stderr_reader
+                    .lock()
+                    .expect("stderr tail lock");
                 if guard.len() >= STDERR_TAIL_LIMIT {
                     guard.pop_front();
                 }
@@ -418,21 +424,39 @@ pub fn resolve_spawn_config(app: &tauri::AppHandle) -> Result<SpawnConfig, Bridg
     if let Ok(env_script) = std::env::var("BAT_SIDECAR_SCRIPT") {
         let p = PathBuf::from(env_script);
         if p.is_file() {
-            return Ok(SpawnConfig { node_path, script_path: p, data_dir, extra_env: Vec::new() });
+            return Ok(SpawnConfig {
+                node_path,
+                script_path: p,
+                data_dir,
+                extra_env: Vec::new(),
+            });
         }
     }
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let candidate = resource_dir.join("node-sidecar").join("src").join("server.mjs");
+        let candidate = resource_dir
+            .join("node-sidecar")
+            .join("src")
+            .join("server.mjs");
         if candidate.is_file() {
-            return Ok(SpawnConfig { node_path, script_path: candidate, data_dir, extra_env: Vec::new() });
+            return Ok(SpawnConfig {
+                node_path,
+                script_path: candidate,
+                data_dir,
+                extra_env: Vec::new(),
+            });
         }
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dev = cwd.join("node-sidecar").join("src").join("server.mjs");
     if dev.is_file() {
-        return Ok(SpawnConfig { node_path, script_path: dev, data_dir, extra_env: Vec::new() });
+        return Ok(SpawnConfig {
+            node_path,
+            script_path: dev,
+            data_dir,
+            extra_env: Vec::new(),
+        });
     }
 
     Err(BridgeError {
@@ -524,10 +548,15 @@ mod tests {
     }
 
     fn sidecar_script() -> PathBuf {
-        repo_root().join("node-sidecar").join("src").join("server.mjs")
+        repo_root()
+            .join("node-sidecar")
+            .join("src")
+            .join("server.mjs")
     }
 
-    fn require_node() -> Option<PathBuf> { which_node() }
+    fn require_node() -> Option<PathBuf> {
+        which_node()
+    }
 
     // Sidecar got split in slice #40 from a single server.mjs into a tree
     // with sibling lib/ and handlers/ subdirs. tauri.conf.json had been
@@ -555,7 +584,10 @@ mod tests {
             .expect("bundle.resources must be an object");
         let keys: Vec<&str> = resources.keys().map(|s| s.as_str()).collect();
         assert!(
-            keys.iter().any(|k| *k == "../node-sidecar/src/" || k.contains("node-sidecar/src/lib") || k.contains("node-sidecar/src/handlers") || *k == "../node-sidecar/src/**"),
+            keys.iter().any(|k| *k == "../node-sidecar/src/"
+                || k.contains("node-sidecar/src/lib")
+                || k.contains("node-sidecar/src/handlers")
+                || *k == "../node-sidecar/src/**"),
             "bundle.resources must ship the full node-sidecar/src/ tree (lib/ + handlers/), \
              got keys: {keys:?}. Single-file `node-sidecar/src/server.mjs` regressed \
              post-#40 split — see comment above.",
@@ -588,11 +620,15 @@ mod tests {
             .pointer("/app/windows")
             .and_then(|v| v.as_array())
             .expect("app.windows must be an array");
-        assert!(!windows.is_empty(), "app.windows must declare at least one window");
+        assert!(
+            !windows.is_empty(),
+            "app.windows must declare at least one window"
+        );
         for (i, w) in windows.iter().enumerate() {
             let dde = w.get("dragDropEnabled").and_then(|v| v.as_bool());
             assert_eq!(
-                dde, Some(false),
+                dde,
+                Some(false),
                 "window[{i}].dragDropEnabled must be explicitly false so the renderer's \
                  onDrop handlers fire. Tauri's OS-level drag-drop interception is \
                  incompatible with our File-based attach flow.",
@@ -602,7 +638,10 @@ mod tests {
 
     #[test]
     fn find_bundled_node_returns_none_for_missing_dir() {
-        let tmp = std::env::temp_dir().join(format!("bat-bundled-node-test-empty-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "bat-bundled-node-test-empty-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         // No node-runtime/ subdir present.
         assert!(find_bundled_node(&tmp).is_none());
@@ -612,7 +651,10 @@ mod tests {
     #[test]
     fn find_bundled_node_finds_platform_arch_layout() {
         // Layout matches Node.org portable archive: <runtime>/<plat>-<arch>/[bin/]node
-        let tmp = std::env::temp_dir().join(format!("bat-bundled-node-test-platarch-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!(
+            "bat-bundled-node-test-platarch-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&tmp);
         let arch = std::env::consts::ARCH;
         let platform = if cfg!(windows) {
@@ -624,7 +666,10 @@ mod tests {
         };
         let exe_name = if cfg!(windows) { "node.exe" } else { "node" };
         // Use the bin/ layer so we exercise the secondary probe path too.
-        let bin_dir = tmp.join("node-runtime").join(format!("{platform}-{arch}")).join("bin");
+        let bin_dir = tmp
+            .join("node-runtime")
+            .join(format!("{platform}-{arch}"))
+            .join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
         let exe = bin_dir.join(exe_name);
         std::fs::write(&exe, b"fake").unwrap();
@@ -635,7 +680,8 @@ mod tests {
 
     #[test]
     fn find_bundled_node_finds_flat_fallback() {
-        let tmp = std::env::temp_dir().join(format!("bat-bundled-node-test-flat-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("bat-bundled-node-test-flat-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let runtime = tmp.join("node-runtime");
         std::fs::create_dir_all(&runtime).unwrap();
@@ -651,7 +697,8 @@ mod tests {
     fn find_bundled_node_prefers_platform_subdir_over_flat() {
         // Both layouts present: platform-arch should win so we don't accidentally
         // ship a wrong-arch flat binary on a multi-platform release.
-        let tmp = std::env::temp_dir().join(format!("bat-bundled-node-test-pref-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("bat-bundled-node-test-pref-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let runtime = tmp.join("node-runtime");
         std::fs::create_dir_all(&runtime).unwrap();
@@ -711,9 +758,8 @@ mod tests {
 
     #[test]
     fn reply_parses_ok_result() {
-        let r: SidecarReply = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":3,"result":{"x":1}}"#,
-        ).unwrap();
+        let r: SidecarReply =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":3,"result":{"x":1}}"#).unwrap();
         assert_eq!(r.id, Some(3));
         assert_eq!(r.result.unwrap()["x"], 1);
         assert!(r.error.is_none());
@@ -723,7 +769,8 @@ mod tests {
     fn reply_parses_error() {
         let r: SidecarReply = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32601,"message":"nope"}}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(r.id, Some(4));
         assert!(r.result.is_none());
         let e = r.error.unwrap();
@@ -733,9 +780,8 @@ mod tests {
 
     #[test]
     fn reply_parses_event_no_id() {
-        let r: SidecarReply = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"event:foo","params":{}}"#,
-        ).unwrap();
+        let r: SidecarReply =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"event:foo","params":{}}"#).unwrap();
         assert_eq!(r.id, None);
     }
 
@@ -750,27 +796,32 @@ mod tests {
     // rather than failing the whole suite.
     fn bundled_node_path_for_test() -> Option<PathBuf> {
         let runtime = repo_root().join("node-sidecar").join("runtime");
-        find_bundled_node(&runtime.parent().unwrap())
-            .or_else(|| {
-                // find_bundled_node expects node-runtime/ but our local
-                // checkout uses node-sidecar/runtime/. Probe directly.
-                let exe_name = if cfg!(windows) { "node.exe" } else { "node" };
-                let arch = std::env::consts::ARCH;
-                let platform = if cfg!(windows) {
-                    "windows"
-                } else if cfg!(target_os = "macos") {
-                    "darwin"
-                } else {
-                    "linux"
-                };
-                let sub = runtime.join(format!("{platform}-{arch}"));
-                if !sub.is_dir() { return None; }
-                let direct = sub.join(exe_name);
-                if direct.is_file() { return Some(direct); }
-                let in_bin = sub.join("bin").join(exe_name);
-                if in_bin.is_file() { return Some(in_bin); }
-                None
-            })
+        find_bundled_node(&runtime.parent().unwrap()).or_else(|| {
+            // find_bundled_node expects node-runtime/ but our local
+            // checkout uses node-sidecar/runtime/. Probe directly.
+            let exe_name = if cfg!(windows) { "node.exe" } else { "node" };
+            let arch = std::env::consts::ARCH;
+            let platform = if cfg!(windows) {
+                "windows"
+            } else if cfg!(target_os = "macos") {
+                "darwin"
+            } else {
+                "linux"
+            };
+            let sub = runtime.join(format!("{platform}-{arch}"));
+            if !sub.is_dir() {
+                return None;
+            }
+            let direct = sub.join(exe_name);
+            if direct.is_file() {
+                return Some(direct);
+            }
+            let in_bin = sub.join("bin").join(exe_name);
+            if in_bin.is_file() {
+                return Some(in_bin);
+            }
+            None
+        })
     }
 
     #[test]
@@ -789,23 +840,47 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let sidecar_node_modules = repo_root().join("node-sidecar").join("node_modules").join("@anthropic-ai").join("claude-agent-sdk");
+        let sidecar_node_modules = repo_root()
+            .join("node-sidecar")
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-agent-sdk");
         if !sidecar_node_modules.exists() {
             eprintln!("skipped: node-sidecar/node_modules not installed (run `pnpm --dir node-sidecar install`)");
             return;
         }
-        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let result = state
-            .call(&cfg, "claude.getSupportedModels", Value::Null, Duration::from_secs(30))
+            .call(
+                &cfg,
+                "claude.getSupportedModels",
+                Value::Null,
+                Duration::from_secs(30),
+            )
             .expect("getSupportedModels");
         let arr = result.as_array().expect("expected array");
         // Builtins=7 — anything more proves the bundled SDK was reachable.
-        assert!(arr.len() >= 7, "expected at least 7 builtins, got {}", arr.len());
+        assert!(
+            arr.len() >= 7,
+            "expected at least 7 builtins, got {}",
+            arr.len()
+        );
         // At least one entry must come from the SDK to confirm augmentation.
         // (If sdk-import silently fell back to builtins-only this would be 7.)
-        let has_sdk_entry = arr.iter().any(|m| m.get("source").and_then(|s| s.as_str()) == Some("sdk"));
-        assert!(has_sdk_entry, "expected ≥1 SDK-tagged model from bundled node_modules; got {:?}", arr);
+        let has_sdk_entry = arr
+            .iter()
+            .any(|m| m.get("source").and_then(|s| s.as_str()) == Some("sdk"));
+        assert!(
+            has_sdk_entry,
+            "expected ≥1 SDK-tagged model from bundled node_modules; got {:?}",
+            arr
+        );
         state.reset();
     }
 
@@ -824,10 +899,20 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = SpawnConfig { node_path: node_path.clone(), script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path: node_path.clone(),
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let result = state
-            .call(&cfg, "ping", json!({"via":"bundled"}), Duration::from_secs(10))
+            .call(
+                &cfg,
+                "ping",
+                json!({"via":"bundled"}),
+                Duration::from_secs(10),
+            )
             .expect("ping via bundled node");
         assert_eq!(result["ok"], true);
         assert_eq!(result["echo"]["via"], "bundled");
@@ -849,10 +934,20 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let result = state
-            .call(&cfg, "ping", json!({"hello":"world"}), Duration::from_secs(5))
+            .call(
+                &cfg,
+                "ping",
+                json!({"hello":"world"}),
+                Duration::from_secs(5),
+            )
             .expect("ping");
         assert_eq!(result["ok"], true);
         assert_eq!(result["echo"]["hello"], "world");
@@ -872,13 +967,15 @@ mod tests {
             eprintln!("skipped: node not on PATH");
             return;
         };
-        let script_dir = std::env::temp_dir().join(format!("bat-stderr-tail-{}", std::process::id()));
+        let script_dir =
+            std::env::temp_dir().join(format!("bat-stderr-tail-{}", std::process::id()));
         std::fs::create_dir_all(&script_dir).unwrap();
         let script_path = script_dir.join("crash.mjs");
         std::fs::write(
             &script_path,
             "process.stderr.write('SYNTHETIC_STDERR_LINE_FOR_TEST\\n');\nprocess.exit(1);\n",
-        ).unwrap();
+        )
+        .unwrap();
         let cfg = SpawnConfig {
             node_path,
             script_path: script_path.clone(),
@@ -914,12 +1011,21 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let err = state
             .call(&cfg, "no.such.method", Value::Null, Duration::from_secs(5))
             .expect_err("expected error");
-        assert!(err.message.contains("-32601"), "unexpected: {}", err.message);
+        assert!(
+            err.message.contains("-32601"),
+            "unexpected: {}",
+            err.message
+        );
         state.reset();
     }
 
@@ -934,21 +1040,42 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let auth = state
-            .call(&cfg, "claude.authStatus", Value::Null, Duration::from_secs(15))
+            .call(
+                &cfg,
+                "claude.authStatus",
+                Value::Null,
+                Duration::from_secs(15),
+            )
             .expect("authStatus");
         // authStatus is null OR an object (depends on whether `claude` is
         // installed and logged-in on the dev machine). Both are valid.
-        assert!(auth.is_null() || auth.is_object(), "unexpected authStatus: {auth:?}");
+        assert!(
+            auth.is_null() || auth.is_object(),
+            "unexpected authStatus: {auth:?}"
+        );
         let accounts = state
-            .call(&cfg, "claude.accountList", Value::Null, Duration::from_secs(5))
+            .call(
+                &cfg,
+                "claude.accountList",
+                Value::Null,
+                Duration::from_secs(5),
+            )
             .expect("accountList");
         // accountList wraps the array in `{accounts, activeAccountId,
         // switchWarningShown}` to match Electron's preload contract —
         // SettingsPanel reads result.accounts.length.
-        assert!(accounts.is_object(), "accountList should be wrapped object: {accounts:?}");
+        assert!(
+            accounts.is_object(),
+            "accountList should be wrapped object: {accounts:?}"
+        );
         let arr = accounts
             .get("accounts")
             .expect("accounts field")
@@ -994,7 +1121,10 @@ mod tests {
         let collected: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
         let collected_for_sink = Arc::clone(&collected);
         let sink: EventSink = Arc::new(move |name: &str, params: &Value| {
-            collected_for_sink.lock().unwrap().push((name.to_string(), params.clone()));
+            collected_for_sink
+                .lock()
+                .unwrap()
+                .push((name.to_string(), params.clone()));
         });
 
         // startSession then sendMessage. sendMessage triggers
@@ -1023,8 +1153,14 @@ mod tests {
 
         let events = collected.lock().unwrap();
         let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"claude:message"), "missing claude:message in {names:?}");
-        assert!(names.contains(&"claude:turn-end"), "missing claude:turn-end in {names:?}");
+        assert!(
+            names.contains(&"claude:message"),
+            "missing claude:message in {names:?}"
+        );
+        assert!(
+            names.contains(&"claude:turn-end"),
+            "missing claude:turn-end in {names:?}"
+        );
         // Payload sanity: message event includes our session id.
         let msg_event = events.iter().find(|(n, _)| n == "claude:message").unwrap();
         assert_eq!(msg_event.1["sessionId"], "t-1");
@@ -1046,7 +1182,12 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() };
+        let cfg = SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        };
         let state = SidecarState::new();
         let timeout = Duration::from_secs(5);
         let sid = "rt-state-1";
@@ -1055,25 +1196,67 @@ mod tests {
             "sessionId": sid, "options": { "cwd": "/x", "model": "claude-sonnet-4-6", "permissionMode": "acceptEdits" }
         }), timeout).expect("startSession");
         // setters return true.
-        let r = state.call(&cfg, "claude.setAutoContinue", json!({
-            "sessionId": sid, "opts": { "enabled": true, "max": 7, "prompt": "go on" }
-        }), timeout).expect("setAutoContinue");
+        let r = state
+            .call(
+                &cfg,
+                "claude.setAutoContinue",
+                json!({
+                    "sessionId": sid, "opts": { "enabled": true, "max": 7, "prompt": "go on" }
+                }),
+                timeout,
+            )
+            .expect("setAutoContinue");
         assert_eq!(r, Value::Bool(true));
         // getters reflect the writes.
-        let ac = state.call(&cfg, "claude.getAutoContinue", json!({"sessionId": sid}), timeout).expect("getAutoContinue");
+        let ac = state
+            .call(
+                &cfg,
+                "claude.getAutoContinue",
+                json!({"sessionId": sid}),
+                timeout,
+            )
+            .expect("getAutoContinue");
         assert_eq!(ac["enabled"], true);
         assert_eq!(ac["max"], 7);
         assert_eq!(ac["used"], 0);
         assert_eq!(ac["prompt"], "go on");
         // permissionMode change.
-        state.call(&cfg, "claude.setPermissionMode", json!({"sessionId": sid, "mode": "plan"}), timeout).expect("setPermissionMode");
-        let meta = state.call(&cfg, "claude.getSessionMeta", json!({"sessionId": sid}), timeout).expect("meta");
+        state
+            .call(
+                &cfg,
+                "claude.setPermissionMode",
+                json!({"sessionId": sid, "mode": "plan"}),
+                timeout,
+            )
+            .expect("setPermissionMode");
+        let meta = state
+            .call(
+                &cfg,
+                "claude.getSessionMeta",
+                json!({"sessionId": sid}),
+                timeout,
+            )
+            .expect("meta");
         assert_eq!(meta["permissionMode"], "plan");
         assert_eq!(meta["model"], "claude-sonnet-4-6");
         // reset drops the entry.
-        let reset = state.call(&cfg, "claude.resetSession", json!({"sessionId": sid}), timeout).expect("reset");
+        let reset = state
+            .call(
+                &cfg,
+                "claude.resetSession",
+                json!({"sessionId": sid}),
+                timeout,
+            )
+            .expect("reset");
         assert_eq!(reset, Value::Bool(true));
-        let after = state.call(&cfg, "claude.getSessionState", json!({"sessionId": sid}), timeout).expect("getSessionState");
+        let after = state
+            .call(
+                &cfg,
+                "claude.getSessionState",
+                json!({"sessionId": sid}),
+                timeout,
+            )
+            .expect("getSessionState");
         assert!(after.is_null());
         state.reset();
     }
@@ -1089,16 +1272,25 @@ mod tests {
             eprintln!("skipped: missing {}", script.display());
             return;
         }
-        let cfg = Arc::new(SpawnConfig { node_path, script_path: script, data_dir: None, extra_env: Vec::new() });
+        let cfg = Arc::new(SpawnConfig {
+            node_path,
+            script_path: script,
+            data_dir: None,
+            extra_env: Vec::new(),
+        });
         let state = Arc::new(SidecarState::new());
         // Warm the bridge so all threads share the same child.
-        state.call(&cfg, "ping", Value::Null, Duration::from_secs(5)).unwrap();
+        state
+            .call(&cfg, "ping", Value::Null, Duration::from_secs(5))
+            .unwrap();
         let mut joins = Vec::new();
         for i in 0..8u64 {
             let s = Arc::clone(&state);
             let c = Arc::clone(&cfg);
             joins.push(std::thread::spawn(move || {
-                let r = s.call(&c, "ping", json!({"i": i}), Duration::from_secs(5)).expect("ping");
+                let r = s
+                    .call(&c, "ping", json!({"i": i}), Duration::from_secs(5))
+                    .expect("ping");
                 assert_eq!(r["echo"]["i"], i);
             }));
         }

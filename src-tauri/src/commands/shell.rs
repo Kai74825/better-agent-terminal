@@ -15,7 +15,9 @@ pub struct CommandError {
 
 impl<E: std::fmt::Display> From<E> for CommandError {
     fn from(value: E) -> Self {
-        Self { message: value.to_string() }
+        Self {
+            message: value.to_string(),
+        }
     }
 }
 

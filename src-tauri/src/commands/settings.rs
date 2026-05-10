@@ -37,7 +37,9 @@ pub struct CommandError {
 
 impl From<SettingsError> for CommandError {
     fn from(value: SettingsError) -> Self {
-        Self { message: value.to_string() }
+        Self {
+            message: value.to_string(),
+        }
     }
 }
 
@@ -93,7 +95,11 @@ fn posix_auto_shell(exists: &impl Fn(&str) -> bool) -> String {
             return shell;
         }
     }
-    if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() }
+    if cfg!(target_os = "macos") {
+        "/bin/zsh".into()
+    } else {
+        "/bin/bash".into()
+    }
 }
 
 fn windows_localappdata_pwsh() -> Option<String> {
@@ -111,9 +117,13 @@ pub fn resolve_shell_path<F: Fn(&str) -> bool>(
             "auto" => posix_auto_shell(exists),
             "zsh" => "/bin/zsh".into(),
             "bash" => {
-                if exists("/opt/homebrew/bin/bash") { "/opt/homebrew/bin/bash".into() }
-                else if exists("/usr/local/bin/bash") { "/usr/local/bin/bash".into() }
-                else { "/bin/bash".into() }
+                if exists("/opt/homebrew/bin/bash") {
+                    "/opt/homebrew/bin/bash".into()
+                } else if exists("/usr/local/bin/bash") {
+                    "/usr/local/bin/bash".into()
+                } else {
+                    "/bin/bash".into()
+                }
             }
             "sh" => "/bin/sh".into(),
             "pwsh" | "powershell" | "cmd" => posix_auto_shell(exists),
@@ -125,13 +135,19 @@ pub fn resolve_shell_path<F: Fn(&str) -> bool>(
         "C:\\Program Files\\PowerShell\\7\\pwsh.exe".into(),
         "C:\\Program Files (x86)\\PowerShell\\7\\pwsh.exe".into(),
     ];
-    if let Some(p) = windows_localappdata_pwsh() { pwsh_paths.push(p); }
+    if let Some(p) = windows_localappdata_pwsh() {
+        pwsh_paths.push(p);
+    }
 
     if shell_type == "auto" || shell_type == "pwsh" {
         for p in &pwsh_paths {
-            if exists(p) { return p.clone(); }
+            if exists(p) {
+                return p.clone();
+            }
         }
-        if shell_type == "pwsh" { return "pwsh.exe".into(); }
+        if shell_type == "pwsh" {
+            return "pwsh.exe".into();
+        }
         // auto -> powershell.exe fallback
         return "powershell.exe".into();
     }
@@ -155,7 +171,10 @@ pub fn settings_get_shell_path(shell_type: String) -> String {
     }
     let exists = |s: &str| Path::new(s).exists();
     let resolved = resolve_shell_path(&shell_type, TARGET_OS, &exists);
-    shell_path_cache().lock().unwrap().insert(shell_type, resolved.clone());
+    shell_path_cache()
+        .lock()
+        .unwrap()
+        .insert(shell_type, resolved.clone());
     resolved
 }
 
@@ -190,25 +209,43 @@ pub struct CxDetectionResult {
 }
 
 fn read_cx_settings(app: &tauri::AppHandle) -> CxSettings {
-    let Ok(p) = settings_path(app) else { return CxSettings::default() };
-    let Ok(text) = fs::read_to_string(&p) else { return CxSettings::default() };
+    let Ok(p) = settings_path(app) else {
+        return CxSettings::default();
+    };
+    let Ok(text) = fs::read_to_string(&p) else {
+        return CxSettings::default();
+    };
     serde_json::from_str::<CxSettings>(&text).unwrap_or_default()
 }
 
 fn cx_resolve_from_path() -> Option<String> {
     use std::process::Command;
-    let cmd = if cfg!(target_os = "windows") { "where.exe" } else { "which" };
+    let cmd = if cfg!(target_os = "windows") {
+        "where.exe"
+    } else {
+        "which"
+    };
     let output = Command::new(cmd).arg("cx").output().ok()?;
-    if !output.status.success() { return None; }
+    if !output.status.success() {
+        return None;
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().map(|l| l.trim()).find(|l| !l.is_empty()).map(|s| s.to_string())
+    stdout
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .map(|s| s.to_string())
 }
 
 fn cx_resolve_configured(configured: Option<&str>) -> Option<String> {
     let trimmed = configured.map(|s| s.trim()).unwrap_or("");
-    if trimmed.is_empty() { return cx_resolve_from_path(); }
+    if trimmed.is_empty() {
+        return cx_resolve_from_path();
+    }
     let pb = PathBuf::from(trimmed);
-    if pb.is_absolute() { return Some(trimmed.to_string()); }
+    if pb.is_absolute() {
+        return Some(trimmed.to_string());
+    }
     if trimmed.contains('/') || trimmed.contains('\\') {
         // Relative path with separators — caller probably expects
         // resolution relative to cwd. We don't know which cwd, so pass
@@ -222,19 +259,27 @@ fn cx_resolve_configured(configured: Option<&str>) -> Option<String> {
 
 fn cx_run_version(binary: &str) -> Result<String, String> {
     use std::process::Command;
-    let output = Command::new(binary).arg("--version").output()
+    let output = Command::new(binary)
+        .arg("--version")
+        .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!("cx --version exited {}", output.status));
     }
     let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    Ok(if trimmed.is_empty() { "cx".to_string() } else { trimmed })
+    Ok(if trimmed.is_empty() {
+        "cx".to_string()
+    } else {
+        trimmed
+    })
 }
 
 #[tauri::command]
 pub fn settings_detect_cx(app: tauri::AppHandle) -> Result<CxDetectionResult, CommandError> {
     let settings = read_cx_settings(&app);
-    let dir = app.path().app_data_dir()
+    let dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| SettingsError::AppDataDir(e.to_string()))?;
     let cache_dir = dir.join("cx-cache").to_string_lossy().to_string();
     let enabled = settings.enabled;
@@ -296,15 +341,24 @@ mod tests {
         assert_eq!(resolve_shell_path("bash", "unix", &none), "/bin/bash");
         // bash prefers /opt/homebrew when present.
         let homebrew = exists_set(&["/opt/homebrew/bin/bash"]);
-        assert_eq!(resolve_shell_path("bash", "unix", &homebrew), "/opt/homebrew/bin/bash");
+        assert_eq!(
+            resolve_shell_path("bash", "unix", &homebrew),
+            "/opt/homebrew/bin/bash"
+        );
         let usrlocal = exists_set(&["/usr/local/bin/bash"]);
-        assert_eq!(resolve_shell_path("bash", "unix", &usrlocal), "/usr/local/bin/bash");
+        assert_eq!(
+            resolve_shell_path("bash", "unix", &usrlocal),
+            "/usr/local/bin/bash"
+        );
     }
 
     #[test]
     fn unknown_shell_is_returned_verbatim() {
         let none = exists_set(&[]);
-        assert_eq!(resolve_shell_path("/custom/shell", "unix", &none), "/custom/shell");
+        assert_eq!(
+            resolve_shell_path("/custom/shell", "unix", &none),
+            "/custom/shell"
+        );
         assert_eq!(resolve_shell_path("fish", "unix", &none), "fish");
     }
 
@@ -320,7 +374,10 @@ mod tests {
     #[test]
     fn windows_auto_falls_back_to_powershell_exe() {
         let none = exists_set(&[]);
-        assert_eq!(resolve_shell_path("auto", "windows", &none), "powershell.exe");
+        assert_eq!(
+            resolve_shell_path("auto", "windows", &none),
+            "powershell.exe"
+        );
     }
 
     #[test]
@@ -333,7 +390,10 @@ mod tests {
     fn windows_cmd_and_powershell_are_handled() {
         let none = exists_set(&[]);
         assert_eq!(resolve_shell_path("cmd", "windows", &none), "cmd.exe");
-        assert_eq!(resolve_shell_path("powershell", "windows", &none), "powershell.exe");
+        assert_eq!(
+            resolve_shell_path("powershell", "windows", &none),
+            "powershell.exe"
+        );
     }
 
     #[test]
@@ -342,14 +402,24 @@ mod tests {
         // We can't reliably trigger the PATH branch here because CI hosts may
         // genuinely have `cx` installed — but configured strings always
         // pass through.
-        let abs = if cfg!(target_os = "windows") { "C:\\bin\\cx.exe" } else { "/usr/bin/cx" };
+        let abs = if cfg!(target_os = "windows") {
+            "C:\\bin\\cx.exe"
+        } else {
+            "/usr/bin/cx"
+        };
         assert_eq!(cx_resolve_configured(Some(abs)), Some(abs.into()));
         // Relative with separator → returned as-is for the OS to resolve.
-        assert_eq!(cx_resolve_configured(Some("./tools/cx")), Some("./tools/cx".into()));
+        assert_eq!(
+            cx_resolve_configured(Some("./tools/cx")),
+            Some("./tools/cx".into())
+        );
         // Bare token → returned as-is; OS PATH lookup happens at exec time.
         assert_eq!(cx_resolve_configured(Some("cx")), Some("cx".into()));
         // Whitespace gets trimmed; a non-empty trimmed path is honored.
-        assert_eq!(cx_resolve_configured(Some("  /opt/cx  ")), Some("/opt/cx".into()));
+        assert_eq!(
+            cx_resolve_configured(Some("  /opt/cx  ")),
+            Some("/opt/cx".into())
+        );
     }
 
     #[test]
@@ -362,14 +432,16 @@ mod tests {
 
         let full: CxSettings = serde_json::from_str(
             r#"{"cxSemanticNavigationEnabled":true,"cxBinaryPath":"/opt/cx"}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(full.enabled, true);
         assert_eq!(full.binary_path.as_deref(), Some("/opt/cx"));
 
         // Other settings keys must not break parsing.
         let mixed: CxSettings = serde_json::from_str(
             r#"{"theme":"dark","cxSemanticNavigationEnabled":false,"unrelated":42}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(mixed.enabled, false);
     }
 

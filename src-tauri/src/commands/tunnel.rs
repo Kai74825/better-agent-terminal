@@ -1,7 +1,7 @@
 // tunnel.* — single read-only method (getConnection) forwarded to the sidecar.
 // Stubbed; real impl lands with Phase 3.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde_json::Value;
 use std::time::Duration;
 use tauri::{AppHandle, State};
@@ -15,5 +15,11 @@ pub fn tunnel_get_connection(
 ) -> Result<Value, BridgeError> {
     let cfg = resolve_spawn_config(&app)?;
     let sink = app_handle_emit_sink(app.clone());
-    state.call_with_emit(&cfg, Some(sink), "tunnel.getConnection", Value::Null, DEFAULT_TIMEOUT)
+    state.call_with_emit(
+        &cfg,
+        Some(sink),
+        "tunnel.getConnection",
+        Value::Null,
+        DEFAULT_TIMEOUT,
+    )
 }

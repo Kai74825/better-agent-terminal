@@ -7,8 +7,8 @@
 // Electron. Sidecar uses Node's built-in fetch so we don't pay for a
 // Rust HTTP client / TLS stack here.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
-use serde_json::{Value, json};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use serde_json::{json, Value};
 use std::time::Duration;
 
 #[tauri::command]

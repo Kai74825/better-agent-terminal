@@ -34,19 +34,28 @@ pub fn mime_for_extension(ext: &str) -> &'static str {
 pub async fn image_read_as_data_url(path: String) -> Result<String, CommandError> {
     let abs = match std::path::absolute(&path) {
         Ok(p) => p,
-        Err(e) => return Err(CommandError { message: e.to_string() }),
+        Err(e) => {
+            return Err(CommandError {
+                message: e.to_string(),
+            })
+        }
     };
     if is_sensitive_path(&abs.to_string_lossy()) {
-        return Err(CommandError { message: "Access denied (sensitive path)".into() });
+        return Err(CommandError {
+            message: "Access denied (sensitive path)".into(),
+        });
     }
-    let metadata = fs::metadata(&abs)
-        .map_err(|e| CommandError { message: e.to_string() })?;
+    let metadata = fs::metadata(&abs).map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     if metadata.len() > MAX_IMAGE_BYTES {
         return Err(CommandError {
             message: format!("Image too large ({}KB)", metadata.len() / 1024),
         });
     }
-    let bytes = fs::read(&abs).map_err(|e| CommandError { message: e.to_string() })?;
+    let bytes = fs::read(&abs).map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     let ext = PathBuf::from(&abs)
         .extension()
         .and_then(|e| e.to_str())
@@ -87,10 +96,9 @@ mod tests {
             let mut f = fs::File::create(&path).unwrap();
             f.write_all(&bytes).unwrap();
         }
-        let url = tauri::async_runtime::block_on(image_read_as_data_url(
-            path.to_string_lossy().into(),
-        ))
-        .unwrap();
+        let url =
+            tauri::async_runtime::block_on(image_read_as_data_url(path.to_string_lossy().into()))
+                .unwrap();
         assert!(url.starts_with("data:image/png;base64,"));
         // Round-trip check: payload after the prefix should decode back to
         // the source bytes.
@@ -113,11 +121,10 @@ mod tests {
             }
             f.write_all(&[0u8]).unwrap();
         }
-        let err = tauri::async_runtime::block_on(image_read_as_data_url(
-            path.to_string_lossy().into(),
-        ))
-        .err()
-        .unwrap();
+        let err =
+            tauri::async_runtime::block_on(image_read_as_data_url(path.to_string_lossy().into()))
+                .err()
+                .unwrap();
         assert!(err.message.starts_with("Image too large"));
         let _ = fs::remove_file(path);
     }

@@ -26,7 +26,9 @@ pub struct CommandError {
 
 impl<E: std::fmt::Display> From<E> for CommandError {
     fn from(e: E) -> Self {
-        Self { message: e.to_string() }
+        Self {
+            message: e.to_string(),
+        }
     }
 }
 
@@ -36,7 +38,9 @@ pub fn worker_buffer_init(
     panel_id: String,
 ) -> Result<bool, CommandError> {
     if panel_id.is_empty() {
-        return Err(CommandError { message: "panel_id required".into() });
+        return Err(CommandError {
+            message: "panel_id required".into(),
+        });
     }
     let mut map = state.inner.lock().expect("worker_buffer lock");
     map.insert(panel_id, String::new());
@@ -50,7 +54,9 @@ pub fn worker_buffer_append(
     lines: String,
 ) -> Result<bool, CommandError> {
     if panel_id.is_empty() {
-        return Err(CommandError { message: "panel_id required".into() });
+        return Err(CommandError {
+            message: "panel_id required".into(),
+        });
     }
     let mut map = state.inner.lock().expect("worker_buffer lock");
     let buf = map.entry(panel_id).or_default();

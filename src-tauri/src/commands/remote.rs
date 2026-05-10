@@ -3,8 +3,8 @@
 // All 8 methods stubbed in the sidecar today; real implementations land
 // in Phase 3 alongside the mDNS + TLS pin work.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
-use serde_json::{Value, json};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -36,7 +36,10 @@ pub fn remote_start_server(
 }
 
 #[tauri::command]
-pub fn remote_stop_server(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, BridgeError> {
+pub fn remote_stop_server(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
     call(&app, &state, "remote.stopServer", Value::Null)
 }
 
@@ -67,7 +70,10 @@ pub fn remote_connect(
 }
 
 #[tauri::command]
-pub fn remote_disconnect(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, BridgeError> {
+pub fn remote_disconnect(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
     call(&app, &state, "remote.disconnect", Value::Null)
 }
 

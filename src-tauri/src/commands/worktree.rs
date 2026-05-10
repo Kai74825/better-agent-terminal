@@ -5,8 +5,8 @@
 // electron/worktree-manager.ts and ports over with the rest of the
 // agent runtime.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
-use serde_json::{Value, json};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -30,7 +30,12 @@ pub fn worktree_create(
     session_id: String,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "worktree.create", json!({ "sessionId": session_id, "cwd": cwd }))
+    call(
+        &app,
+        &state,
+        "worktree.create",
+        json!({ "sessionId": session_id, "cwd": cwd }),
+    )
 }
 
 #[tauri::command]
@@ -54,7 +59,12 @@ pub fn worktree_status(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "worktree.status", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "worktree.status",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]

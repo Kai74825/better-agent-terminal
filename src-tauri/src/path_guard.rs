@@ -113,11 +113,17 @@ fn starts_with_denied(absolute: &Path, denied: &Path) -> bool {
 }
 
 fn is_private_key_filename(absolute: &Path) -> bool {
-    let Some(file_name) = absolute.file_name().and_then(|n| n.to_str()) else { return false };
+    let Some(file_name) = absolute.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
     let parent_str = absolute.to_string_lossy();
     // ssh-style identity keys (id_rsa, id_ed25519.pub, ...) under .ssh/
     let id_re = ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"];
-    let in_ssh_dir = parent_str.contains(&format!("{}.ssh{}", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR));
+    let in_ssh_dir = parent_str.contains(&format!(
+        "{}.ssh{}",
+        std::path::MAIN_SEPARATOR,
+        std::path::MAIN_SEPARATOR
+    ));
     if in_ssh_dir {
         for stem in id_re {
             if file_name == stem || file_name == &format!("{}.pub", stem) {
@@ -128,7 +134,11 @@ fn is_private_key_filename(absolute: &Path) -> bool {
     let lower = file_name.to_ascii_lowercase();
     if lower.ends_with(".pem")
         && (in_ssh_dir
-            || parent_str.contains(&format!("{}keys{}", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR)))
+            || parent_str.contains(&format!(
+                "{}keys{}",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            )))
     {
         return true;
     }

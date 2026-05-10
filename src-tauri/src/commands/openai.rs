@@ -5,8 +5,8 @@
 // sidecar today; real impls land when the OpenAI agent manager moves
 // over.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
-use serde_json::{Value, json};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -37,7 +37,12 @@ pub fn openai_set_api_key(
     state: State<'_, SidecarState>,
     api_key: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "openai.setApiKey", json!({ "apiKey": api_key }))
+    call(
+        &app,
+        &state,
+        "openai.setApiKey",
+        json!({ "apiKey": api_key }),
+    )
 }
 
 #[tauri::command]
@@ -63,5 +68,10 @@ pub fn openai_compact_now(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "openai.compactNow", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "openai.compactNow",
+        json!({ "sessionId": session_id }),
+    )
 }

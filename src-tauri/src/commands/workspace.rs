@@ -36,7 +36,9 @@ pub struct CommandError {
 
 impl From<WorkspaceError> for CommandError {
     fn from(value: WorkspaceError) -> Self {
-        Self { message: value.to_string() }
+        Self {
+            message: value.to_string(),
+        }
     }
 }
 

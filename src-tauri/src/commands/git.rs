@@ -96,14 +96,18 @@ pub fn parse_github_url(remote: &str) -> Option<String> {
     // git@github.com:owner/repo(.git)?
     if let Some(rest) = s.strip_prefix("git@github.com:") {
         let owner_repo = rest.strip_suffix(".git").unwrap_or(rest);
-        if owner_repo.is_empty() { return None; }
+        if owner_repo.is_empty() {
+            return None;
+        }
         return Some(format!("https://github.com/{owner_repo}"));
     }
     // https?://github.com/owner/repo(.git)?
     for prefix in ["https://github.com/", "http://github.com/"] {
         if let Some(rest) = s.strip_prefix(prefix) {
             let owner_repo = rest.strip_suffix(".git").unwrap_or(rest);
-            if owner_repo.is_empty() { return None; }
+            if owner_repo.is_empty() {
+                return None;
+            }
             return Some(format!("https://github.com/{owner_repo}"));
         }
     }
@@ -149,8 +153,16 @@ pub fn parse_diff_files(raw: &str) -> Vec<GitFileEntry> {
                     file: line[tab_idx + 1..].to_string(),
                 }
             } else {
-                let status = line.chars().next().map(|c| c.to_string()).unwrap_or_default();
-                let file = if line.len() > 2 { line[2..].to_string() } else { String::new() };
+                let status = line
+                    .chars()
+                    .next()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                let file = if line.len() > 2 {
+                    line[2..].to_string()
+                } else {
+                    String::new()
+                };
                 GitFileEntry { status, file }
             }
         })
@@ -182,7 +194,10 @@ pub fn parse_status(raw: &str) -> Vec<GitFileEntry> {
 // Build the argv for `git diff` based on optional commit hash + path.
 // "working" is a magic string the renderer uses to mean "uncommitted
 // changes vs HEAD" — we map that to `git diff HEAD`.
-pub fn build_diff_args<'a>(commit_hash: Option<&'a str>, file_path: Option<&'a str>) -> Vec<String> {
+pub fn build_diff_args<'a>(
+    commit_hash: Option<&'a str>,
+    file_path: Option<&'a str>,
+) -> Vec<String> {
     let mut args: Vec<String> = vec!["diff".into()];
     match commit_hash {
         Some(hash) if !hash.is_empty() && hash != "working" => {
@@ -202,7 +217,11 @@ pub fn build_diff_args<'a>(commit_hash: Option<&'a str>, file_path: Option<&'a s
 pub fn build_diff_files_args<'a>(commit_hash: Option<&'a str>) -> Vec<String> {
     match commit_hash {
         Some(hash) if !hash.is_empty() && hash != "working" => {
-            vec!["diff".into(), "--name-status".into(), format!("{hash}~1..{hash}")]
+            vec![
+                "diff".into(),
+                "--name-status".into(),
+                format!("{hash}~1..{hash}"),
+            ]
         }
         _ => vec!["diff".into(), "--name-status".into(), "HEAD".into()],
     }
@@ -215,15 +234,27 @@ pub fn clamp_log_count(count: Option<i64>) -> u32 {
 
 #[tauri::command]
 pub async fn git_get_github_url(folder_path: String) -> Option<String> {
-    let raw = run_git(&folder_path, &["remote", "get-url", "origin"], Duration::from_secs(3))?;
+    let raw = run_git(
+        &folder_path,
+        &["remote", "get-url", "origin"],
+        Duration::from_secs(3),
+    )?;
     parse_github_url(raw.trim())
 }
 
 #[tauri::command]
 pub async fn git_get_branch(cwd: String) -> Option<String> {
-    let raw = run_git(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3))?;
+    let raw = run_git(
+        &cwd,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        Duration::from_secs(3),
+    )?;
     let trimmed = raw.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[tauri::command]
@@ -249,10 +280,7 @@ pub async fn git_get_diff(
 }
 
 #[tauri::command]
-pub async fn git_get_diff_files(
-    cwd: String,
-    commit_hash: Option<String>,
-) -> Vec<GitFileEntry> {
+pub async fn git_get_diff_files(cwd: String, commit_hash: Option<String>) -> Vec<GitFileEntry> {
     let argv = build_diff_files_args(commit_hash.as_deref());
     let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     match run_git(&cwd, &argv_refs, Duration::from_secs(5)) {
@@ -263,14 +291,26 @@ pub async fn git_get_diff_files(
 
 #[tauri::command]
 pub async fn git_get_root(cwd: String) -> Option<String> {
-    let raw = run_git(&cwd, &["rev-parse", "--show-toplevel"], Duration::from_secs(5))?;
+    let raw = run_git(
+        &cwd,
+        &["rev-parse", "--show-toplevel"],
+        Duration::from_secs(5),
+    )?;
     let trimmed = raw.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[tauri::command]
 pub async fn git_get_status(cwd: String) -> Vec<GitFileEntry> {
-    match run_git(&cwd, &["status", "--porcelain", "-uall"], Duration::from_secs(5)) {
+    match run_git(
+        &cwd,
+        &["status", "--porcelain", "-uall"],
+        Duration::from_secs(5),
+    ) {
         Some(raw) => parse_status(&raw),
         None => Vec::new(),
     }
@@ -345,8 +385,20 @@ mod tests {
         let raw = "M\tsrc/foo.rs\nA\tsrc/bar.rs\nD\told/baz.rs";
         let entries = parse_diff_files(raw);
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0], GitFileEntry { status: "M".into(), file: "src/foo.rs".into() });
-        assert_eq!(entries[2], GitFileEntry { status: "D".into(), file: "old/baz.rs".into() });
+        assert_eq!(
+            entries[0],
+            GitFileEntry {
+                status: "M".into(),
+                file: "src/foo.rs".into()
+            }
+        );
+        assert_eq!(
+            entries[2],
+            GitFileEntry {
+                status: "D".into(),
+                file: "old/baz.rs".into()
+            }
+        );
     }
 
     #[test]
@@ -365,9 +417,27 @@ mod tests {
         let raw = " M src/foo.rs\n?? new.txt\nMM both.rs\n";
         let entries = parse_status(raw);
         assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0], GitFileEntry { status: "M".into(), file: "src/foo.rs".into() });
-        assert_eq!(entries[1], GitFileEntry { status: "??".into(), file: "new.txt".into() });
-        assert_eq!(entries[2], GitFileEntry { status: "MM".into(), file: "both.rs".into() });
+        assert_eq!(
+            entries[0],
+            GitFileEntry {
+                status: "M".into(),
+                file: "src/foo.rs".into()
+            }
+        );
+        assert_eq!(
+            entries[1],
+            GitFileEntry {
+                status: "??".into(),
+                file: "new.txt".into()
+            }
+        );
+        assert_eq!(
+            entries[2],
+            GitFileEntry {
+                status: "MM".into(),
+                file: "both.rs".into()
+            }
+        );
     }
 
     #[test]
@@ -378,7 +448,10 @@ mod tests {
 
     #[test]
     fn build_diff_args_default() {
-        assert_eq!(build_diff_args(None, None), vec!["diff".to_string(), "HEAD".into()]);
+        assert_eq!(
+            build_diff_args(None, None),
+            vec!["diff".to_string(), "HEAD".into()]
+        );
     }
 
     #[test]
@@ -419,7 +492,11 @@ mod tests {
         );
         assert_eq!(
             build_diff_files_args(Some("abc")),
-            vec!["diff".to_string(), "--name-status".into(), "abc~1..abc".into()],
+            vec![
+                "diff".to_string(),
+                "--name-status".into(),
+                "abc~1..abc".into()
+            ],
         );
         assert_eq!(
             build_diff_files_args(Some("working")),
@@ -439,13 +516,11 @@ mod tests {
     #[test]
     fn run_git_rejects_invalid_cwd() {
         assert!(run_git("", &["status"], Duration::from_secs(1)).is_none());
-        assert!(
-            run_git(
-                "C:/this/path/should/never/exist/abc123",
-                &["status"],
-                Duration::from_secs(1),
-            )
-            .is_none()
-        );
+        assert!(run_git(
+            "C:/this/path/should/never/exist/abc123",
+            &["status"],
+            Duration::from_secs(1),
+        )
+        .is_none());
     }
 }

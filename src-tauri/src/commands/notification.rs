@@ -100,10 +100,7 @@ pub fn notification_mark_read(
 }
 
 #[tauri::command]
-pub fn notification_mark_all_read(
-    app: AppHandle,
-    state: State<'_, NotificationState>,
-) -> bool {
+pub fn notification_mark_all_read(app: AppHandle, state: State<'_, NotificationState>) -> bool {
     let mut changed = false;
     {
         let mut entries = state.lock();
@@ -121,10 +118,7 @@ pub fn notification_mark_all_read(
 }
 
 #[tauri::command]
-pub fn notification_mark_window_read(
-    app: AppHandle,
-    state: State<'_, NotificationState>,
-) -> bool {
+pub fn notification_mark_window_read(app: AppHandle, state: State<'_, NotificationState>) -> bool {
     // Single-window MVP — same effect as markAllRead. Once we have
     // multiple windows we'll resolve the calling window's id and
     // narrow this filter.
@@ -132,10 +126,7 @@ pub fn notification_mark_window_read(
 }
 
 #[tauri::command]
-pub fn notification_clear(
-    app: AppHandle,
-    state: State<'_, NotificationState>,
-) -> bool {
+pub fn notification_clear(app: AppHandle, state: State<'_, NotificationState>) -> bool {
     let cleared = {
         let mut entries = state.lock();
         if entries.is_empty() {
@@ -177,7 +168,10 @@ pub fn notification_focus_entry(
     let entries = state.lock();
     let entry = entries.iter().find(|e| e.id == id)?;
     let window_id = entry.window_id.clone()?;
-    Some(FocusResult { id: entry.id.clone(), window_id })
+    Some(FocusResult {
+        id: entry.id.clone(),
+        window_id,
+    })
 }
 
 // Internal helper — push the current entry list to all listeners.
@@ -208,7 +202,11 @@ pub fn add_entry(app: &AppHandle, state: &NotificationState, entry: Notification
 }
 
 pub fn normalize_workspace_key(cwd: &str) -> String {
-    let normalized = cwd.trim().replace('\\', "/").trim_end_matches('/').to_string();
+    let normalized = cwd
+        .trim()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string();
     let bytes = normalized.as_bytes();
     if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
         // Windows drive letter — case-insensitive comparison.
@@ -280,7 +278,10 @@ mod tests {
     fn raw_mark_read(state: &NotificationState, id: &str) -> bool {
         let mut entries = state.lock();
         match entries.iter_mut().find(|e| e.id == id) {
-            Some(e) if !e.read => { e.read = true; true }
+            Some(e) if !e.read => {
+                e.read = true;
+                true
+            }
             _ => false,
         }
     }
@@ -289,14 +290,22 @@ mod tests {
         let mut entries = state.lock();
         let mut changed = false;
         for e in entries.iter_mut() {
-            if !e.read { e.read = true; changed = true; }
+            if !e.read {
+                e.read = true;
+                changed = true;
+            }
         }
         changed
     }
 
     fn raw_clear(state: &NotificationState) -> bool {
         let mut entries = state.lock();
-        if entries.is_empty() { false } else { entries.clear(); true }
+        if entries.is_empty() {
+            false
+        } else {
+            entries.clear();
+            true
+        }
     }
 
     fn raw_add(state: &NotificationState, entry: NotificationEntry) {
@@ -304,7 +313,9 @@ mod tests {
         let key = normalize_workspace_key(&entry.cwd);
         entries.retain(|e| normalize_workspace_key(&e.cwd) != key);
         entries.insert(0, entry);
-        if entries.len() > MAX_ENTRIES { entries.truncate(MAX_ENTRIES); }
+        if entries.len() > MAX_ENTRIES {
+            entries.truncate(MAX_ENTRIES);
+        }
     }
 
     #[test]
@@ -384,7 +395,10 @@ mod tests {
         for e in entries.iter() {
             if !e.read {
                 if let Some(w) = &e.window_id {
-                    found = Some(FocusResult { id: e.id.clone(), window_id: w.clone() });
+                    found = Some(FocusResult {
+                        id: e.id.clone(),
+                        window_id: w.clone(),
+                    });
                     break;
                 }
             }

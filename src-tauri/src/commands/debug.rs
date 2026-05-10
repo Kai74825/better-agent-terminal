@@ -48,12 +48,18 @@ mod tests {
 
     #[test]
     fn strings_pass_through_untouched() {
-        assert_eq!(format_args(vec![json!("hello"), json!("world")]), "hello world");
+        assert_eq!(
+            format_args(vec![json!("hello"), json!("world")]),
+            "hello world"
+        );
     }
 
     #[test]
     fn non_strings_serialize_as_json_text() {
-        assert_eq!(format_args(vec![json!(42), json!({"a": 1})]), r#"42 {"a":1}"#);
+        assert_eq!(
+            format_args(vec![json!(42), json!({"a": 1})]),
+            r#"42 {"a":1}"#
+        );
         assert_eq!(format_args(vec![json!([1, 2, 3])]), "[1,2,3]");
         assert_eq!(format_args(vec![json!(null), json!(true)]), "null true");
     }

@@ -69,7 +69,9 @@ pub struct SnippetData {
     pub next_id: i64,
 }
 
-fn default_next_id() -> i64 { 1 }
+fn default_next_id() -> i64 {
+    1
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,7 +154,9 @@ pub fn load_from(path: &Path) -> SnippetData {
         Ok(raw) => match serde_json::from_str::<SnippetData>(&raw) {
             Ok(mut data) => {
                 migrate(&mut data);
-                if data.next_id < 1 { data.next_id = 1; }
+                if data.next_id < 1 {
+                    data.next_id = 1;
+                }
                 data
             }
             Err(_) => SnippetData::default_with_next_id(),
@@ -163,7 +167,10 @@ pub fn load_from(path: &Path) -> SnippetData {
 
 impl SnippetData {
     fn default_with_next_id() -> Self {
-        Self { snippets: Vec::new(), next_id: 1 }
+        Self {
+            snippets: Vec::new(),
+            next_id: 1,
+        }
     }
 }
 
@@ -285,7 +292,9 @@ pub fn snippet_search(
 fn matches_query(s: &Snippet, term: &str) -> bool {
     s.title.to_lowercase().contains(term)
         || s.content.to_lowercase().contains(term)
-        || s.tags.as_deref().map_or(false, |t| t.to_lowercase().contains(term))
+        || s.tags
+            .as_deref()
+            .map_or(false, |t| t.to_lowercase().contains(term))
 }
 
 #[tauri::command]
@@ -319,8 +328,11 @@ pub fn snippet_get_categories(
     state: tauri::State<'_, SnippetState>,
 ) -> Vec<String> {
     with_data(&app, &state, false, |d| {
-        let set: BTreeSet<String> =
-            d.snippets.iter().filter_map(|s| s.category.clone()).collect();
+        let set: BTreeSet<String> = d
+            .snippets
+            .iter()
+            .filter_map(|s| s.category.clone())
+            .collect();
         set.into_iter().collect()
     })
 }
@@ -361,14 +373,30 @@ pub fn snippet_update(
 ) -> Option<Snippet> {
     with_data(&app, &state, true, |d| {
         let s = d.snippets.iter_mut().find(|s| s.id == id)?;
-        if let Some(v) = updates.title { s.title = v; }
-        if let Some(v) = updates.content { s.content = v; }
-        if let Some(v) = updates.format { s.format = v; }
-        if let Some(v) = updates.action { s.action = v; }
-        if let Some(v) = updates.category { s.category = Some(v); }
-        if let Some(v) = updates.tags { s.tags = Some(v); }
-        if let Some(v) = updates.workspace_id { s.workspace_id = Some(v); }
-        if let Some(v) = updates.is_favorite { s.is_favorite = v; }
+        if let Some(v) = updates.title {
+            s.title = v;
+        }
+        if let Some(v) = updates.content {
+            s.content = v;
+        }
+        if let Some(v) = updates.format {
+            s.format = v;
+        }
+        if let Some(v) = updates.action {
+            s.action = v;
+        }
+        if let Some(v) = updates.category {
+            s.category = Some(v);
+        }
+        if let Some(v) = updates.tags {
+            s.tags = Some(v);
+        }
+        if let Some(v) = updates.workspace_id {
+            s.workspace_id = Some(v);
+        }
+        if let Some(v) = updates.is_favorite {
+            s.is_favorite = v;
+        }
         s.updated_at = now_ms();
         Some(s.clone())
     })
@@ -423,7 +451,10 @@ mod tests {
 
     fn make_state(snips: Vec<Snippet>) -> Mutex<Option<SnippetData>> {
         let next_id = snips.iter().map(|s| s.id).max().unwrap_or(0) + 1;
-        Mutex::new(Some(SnippetData { snippets: snips, next_id }))
+        Mutex::new(Some(SnippetData {
+            snippets: snips,
+            next_id,
+        }))
     }
 
     #[test]
@@ -522,7 +553,10 @@ mod tests {
 
     #[test]
     fn delete_returns_true_only_when_id_matched() {
-        let inner = make_state(vec![snip(1, "a", None, false, 0), snip(2, "b", None, false, 0)]);
+        let inner = make_state(vec![
+            snip(1, "a", None, false, 0),
+            snip(2, "b", None, false, 0),
+        ]);
         let mut guard = inner.lock().unwrap();
         let d = guard.as_mut().unwrap();
         let before = d.snippets.len();
@@ -536,10 +570,8 @@ mod tests {
 
     #[test]
     fn load_from_missing_file_yields_empty_with_next_id_one() {
-        let path = std::env::temp_dir().join(format!(
-            "bat-snippet-test-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bat-snippet-test-{}.json", std::process::id()));
         let _ = fs::remove_file(&path);
         let data = load_from(&path);
         assert!(data.snippets.is_empty());
@@ -548,10 +580,8 @@ mod tests {
 
     #[test]
     fn load_from_corrupt_file_yields_empty() {
-        let path = std::env::temp_dir().join(format!(
-            "bat-snippet-corrupt-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bat-snippet-corrupt-{}.json", std::process::id()));
         fs::write(&path, "not valid json {").unwrap();
         let data = load_from(&path);
         assert!(data.snippets.is_empty());
@@ -561,10 +591,8 @@ mod tests {
 
     #[test]
     fn load_from_round_trip_with_camel_case_fields() {
-        let path = std::env::temp_dir().join(format!(
-            "bat-snippet-roundtrip-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bat-snippet-roundtrip-{}.json", std::process::id()));
         let raw = r#"{
           "snippets": [
             {
@@ -595,10 +623,8 @@ mod tests {
 
     #[test]
     fn write_atomic_round_trips() {
-        let path = std::env::temp_dir().join(format!(
-            "bat-snippet-write-{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("bat-snippet-write-{}.json", std::process::id()));
         let data = SnippetData {
             snippets: vec![snip(1, "x", Some("ws"), true, 99)],
             next_id: 2,

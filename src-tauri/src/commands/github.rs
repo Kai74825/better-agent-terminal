@@ -34,7 +34,10 @@ pub struct CliStatus {
 // (stdout_string, success_flag).
 fn run_gh(cwd: Option<&str>, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = Command::new("gh");
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(dir) = cwd {
         if dir.trim().is_empty() {
             return Err("cwd is empty".into());
@@ -44,7 +47,9 @@ fn run_gh(cwd: Option<&str>, args: &[&str], timeout: Duration) -> Result<String,
         }
         cmd.current_dir(dir);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn gh: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn gh: {e}"))?;
 
     let start = std::time::Instant::now();
     loop {
@@ -61,7 +66,9 @@ fn run_gh(cwd: Option<&str>, args: &[&str], timeout: Duration) -> Result<String,
             Err(e) => return Err(format!("wait failed: {e}")),
         }
     }
-    let output = child.wait_with_output().map_err(|e| format!("wait_with_output: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait_with_output: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let trimmed = stderr.trim();
@@ -93,22 +100,31 @@ fn json_or_error(result: Result<String, String>) -> Value {
 pub async fn github_check_cli() -> CliStatus {
     let installed = run_gh(None, &["--version"], CHECK_TIMEOUT).is_ok();
     if !installed {
-        return CliStatus { installed: false, authenticated: false };
+        return CliStatus {
+            installed: false,
+            authenticated: false,
+        };
     }
     // `gh auth status` exits non-zero whenever ANY configured
     // account has problems, even when the active one is fine.
     // `gh auth token` only validates the active account, which is
     // what we actually care about here.
     let authenticated = run_gh(None, &["auth", "token"], CHECK_TIMEOUT).is_ok();
-    CliStatus { installed: true, authenticated }
+    CliStatus {
+        installed: true,
+        authenticated,
+    }
 }
 
 #[tauri::command]
 pub async fn github_pr_list(cwd: String) -> Value {
     let args = [
-        "pr", "list",
-        "--json", "number,title,state,author,createdAt,updatedAt,labels,headRefName,isDraft",
-        "--limit", "50",
+        "pr",
+        "list",
+        "--json",
+        "number,title,state,author,createdAt,updatedAt,labels,headRefName,isDraft",
+        "--limit",
+        "50",
     ];
     json_or_error(run_gh(Some(&cwd), &args, READ_TIMEOUT))
 }
@@ -116,9 +132,12 @@ pub async fn github_pr_list(cwd: String) -> Value {
 #[tauri::command]
 pub async fn github_issue_list(cwd: String) -> Value {
     let args = [
-        "issue", "list",
-        "--json", "number,title,state,author,createdAt,updatedAt,labels",
-        "--limit", "50",
+        "issue",
+        "list",
+        "--json",
+        "number,title,state,author,createdAt,updatedAt,labels",
+        "--limit",
+        "50",
     ];
     json_or_error(run_gh(Some(&cwd), &args, READ_TIMEOUT))
 }
@@ -137,8 +156,11 @@ pub async fn github_pr_view(cwd: String, number: i64) -> Value {
 pub async fn github_issue_view(cwd: String, number: i64) -> Value {
     let n = number.to_string();
     let args = [
-        "issue", "view", &n,
-        "--json", "number,title,state,author,body,comments,createdAt,labels",
+        "issue",
+        "view",
+        &n,
+        "--json",
+        "number,title,state,author,body,comments,createdAt,labels",
     ];
     json_or_error(run_gh(Some(&cwd), &args, READ_TIMEOUT))
 }
@@ -193,7 +215,10 @@ mod tests {
         // The renderer reads `{installed, authenticated}` as
         // camelCase. Both fields are simple booleans, so serde's
         // default rename keeps the wire format intact.
-        let s = CliStatus { installed: true, authenticated: false };
+        let s = CliStatus {
+            installed: true,
+            authenticated: false,
+        };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"installed\":true"));
         assert!(json.contains("\"authenticated\":false"));

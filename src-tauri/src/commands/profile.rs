@@ -129,10 +129,7 @@ pub fn profile_get_active_ids() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn profile_create(
-    name: String,
-    _options: Option<CreateProfileOptions>,
-) -> ProfileEntry {
+pub fn profile_create(name: String, _options: Option<CreateProfileOptions>) -> ProfileEntry {
     // We accept the call so the ProfilePanel UI doesn't choke,
     // but only the default profile is real. Echo back a synthetic
     // entry that uses the supplied name; it won't persist across
@@ -172,18 +169,12 @@ pub fn profile_rename(_profile_id: String, _new_name: String) -> bool {
 }
 
 #[tauri::command]
-pub fn profile_update(
-    _profile_id: String,
-    _updates: Option<UpdateProfileOptions>,
-) -> bool {
+pub fn profile_update(_profile_id: String, _updates: Option<UpdateProfileOptions>) -> bool {
     false
 }
 
 #[tauri::command]
-pub fn profile_duplicate(
-    _profile_id: String,
-    _new_name: String,
-) -> Option<ProfileEntry> {
+pub fn profile_duplicate(_profile_id: String, _new_name: String) -> Option<ProfileEntry> {
     None
 }
 
@@ -231,7 +222,10 @@ mod tests {
 
     #[test]
     fn get_active_ids_always_default() {
-        assert_eq!(profile_get_active_ids(), vec![DEFAULT_PROFILE_ID.to_string()]);
+        assert_eq!(
+            profile_get_active_ids(),
+            vec![DEFAULT_PROFILE_ID.to_string()]
+        );
     }
 
     #[test]

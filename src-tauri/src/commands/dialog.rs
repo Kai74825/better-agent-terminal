@@ -41,7 +41,9 @@ pub async fn dialog_confirm(
             .blocking_show()
     })
     .await
-    .map_err(|e| CommandError { message: e.to_string() })?;
+    .map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     Ok(result)
 }
 
@@ -60,7 +62,9 @@ fn paths_to_strings(paths: Vec<tauri_plugin_dialog::FilePath>) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn dialog_select_folder(app: tauri::AppHandle) -> Result<Option<Vec<String>>, CommandError> {
+pub async fn dialog_select_folder(
+    app: tauri::AppHandle,
+) -> Result<Option<Vec<String>>, CommandError> {
     let app_clone = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut builder = app_clone.dialog().file();
@@ -70,7 +74,9 @@ pub async fn dialog_select_folder(app: tauri::AppHandle) -> Result<Option<Vec<St
         builder.blocking_pick_folders()
     })
     .await
-    .map_err(|e| CommandError { message: e.to_string() })?;
+    .map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     Ok(result.map(paths_to_strings))
 }
 
@@ -85,7 +91,9 @@ pub async fn dialog_select_files(app: tauri::AppHandle) -> Result<Vec<String>, C
         builder.blocking_pick_files()
     })
     .await
-    .map_err(|e| CommandError { message: e.to_string() })?;
+    .map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     Ok(result.map(paths_to_strings).unwrap_or_default())
 }
 
@@ -103,7 +111,9 @@ pub async fn dialog_select_images(app: tauri::AppHandle) -> Result<Vec<String>, 
         builder.blocking_pick_files()
     })
     .await
-    .map_err(|e| CommandError { message: e.to_string() })?;
+    .map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     Ok(result.map(paths_to_strings).unwrap_or_default())
 }
 

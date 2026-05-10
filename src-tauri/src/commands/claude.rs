@@ -15,8 +15,8 @@
 // find both `node` on PATH and the bundled sidecar script. Failures bubble
 // up as { message } strings to the renderer.
 
-use crate::sidecar::{BridgeError, SidecarState, app_handle_emit_sink, resolve_spawn_config};
-use serde_json::{Value, json};
+use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use serde_json::{json, Value};
 use std::time::Duration;
 use tauri::{AppHandle, State};
 
@@ -118,7 +118,12 @@ pub fn claude_stop_session(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.stopSession", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.stopSession",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -127,7 +132,12 @@ pub fn claude_abort_session(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.abortSession", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.abortSession",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -152,12 +162,18 @@ pub fn claude_stop_task(
 // --- account / auth ops ---------------------------------------------------
 
 #[tauri::command]
-pub fn claude_auth_login(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, BridgeError> {
+pub fn claude_auth_login(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
     call(&app, &state, "claude.authLogin", Value::Null)
 }
 
 #[tauri::command]
-pub fn claude_auth_logout(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, BridgeError> {
+pub fn claude_auth_logout(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
     call(&app, &state, "claude.authLogout", Value::Null)
 }
 
@@ -183,7 +199,12 @@ pub fn claude_account_switch(
     state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountSwitch", json!({ "accountId": account_id }))
+    call(
+        &app,
+        &state,
+        "claude.accountSwitch",
+        json!({ "accountId": account_id }),
+    )
 }
 
 #[tauri::command]
@@ -192,7 +213,12 @@ pub fn claude_account_remove(
     state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountRemove", json!({ "accountId": account_id }))
+    call(
+        &app,
+        &state,
+        "claude.accountRemove",
+        json!({ "accountId": account_id }),
+    )
 }
 
 #[tauri::command]
@@ -206,7 +232,10 @@ pub fn claude_account_mark_warning_shown(
 // --- read-only metadata ---------------------------------------------------
 
 #[tauri::command]
-pub fn claude_get_cli_path(app: AppHandle, state: State<'_, SidecarState>) -> Result<Value, BridgeError> {
+pub fn claude_get_cli_path(
+    app: AppHandle,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
     call(&app, &state, "claude.getCliPath", Value::Null)
 }
 
@@ -225,7 +254,12 @@ pub fn claude_get_supported_models(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getSupportedModels", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getSupportedModels",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -234,7 +268,12 @@ pub fn claude_get_supported_commands(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getSupportedCommands", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getSupportedCommands",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -243,7 +282,12 @@ pub fn claude_get_supported_agents(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getSupportedAgents", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getSupportedAgents",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -252,7 +296,12 @@ pub fn claude_get_account_info(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getAccountInfo", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getAccountInfo",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -261,7 +310,12 @@ pub fn claude_get_session_state(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getSessionState", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getSessionState",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -270,7 +324,12 @@ pub fn claude_get_session_meta(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getSessionMeta", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getSessionMeta",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -279,7 +338,12 @@ pub fn claude_get_context_usage(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getContextUsage", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getContextUsage",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -288,7 +352,12 @@ pub fn claude_get_worktree_status(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getWorktreeStatus", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getWorktreeStatus",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -307,10 +376,15 @@ pub fn claude_cleanup_worktree(
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.cleanupWorktree", json!({
-        "sessionId": session_id,
-        "deleteBranch": delete_branch,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.cleanupWorktree",
+        json!({
+            "sessionId": session_id,
+            "deleteBranch": delete_branch,
+        }),
+    )
 }
 
 // --- per-session state -----------------------------------------------------
@@ -322,9 +396,14 @@ pub fn claude_set_auto_continue(
     session_id: String,
     opts: Value,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.setAutoContinue", json!({
-        "sessionId": session_id, "opts": opts,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.setAutoContinue",
+        json!({
+            "sessionId": session_id, "opts": opts,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -333,7 +412,12 @@ pub fn claude_get_auto_continue(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.getAutoContinue", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.getAutoContinue",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -343,9 +427,14 @@ pub fn claude_set_permission_mode(
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.setPermissionMode", json!({
-        "sessionId": session_id, "mode": mode,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.setPermissionMode",
+        json!({
+            "sessionId": session_id, "mode": mode,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -356,9 +445,14 @@ pub fn claude_set_model(
     model: String,
     auto_compact_window: Option<i64>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.setModel", json!({
-        "sessionId": session_id, "model": model, "autoCompactWindow": auto_compact_window,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.setModel",
+        json!({
+            "sessionId": session_id, "model": model, "autoCompactWindow": auto_compact_window,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -368,9 +462,14 @@ pub fn claude_set_effort(
     session_id: String,
     effort: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.setEffort", json!({
-        "sessionId": session_id, "effort": effort,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.setEffort",
+        json!({
+            "sessionId": session_id, "effort": effort,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -379,7 +478,12 @@ pub fn claude_reset_session(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.resetSession", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.resetSession",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -407,9 +511,14 @@ pub fn claude_archive_messages(
     session_id: String,
     messages: Value,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.archiveMessages", json!({
-        "sessionId": session_id, "messages": messages,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.archiveMessages",
+        json!({
+            "sessionId": session_id, "messages": messages,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -420,9 +529,14 @@ pub fn claude_load_archived(
     offset: u32,
     limit: u32,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.loadArchived", json!({
-        "sessionId": session_id, "offset": offset, "limit": limit,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.loadArchived",
+        json!({
+            "sessionId": session_id, "offset": offset, "limit": limit,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -431,7 +545,12 @@ pub fn claude_clear_archive(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.clearArchive", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.clearArchive",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -440,7 +559,12 @@ pub fn claude_rest_session(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.restSession", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.restSession",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -449,7 +573,12 @@ pub fn claude_wake_session(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.wakeSession", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.wakeSession",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -458,7 +587,12 @@ pub fn claude_is_resting(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.isResting", json!({ "sessionId": session_id }))
+    call(
+        &app,
+        &state,
+        "claude.isResting",
+        json!({ "sessionId": session_id }),
+    )
 }
 
 #[tauri::command]
@@ -489,10 +623,15 @@ pub fn claude_rewind_to_prompt(
     session_id: String,
     prompt_index: u32,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.rewindToPrompt", json!({
-        "sessionId": session_id,
-        "promptIndex": prompt_index,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.rewindToPrompt",
+        json!({
+            "sessionId": session_id,
+            "promptIndex": prompt_index,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -503,11 +642,16 @@ pub fn claude_resume_session(
     sdk_session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.resumeSession", json!({
-        "sessionId": session_id,
-        "sdkSessionId": sdk_session_id,
-        "options": options,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.resumeSession",
+        json!({
+            "sessionId": session_id,
+            "sdkSessionId": sdk_session_id,
+            "options": options,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -518,9 +662,14 @@ pub fn claude_resolve_permission(
     tool_use_id: String,
     result: Value,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.resolvePermission", json!({
-        "sessionId": session_id, "toolUseId": tool_use_id, "result": result,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.resolvePermission",
+        json!({
+            "sessionId": session_id, "toolUseId": tool_use_id, "result": result,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -531,9 +680,14 @@ pub fn claude_resolve_ask_user(
     tool_use_id: String,
     answers: Value,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.resolveAskUser", json!({
-        "sessionId": session_id, "toolUseId": tool_use_id, "answers": answers,
-    }))
+    call(
+        &app,
+        &state,
+        "claude.resolveAskUser",
+        json!({
+            "sessionId": session_id, "toolUseId": tool_use_id, "answers": answers,
+        }),
+    )
 }
 
 #[tauri::command]
@@ -542,7 +696,12 @@ pub fn claude_check_mcp_json_status(
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.checkMcpJsonStatus", json!({ "cwd": cwd }))
+    call(
+        &app,
+        &state,
+        "claude.checkMcpJsonStatus",
+        json!({ "cwd": cwd }),
+    )
 }
 
 #[tauri::command]
@@ -551,5 +710,10 @@ pub fn claude_enable_all_project_mcp(
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.enableAllProjectMcp", json!({ "cwd": cwd }))
+    call(
+        &app,
+        &state,
+        "claude.enableAllProjectMcp",
+        json!({ "cwd": cwd }),
+    )
 }

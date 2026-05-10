@@ -19,7 +19,7 @@
 // child-process tracking that's substantially more involved on Windows.
 
 use crate::commands::settings::resolve_shell_path;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -34,7 +34,9 @@ pub struct CommandError {
 
 impl<E: std::fmt::Display> From<E> for CommandError {
     fn from(value: E) -> Self {
-        Self { message: value.to_string() }
+        Self {
+            message: value.to_string(),
+        }
     }
 }
 
@@ -70,7 +72,9 @@ pub struct PtyState {
 
 impl Default for PtyState {
     fn default() -> Self {
-        Self { inner: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -84,7 +88,9 @@ impl PtyState {
         id: &str,
         f: impl FnOnce(&mut PtySession) -> Result<R, CommandError>,
     ) -> Result<R, CommandError> {
-        let mut map = self.inner.lock().map_err(|e| CommandError { message: e.to_string() })?;
+        let mut map = self.inner.lock().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
         let session = map.get_mut(id).ok_or_else(|| CommandError {
             message: format!("pty session {id} not found"),
         })?;
@@ -163,10 +169,14 @@ pub fn pty_create(
     options: CreatePtyOptions,
 ) -> Result<String, CommandError> {
     if !is_valid_pty_id(&options.id) {
-        return Err(CommandError { message: format!("invalid pty id: {:?}", options.id) });
+        return Err(CommandError {
+            message: format!("invalid pty id: {:?}", options.id),
+        });
     }
     {
-        let map = state.inner.lock().map_err(|e| CommandError { message: e.to_string() })?;
+        let map = state.inner.lock().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
         if map.contains_key(&options.id) {
             return Err(CommandError {
                 message: format!("pty session {} already exists", options.id),
@@ -175,23 +185,27 @@ pub fn pty_create(
     }
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })
-        .map_err(|e| CommandError { message: e.to_string() })?;
+        .openpty(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
     let cmd = build_command(&options);
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| CommandError { message: e.to_string() })?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     drop(pair.slave);
 
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| CommandError { message: e.to_string() })?;
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| CommandError { message: e.to_string() })?;
+    let writer = pair.master.take_writer().map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
+    let mut reader = pair.master.try_clone_reader().map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
 
     // Reader thread: pump bytes from PTY → pty:output events. Lossy UTF-8
     // because xterm.js consumes strings and PTYs can split codepoints
@@ -207,7 +221,10 @@ pub fn pty_create(
                     let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
                     let _ = app_for_reader.emit(
                         "pty:output",
-                        PtyOutputEvent { id: id_for_reader.clone(), data: chunk },
+                        PtyOutputEvent {
+                            id: id_for_reader.clone(),
+                            data: chunk,
+                        },
                     );
                 }
                 Err(_) => break,
@@ -218,8 +235,17 @@ pub fn pty_create(
     // Insert the session before kicking off the exit watcher so the
     // watcher can find it.
     {
-        let mut map = state.inner.lock().map_err(|e| CommandError { message: e.to_string() })?;
-        map.insert(options.id.clone(), PtySession { writer, master: pair.master, child });
+        let mut map = state.inner.lock().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
+        map.insert(
+            options.id.clone(),
+            PtySession {
+                writer,
+                master: pair.master,
+                child,
+            },
+        );
     }
 
     // Exit watcher: poll try_wait on the session's child every 100ms,
@@ -248,7 +274,10 @@ pub fn pty_create(
                 let code = s.exit_code() as i32;
                 let _ = app_for_exit.emit(
                     "pty:exit",
-                    PtyExitEvent { id: id_for_exit.clone(), exit_code: code },
+                    PtyExitEvent {
+                        id: id_for_exit.clone(),
+                        exit_code: code,
+                    },
                 );
                 if let Ok(mut map) = map_handle.lock() {
                     map.remove(&id_for_exit);
@@ -263,16 +292,16 @@ pub fn pty_create(
 }
 
 #[tauri::command]
-pub fn pty_write(
-    state: State<'_, PtyState>,
-    id: String,
-    data: String,
-) -> Result<(), CommandError> {
+pub fn pty_write(state: State<'_, PtyState>, id: String, data: String) -> Result<(), CommandError> {
     state.with_session(&id, |s| {
         s.writer
             .write_all(data.as_bytes())
-            .map_err(|e| CommandError { message: e.to_string() })?;
-        s.writer.flush().map_err(|e| CommandError { message: e.to_string() })?;
+            .map_err(|e| CommandError {
+                message: e.to_string(),
+            })?;
+        s.writer.flush().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
         Ok(())
     })
 }
@@ -286,15 +315,24 @@ pub fn pty_resize(
 ) -> Result<(), CommandError> {
     state.with_session(&id, |s| {
         s.master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|e| CommandError { message: e.to_string() })?;
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| CommandError {
+                message: e.to_string(),
+            })?;
         Ok(())
     })
 }
 
 #[tauri::command]
 pub fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), CommandError> {
-    let mut map = state.inner.lock().map_err(|e| CommandError { message: e.to_string() })?;
+    let mut map = state.inner.lock().map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
     if let Some(mut session) = map.remove(&id) {
         let _ = session.child.kill();
     }
