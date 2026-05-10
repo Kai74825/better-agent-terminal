@@ -187,6 +187,14 @@ function getInvoke(): Invoke {
   throw new Error('host-api: tauri invoke not available; ensure window.__TAURI_INTERNALS__ is present')
 }
 
+function tauriDebugLog(...args: unknown[]): void {
+  try {
+    void getInvoke()<void>('debug_log', { args }).catch(() => {})
+  } catch {
+    // Best-effort instrumentation only.
+  }
+}
+
 // Tauri's event bus is async (`listen()` returns Promise<UnlistenFn>) but
 // the Electron preload contract is `onX(cb): () => void`. We adapt by
 // resolving listen() synchronously through the Tauri-injected globals,
@@ -532,10 +540,34 @@ function createTauriHost(): BatAppAPI {
             getInvoke()<unknown>('claude_start_session', { sessionId, options })
         }
         if (key === 'sendMessage') {
-          return (sessionId: string, prompt: string, images?: string[], autoCompactWindow?: number | null) =>
-            getInvoke()<unknown>('claude_send_message', {
-              sessionId, prompt, images, autoCompactWindow,
+          return async (sessionId: string, prompt: string, images?: string[], autoCompactWindow?: number | null) => {
+            const startedAt = performance.now()
+            tauriDebugLog('[tauri:claude.sendMessage] start', {
+              sessionId,
+              promptLen: prompt.length,
+              images: images?.length ?? 0,
+              autoCompactWindow: autoCompactWindow ?? null,
             })
+            try {
+              const result = await getInvoke()<unknown>('claude_send_message', {
+                sessionId, prompt, images, autoCompactWindow,
+              })
+              tauriDebugLog('[tauri:claude.sendMessage] end', {
+                sessionId,
+                ok: true,
+                elapsedMs: Math.round(performance.now() - startedAt),
+              })
+              return result
+            } catch (err) {
+              tauriDebugLog('[tauri:claude.sendMessage] end', {
+                sessionId,
+                ok: false,
+                elapsedMs: Math.round(performance.now() - startedAt),
+                error: err instanceof Error ? err.message : String(err),
+              })
+              throw err
+            }
+          }
         }
         if (key === 'stopSession') {
           return (sessionId: string) =>
