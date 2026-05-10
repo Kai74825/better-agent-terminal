@@ -24,6 +24,7 @@
 - 2026-05-10：收斂 `ProfilePanel` remote direct calls。remote profile list/test connection 改走 `host.remote.*`，避免 Tauri profile UI 旁路 host-api。
 - 2026-05-10：收斂 `SettingsPanel` direct host calls。OpenAI key、Claude account switching、remote/tunnel status/server、外部連結開啟已改走 `host.*`，讓設定頁在 Tauri 下使用同一層 adapter。
 - 2026-05-10：收斂 dock badge direct host calls。settings/workspace store 的 dock badge 更新已改走 `host.app.setDockBadge`，保留失敗時不阻塞 store 更新的既有行為，避免 Tauri 下 pending action badge 繞過 host adapter。
+- 2026-05-10：收斂 `App.tsx` direct host calls。啟動時 auth status、remote profile connect、remote client polling/resume refresh、Windows window-cycle platform 判斷、全域 send-to-agent 已改走 `host.*`，主 App shell 不再直接依賴 Electron preload。
 
 ## 目前判斷
 

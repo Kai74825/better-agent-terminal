@@ -114,7 +114,7 @@ export default function App() {
   }, [])
   useEffect(() => {
     const fetchAuth = () => {
-      window.batAppAPI.claude.authStatus().then(info => {
+      host.claude.authStatus().then(info => {
         if (info) setAuthInfo({ email: info.email, subscriptionType: info.subscriptionType })
       }).catch(() => {})
     }
@@ -249,7 +249,7 @@ export default function App() {
       const isBackquote = e.key === '`' || e.code === 'Backquote'
 
       // Windows: Ctrl+` cycles between BAT app windows.
-      if (window.batAppAPI.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
+      if (host.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
         e.preventDefault()
         host.app.focusNextWindow()
         return
@@ -395,7 +395,7 @@ export default function App() {
         if (active?.type === 'remote' && active.remoteHost && active.remoteToken && active.remoteFingerprint) {
           // Try connecting to remote
           const tRemote = performance.now()
-          const connectResult = await window.batAppAPI.remote.connect(
+          const connectResult = await host.remote.connect(
             active.remoteHost,
             active.remotePort || 9876,
             active.remoteToken,
@@ -480,7 +480,7 @@ export default function App() {
 
     // Listen for system resume from sleep/hibernate — refresh remote connection status
     const unsubSystemResume = host.system.onResume(() => {
-      window.batAppAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+      host.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     })
 
     // Listen for cross-window workspace reload
@@ -511,7 +511,7 @@ export default function App() {
   // Poll remote client connection status
   useEffect(() => {
     const check = () => {
-      window.batAppAPI.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+      host.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
     }
     check()
     const interval = setInterval(check, 3000)
@@ -581,7 +581,7 @@ export default function App() {
     }
 
     if (terminalId) {
-      window.batAppAPI.claude.sendMessage(terminalId, content)
+      host.claude.sendMessage(terminalId, content)
     } else {
       console.warn('No Claude agent session available')
     }
