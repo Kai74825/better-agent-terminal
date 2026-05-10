@@ -489,8 +489,12 @@ pub async fn claude_list_sessions(
 pub async fn claude_get_supported_models(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(codex_state.supported_models());
+    }
     call_blocking(
         app,
         state,
@@ -504,8 +508,12 @@ pub async fn claude_get_supported_models(
 pub async fn claude_get_supported_commands(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!([]));
+    }
     call_blocking(
         app,
         state,
@@ -519,8 +527,12 @@ pub async fn claude_get_supported_commands(
 pub async fn claude_get_supported_agents(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(json!([]));
+    }
     call_blocking(
         app,
         state,
@@ -534,8 +546,12 @@ pub async fn claude_get_supported_agents(
 pub async fn claude_get_account_info(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if codex_state.is_owned(&session_id) {
+        return Ok(Value::Null);
+    }
     call_blocking(
         app,
         state,

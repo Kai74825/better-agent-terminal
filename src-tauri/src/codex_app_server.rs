@@ -546,6 +546,20 @@ impl CodexAppServerState {
             .contains_key(session_id)
     }
 
+    pub fn supported_models(&self) -> Value {
+        json!([
+            { "value": "gpt-5.5", "displayName": "GPT-5.5", "description": "Newest frontier - recommended (ChatGPT login)", "source": "builtin" },
+            { "value": "gpt-5.4", "displayName": "GPT-5.4", "description": "Flagship GPT-5.4", "source": "builtin" },
+            { "value": "gpt-5.4-mini", "displayName": "GPT-5.4 Mini", "description": "Fast GPT-5.4", "source": "builtin" },
+            { "value": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "description": "GPT-5.3 - codex variant", "source": "builtin" },
+            { "value": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark", "description": "GPT-5.3 - lightweight codex", "source": "builtin" },
+            { "value": "codex-mini-latest", "displayName": "Codex Mini", "description": "codex-mini - optimized for code", "source": "builtin" },
+            { "value": "o4-mini", "displayName": "o4-mini", "description": "OpenAI o4-mini - fast reasoning", "source": "builtin" },
+            { "value": "o3", "displayName": "o3", "description": "OpenAI o3 - reasoning model", "source": "builtin" },
+            { "value": "gpt-4.1", "displayName": "GPT-4.1", "description": "OpenAI GPT-4.1", "source": "builtin" },
+        ])
+    }
+
     fn session_id_for_notification(&self, params: &Value) -> Option<String> {
         if let Some(thread_id) = thread_id_from_params(params) {
             if let Some(session_id) = self
@@ -1571,5 +1585,20 @@ mod tests {
             effective_cwd(&options, "test").expect("cwd"),
             "/repo/.bat-worktrees/abc12345"
         );
+    }
+
+    #[test]
+    fn supported_models_returns_codex_models_not_claude_models() {
+        let state = CodexAppServerState::default();
+        let models = state.supported_models();
+        let values = models
+            .as_array()
+            .expect("models")
+            .iter()
+            .filter_map(|model| model.get("value").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert!(values.contains(&"gpt-5.5"));
+        assert!(values.contains(&"gpt-5.3-codex"));
+        assert!(!values.iter().any(|value| value.starts_with("claude-")));
     }
 }
