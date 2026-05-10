@@ -35,6 +35,7 @@
 - 2026-05-10：開始接 Tauri native drop routing。`host-api` 會把 Tauri webview drag/drop event 轉成 renderer custom event，`Sidebar` 已可直接用 native paths 新增 workspace；HTML5 drop fallback 保留不變。Agent attachment 區仍待接同一個 native event。
 - 2026-05-10：接上 `ClaudeAgentPanel` native attachment drop。Tauri native dropped paths 會依副檔名走 `addImageByPath` 或 `addFileByPath`，remote session 保留既有限制；HTML5 `File` drop fallback 仍保留。
 - 2026-05-10：接上 `CodexAgentPanel` native attachment drop。行為對齊 Claude panel：Tauri native dropped paths 依副檔名轉成 image/file attachment，remote session 保留既有限制；HTML5 `File` drop fallback 仍保留。
+- 2026-05-10：接上 `OpenAIAgentPanel` native attachment drop。三個 agent panel 都已能消費 Tauri native dropped paths；下一步需評估開啟 Tauri `dragDropEnabled` 後是否會影響非檔案的既有 HTML5 drag/drop。
 
 ## 目前判斷
 
