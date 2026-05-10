@@ -6,6 +6,7 @@ import { WORKSPACE_COLORS } from '../types'
 import { workspaceStore } from '../stores/workspace-store'
 import { ActivityIndicator } from './ActivityIndicator'
 import { NotificationBell } from './NotificationBell'
+import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
 
 interface SidebarProps {
   width: number
@@ -64,6 +65,7 @@ export function Sidebar({
   const inputRef = useRef<HTMLInputElement>(null)
   const groupInputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const workspaceListRef = useRef<HTMLDivElement>(null)
 
   // Filter workspaces by active group
   const filteredWorkspaces = activeGroup
@@ -129,6 +131,33 @@ export function Sidebar({
     const ok = await host.workspace.moveToWindow(sourceWindowId, targetWindowId, workspaceId, insertIndex)
     if (!ok) window.alert('Workspace moves only work between host windows, or between remote windows on the same remote.')
   }, [])
+
+  useEffect(() => {
+    return listenTauriNativeDrop((detail) => {
+      if (!isTauriNativeDropInside(detail, workspaceListRef.current)) {
+        if (detail.type === 'drop' || detail.type === 'leave') setExternalDragOver(false)
+        return
+      }
+      if (draggedId) return
+      if (detail.type === 'enter' || detail.type === 'over') {
+        setExternalDragOver(!isRemoteConnected)
+        return
+      }
+      setExternalDragOver(false)
+      if (detail.type !== 'drop') return
+      if (isRemoteConnected) {
+        window.alert('Remote sessions can only add folders that exist on the host.')
+        return
+      }
+      let added = 0
+      for (const filePath of detail.paths) {
+        const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
+        workspaceStore.addWorkspace(name, filePath)
+        added++
+      }
+      if (added > 0) workspaceStore.save()
+    })
+  }, [draggedId, isRemoteConnected])
 
   // Context menu handler
   const handleContextMenu = useCallback((e: React.MouseEvent, workspaceId: string) => {
@@ -332,6 +361,7 @@ export function Sidebar({
         </div>
       )}
       <div
+        ref={workspaceListRef}
         className={`workspace-list${externalDragOver ? ' external-drag-over' : ''}`}
         onDragOver={(e) => {
           // Only react to external file drops or cross-window workspace drags (not internal workspace reorder)

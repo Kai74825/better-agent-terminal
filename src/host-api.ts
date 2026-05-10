@@ -13,6 +13,8 @@
 // global so older shells keep working). Neither implies the other; we never
 // fall back silently.
 
+import { dispatchTauriNativeDrop } from './utils/tauri-native-drop'
+
 // Pull the surface type from the global declaration (src/types/electron.d.ts)
 // rather than importing it directly from electron/preload, so we don't drag
 // the renderer tsconfig into a project reference rebuild every time the
@@ -150,10 +152,22 @@ function installTauriDropPathCache(api: BatAppAPI): void {
   import('@tauri-apps/api/webview')
     .then(({ getCurrentWebview }) =>
       getCurrentWebview().onDragDropEvent(event => {
-        if (event.payload.type !== 'drop') return
-        registerTauriDroppedPaths(event.payload.paths)
+        const payload = event.payload
+        const position = 'position' in payload ? payload.position : null
+        const scale = typeof window.devicePixelRatio === 'number' && window.devicePixelRatio > 0
+          ? window.devicePixelRatio
+          : 1
+        const paths = 'paths' in payload ? payload.paths : []
+        if (payload.type === 'drop') registerTauriDroppedPaths(paths)
+        dispatchTauriNativeDrop({
+          type: payload.type,
+          paths,
+          x: position ? position.x / scale : null,
+          y: position ? position.y / scale : null,
+        })
+        if (payload.type !== 'drop') return
         void api.debug.log('[tauri:drag-drop]', {
-          paths: event.payload.paths.length,
+          paths: paths.length,
         }).catch(() => {})
       }))
     .catch(() => {})
