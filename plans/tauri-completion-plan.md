@@ -23,6 +23,7 @@
 - 2026-05-10：收斂 `WorkerPanel` direct host calls。Procfile worker buffer init/read/append/clear 與 remote client status 已改走 `host.workerBuffer` / `host.remote`，對齊已 port 的 Tauri adapter。
 - 2026-05-10：收斂 `ProfilePanel` remote direct calls。remote profile list/test connection 改走 `host.remote.*`，避免 Tauri profile UI 旁路 host-api。
 - 2026-05-10：收斂 `SettingsPanel` direct host calls。OpenAI key、Claude account switching、remote/tunnel status/server、外部連結開啟已改走 `host.*`，讓設定頁在 Tauri 下使用同一層 adapter。
+- 2026-05-10：收斂 dock badge direct host calls。settings/workspace store 的 dock badge 更新已改走 `host.app.setDockBadge`，保留失敗時不阻塞 store 更新的既有行為，避免 Tauri 下 pending action badge 繞過 host adapter。
 
 ## 目前判斷
 

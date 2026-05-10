@@ -12,6 +12,10 @@ const LEGACY_DEFAULT_MODEL = 'claude-opus-4-6'
 const LEGACY_OPUS_47_MODEL = 'claude-opus-4-7'
 const CURRENT_DEFAULT_MODEL = CLAUDE_OPUS_47_1M_PRESET
 
+function setHostDockBadge(count: number): void {
+  void host.app.setDockBadge(count).catch(() => {})
+}
+
 function isModelInList(model: string | undefined, models: Array<{ value: string }>): boolean {
   return !!model && models.some(item => item.value === model)
 }
@@ -306,7 +310,7 @@ class SettingsStore {
     this.settings = { ...this.settings, showDockBadge: show }
     this.notify()
     this.save()
-    if (!show) window.batAppAPI?.app?.setDockBadge?.(0)
+    if (!show) setHostDockBadge(0)
   }
 
   setNotifyOnComplete(enabled: boolean): void {

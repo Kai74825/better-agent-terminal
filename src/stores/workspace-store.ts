@@ -8,6 +8,10 @@ import { settingsStore } from './settings-store'
 
 type Listener = () => void
 
+function setHostDockBadge(count: number): void {
+  void host.app.setDockBadge(count).catch(() => {})
+}
+
 class WorkspaceStore {
   private state: AppState = {
     workspaces: [],
@@ -558,7 +562,7 @@ class WorkspaceStore {
     const settings = settingsStore.getSettings()
     if (settings.showDockBadge === false) return
     const count = this.state.terminals.filter(t => t.hasPendingAction).length
-    window.batAppAPI?.app?.setDockBadge?.(count)
+    setHostDockBadge(count)
   }
 
   getWorkspaceLastActivity(workspaceId: string): number | null {
