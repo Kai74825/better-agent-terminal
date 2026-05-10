@@ -22,6 +22,7 @@
 - 2026-05-10：收斂部分 renderer direct `window.batAppAPI` 呼叫。`AgentsPanel`、`SkillsPanel`、`TerminalThumbnail` 已改走 `host.claude.*`，讓 Tauri 的 supported agents/commands/skills 與 agent preview event adapter 不再旁路 host-api。
 - 2026-05-10：收斂 `WorkerPanel` direct host calls。Procfile worker buffer init/read/append/clear 與 remote client status 已改走 `host.workerBuffer` / `host.remote`，對齊已 port 的 Tauri adapter。
 - 2026-05-10：收斂 `ProfilePanel` remote direct calls。remote profile list/test connection 改走 `host.remote.*`，避免 Tauri profile UI 旁路 host-api。
+- 2026-05-10：收斂 `SettingsPanel` direct host calls。OpenAI key、Claude account switching、remote/tunnel status/server、外部連結開啟已改走 `host.*`，讓設定頁在 Tauri 下使用同一層 adapter。
 
 ## 目前判斷
 

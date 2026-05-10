@@ -109,13 +109,16 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [accountStatusMsg, setAccountStatusMsg] = useState('')
 
   // Get current platform for filtering shell options
-  const platform = window.batAppAPI?.platform || 'darwin'
+  const platform = host.platform || 'darwin'
   const platformShellOptions = SHELL_OPTIONS.filter(opt => opt.platforms.includes(platform))
   const isDebugMode = host.debug.isDebugMode === true
   const visibleAgentPresets = getVisiblePresets().filter(p => p.id !== 'none')
   const defaultAgentValue = visibleAgentPresets.some(p => p.id === settings.defaultAgent)
     ? settings.defaultAgent
     : 'claude-code'
+  const openExternal = useCallback((url: string) => {
+    Promise.resolve(host.shell.openExternal(url)).catch(() => window.open(url))
+  }, [])
 
   useEffect(() => {
     return settingsStore.subscribe(() => {
@@ -131,7 +134,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
   useEffect(() => {
     if (!isDebugMode) return
-    window.batAppAPI.openai?.getApiKeyStatus().then(setOpenaiKeyStatus).catch(() => { /* ignore */ })
+    host.openai.getApiKeyStatus().then(setOpenaiKeyStatus).catch(() => { /* ignore */ })
   }, [isDebugMode])
 
   const refreshCxStatus = useCallback(async () => {
@@ -171,14 +174,14 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     if (settingsStore.getSettings().accountSwitching === false) return
     setAccountsLoading(true)
     try {
-      const result = await window.batAppAPI.claude.accountList()
+      const result = await host.claude.accountList()
       setAccounts(result.accounts)
       setActiveAccountId(result.activeAccountId)
       setSwitchWarningShown(result.switchWarningShown)
       if (result.accounts.length === 0) {
-        const imported = await window.batAppAPI.claude.accountImportCurrent()
+        const imported = await host.claude.accountImportCurrent()
         if (imported) {
-          const refreshed = await window.batAppAPI.claude.accountList()
+          const refreshed = await host.claude.accountList()
           setAccounts(refreshed.accounts)
           setActiveAccountId(refreshed.activeAccountId)
           setSwitchWarningShown(refreshed.switchWarningShown)
@@ -199,10 +202,10 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     if (!switchWarningShown) {
       const confirmed = confirm(t('settings.accountSwitchingWarning'))
       if (!confirmed) return
-      await window.batAppAPI.claude.accountMarkWarningShown()
+      await host.claude.accountMarkWarningShown()
       setSwitchWarningShown(true)
     }
-    const success = await window.batAppAPI.claude.accountSwitch(accountId)
+    const success = await host.claude.accountSwitch(accountId)
     if (success) {
       setActiveAccountId(accountId)
       window.dispatchEvent(new CustomEvent('claude-account-switched'))
@@ -214,7 +217,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     if (!account) return
     const confirmed = confirm(t('settings.accountSwitchingRemoveConfirm', { email: account.email }))
     if (!confirmed) return
-    const success = await window.batAppAPI.claude.accountRemove(accountId)
+    const success = await host.claude.accountRemove(accountId)
     if (success) {
       await loadAccounts()
     }
@@ -224,7 +227,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     setAccountLoginLoading(true)
     setAccountStatusMsg('Opening login in browser...')
     try {
-      const result = await window.batAppAPI.claude.accountLoginNew()
+      const result = await host.claude.accountLoginNew()
       if (result.success) {
         await loadAccounts()
         setAccountStatusMsg(result.account ? `Added ${result.account.email}` : 'Account added.')
@@ -277,9 +280,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   // Load remote status on mount and poll
   useEffect(() => {
     const refresh = async () => {
-      const ss = await window.batAppAPI.remote.serverStatus()
+      const ss = await host.remote.serverStatus()
       setServerStatus(ss)
-      const cs = await window.batAppAPI.remote.clientStatus()
+      const cs = await host.remote.clientStatus()
       setClientStatus(cs)
     }
     refresh()
@@ -301,7 +304,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       return
     }
     let cancelled = false
-    window.batAppAPI.tunnel.getConnection().then(result => {
+    host.tunnel.getConnection().then(result => {
       if (cancelled) return
       if ('error' in result || !result.addresses?.length) {
         setConnectionUrlHost(bh)
@@ -323,7 +326,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     const port = parseInt(serverPort) || 9876
     settingsStore.setRemoteServerPort(port)
     settingsStore.setRemoteServerBindInterface(bindInterface)
-    const result = await window.batAppAPI.remote.startServer({
+    const result = await host.remote.startServer({
       port,
       bindInterface,
     })
@@ -333,14 +336,14 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setServerToken(result.token)
       setServerPort(String(result.port))
     }
-    const ss = await window.batAppAPI.remote.serverStatus()
+    const ss = await host.remote.serverStatus()
     setServerStatus(ss)
   }
 
   const handleStopServer = async () => {
-    await window.batAppAPI.remote.stopServer()
+    await host.remote.stopServer()
     setServerToken(null)
-    const ss = await window.batAppAPI.remote.serverStatus()
+    const ss = await host.remote.serverStatus()
     setServerStatus(ss)
   }
 
@@ -356,7 +359,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     setQrLoading(true)
     setQrError(null)
     try {
-      const result = await window.batAppAPI.tunnel.getConnection()
+      const result = await host.tunnel.getConnection()
       if ('error' in result) {
         setQrError(result.error)
         return
@@ -369,7 +372,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setQrPort(port)
       await generateQrForIp(result.addresses[0].ip, result.addresses[0].mode, result.token, result.fingerprint, port, result.context)
       // Refresh server status since we may have started it
-      const ss = await window.batAppAPI.remote.serverStatus()
+      const ss = await host.remote.serverStatus()
       setServerStatus(ss)
       if (result.token) setServerToken(result.token)
     } catch (err) {
@@ -654,9 +657,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                         onClick={async () => {
                           setOpenaiKeySaving(true)
                           try {
-                            await window.batAppAPI.openai.setApiKey(openaiKeyInput.trim())
+                            await host.openai.setApiKey(openaiKeyInput.trim())
                             setOpenaiKeyInput('')
-                            const s = await window.batAppAPI.openai.getApiKeyStatus()
+                            const s = await host.openai.getApiKeyStatus()
                             setOpenaiKeyStatus(s)
                           } finally {
                             setOpenaiKeySaving(false)
@@ -670,8 +673,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                           className="settings-btn settings-btn-danger"
                           onClick={async () => {
                             if (!confirm('Clear saved OpenAI API key?')) return
-                            await window.batAppAPI.openai.clearApiKey()
-                            const s = await window.batAppAPI.openai.getApiKeyStatus()
+                            await host.openai.clearApiKey()
+                            const s = await host.openai.getApiKeyStatus()
                             setOpenaiKeyStatus(s)
                           }}
                         >
@@ -928,7 +931,7 @@ Reference: https://github.com/ind-igo/cx`
                         <p className="settings-hint" style={{ marginTop: 0, marginBottom: 8 }}>
                           {t('settings.cxInstallAgentHint')}{' '}
                           <a href="https://github.com/ind-igo/cx" style={{ color: '#58a6ff' }}
-                            onClick={e => { e.preventDefault(); window.batAppAPI?.shell?.openExternal?.('https://github.com/ind-igo/cx') }}>
+                            onClick={e => { e.preventDefault(); openExternal('https://github.com/ind-igo/cx') }}>
                             github.com/ind-igo/cx
                           </a>
                         </p>
@@ -956,7 +959,7 @@ Reference: https://github.com/ind-igo/cx`
                 {t('settings.remoteAccessHint')}{' '}
                 <a href="https://github.com/tony1223/better-agent-terminal#remote-access--mobile-connect"
                   style={{ color: '#58a6ff' }}
-                  onClick={e => { e.preventDefault(); window.batAppAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>
+                  onClick={e => { e.preventDefault(); openExternal(e.currentTarget.href) }}>
                   {t('settings.remoteAccessReadme')}
                 </a>。
               </p>
@@ -1074,9 +1077,9 @@ Reference: https://github.com/ind-igo/cx`
                 <label>{t('settings.mobileConnect')} <span style={{ fontSize: 10, color: '#d29922', fontWeight: 'normal' }}>{t('settings.mobileConnectExperimental')}</span></label>
                 <p style={{ fontSize: 11, color: '#8b949e', marginTop: 2, marginBottom: 6, lineHeight: 1.4 }}>
                   {t('settings.mobileConnectHint')}{' '}
-                  <a href="https://tailscale.com/" style={{ color: '#58a6ff' }} onClick={e => { e.preventDefault(); window.batAppAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>Tailscale</a>{' '}
+                  <a href="https://tailscale.com/" style={{ color: '#58a6ff' }} onClick={e => { e.preventDefault(); openExternal(e.currentTarget.href) }}>Tailscale</a>{' '}
                   {t('settings.mobileConnectSeeReadme')}{' '}
-                  <a href="https://github.com/tony1223/better-agent-terminal#remote-access--mobile-connect" style={{ color: '#58a6ff' }} onClick={e => { e.preventDefault(); window.batAppAPI?.shell?.openExternal?.(e.currentTarget.href) || window.open(e.currentTarget.href) }}>{t('settings.remoteAccessReadme')}</a>。
+                  <a href="https://github.com/tony1223/better-agent-terminal#remote-access--mobile-connect" style={{ color: '#58a6ff' }} onClick={e => { e.preventDefault(); openExternal(e.currentTarget.href) }}>{t('settings.remoteAccessReadme')}</a>。
                 </p>
                 {!qrDataUrl ? (
                   <>
