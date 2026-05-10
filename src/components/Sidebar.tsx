@@ -108,7 +108,7 @@ export function Sidebar({
     // Check if agent session is resting
     const agent = workspaceStore.getAgentTerminal(contextMenu.workspaceId)
     if (agent) {
-      window.batAppAPI.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
+      host.claude.isResting(agent.id).then(r => setAgentResting(r)).catch(() => {})
     }
   }, [contextMenu, workspaces])
 
@@ -629,9 +629,9 @@ export function Sidebar({
                 className="context-menu-item"
                 onClick={async () => {
                   if (agentResting) {
-                    await window.batAppAPI.claude.wakeSession(agent.id)
+                    await host.claude.wakeSession(agent.id)
                   } else {
-                    await window.batAppAPI.claude.restSession(agent.id)
+                    await host.claude.restSession(agent.id)
                   }
                   setContextMenu(null)
                 }}
