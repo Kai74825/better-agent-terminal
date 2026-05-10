@@ -1133,7 +1133,10 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           setStreamingThinking(existingState.streamingThinking || '')
           const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
           if (!cancelled && meta) setSessionMeta(meta as unknown as SessionMeta)
-          return
+          if (!isTauri() || !isCodexSession) {
+            return
+          }
+          dlog(`${stag} HYDRATED existing state; binding Tauri Codex runtime`)
         }
 
         if (savedSdkSessionId) {
