@@ -190,9 +190,8 @@ function createTauriHost(): BatAppAPI {
     },
     clipboard: {
       writeText: (text: string) => getInvoke()<boolean>('clipboard_write_text', { text }),
-      // Image clipboard requires a separate raw-bytes bridge; not ported yet.
-      saveImage: () => notImplemented('clipboard.saveImage'),
-      writeImage: () => notImplemented('clipboard.writeImage'),
+      saveImage: () => getInvoke()<string | null>('clipboard_save_image'),
+      writeImage: (filePath: string) => getInvoke()<boolean>('clipboard_write_image', { filePath }),
       // Listener-style: WorkerPanel registers this on mount. No copy
       // shortcut event fires under Tauri yet — return a no-op unsub so
       // the panel renders.
