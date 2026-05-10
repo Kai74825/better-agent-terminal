@@ -245,15 +245,14 @@ registerHandler('claude.setPermissionMode', async (params) => {
   const s = ensureSession(sessionId)
   s.permissionMode = mode
   // Mid-session mode change: forward to the running CLI via the SDK
-  // control method when the LiveQuery is open. SDK's permissionMode
+  // control method when a query is active. SDK's permissionMode
   // enum doesn't include 'bypassPlan' — that's a sidecar-only mode
   // mapped to 'plan' inside buildQueryOptions. If the control method
-  // fails (older CLI builds without the streaming-input control
-  // protocol), close the live query so the next sendMessage rebuilds
-  // with the new mode in queryOptions.
-  if (s.liveQuery && !s.liveQuery.isClosed) {
+  // fails, close the query so the next sendMessage rebuilds with the
+  // new mode in queryOptions.
+  if (s.streaming && s.currentQuery && typeof s.currentQuery.setPermissionMode === 'function') {
     const sdkMode = mode === 'bypassPlan' ? 'plan' : mode
-    try { await s.liveQuery.setPermissionMode(sdkMode) }
+    try { await s.currentQuery.setPermissionMode(sdkMode) }
     catch (err) {
       logWarn(`setPermissionMode control failed for ${sessionId}: ${err?.message || err}`)
       closeLiveQuery(s)
@@ -299,11 +298,11 @@ registerHandler('claude.setModel', async (params) => {
   // so changing it requires a rebuild — close the live query.
   // Model swap goes through the control method first; only rebuild on
   // failure.
-  if (s.liveQuery && !s.liveQuery.isClosed) {
+  if (s.streaming && s.currentQuery) {
     if (typeof params?.autoCompactWindow === 'number') {
       closeLiveQuery(s)
-    } else if (typeof params?.model === 'string') {
-      try { await s.liveQuery.setModel(s.model) }
+    } else if (typeof params?.model === 'string' && typeof s.currentQuery.setModel === 'function') {
+      try { await s.currentQuery.setModel(s.model) }
       catch (err) {
         logWarn(`setModel control failed for ${sessionId}: ${err?.message || err}`)
         closeLiveQuery(s)

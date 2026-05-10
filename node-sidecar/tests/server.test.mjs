@@ -1190,21 +1190,14 @@ async function inProcess() {
     query({ prompt, options }) {
       this.queryCalls++
       const myCallIdx = this.queryCalls
-      const userIter = prompt[Symbol.asyncIterator]()
-      persistentCaptured.push({ name: '__queryArgs', payload: { resume: options?.resume ?? null, callIdx: myCallIdx } })
-      let turn = 0
+      persistentCaptured.push({ name: '__queryArgs', payload: { resume: options?.resume ?? null, callIdx: myCallIdx, prompt } })
       return (async function*() {
-        while (true) {
-          const next = await userIter.next()
-          if (next.done) return
-          turn++
-          yield { type: 'system', subtype: 'init', session_id: 'sdk-stream-1', cwd: '/s' }
-          yield { type: 'assistant', session_id: 'sdk-stream-1',
-            message: { role: 'assistant', content: [{ type: 'text', text: `reply-${myCallIdx}-${turn}` }] } }
-          yield { type: 'result', subtype: 'success', session_id: 'sdk-stream-1',
-            result: `reply-${myCallIdx}-${turn}`, stop_reason: 'end_turn',
-            total_cost_usd: 0.001, num_turns: turn }
-        }
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-stream-1', cwd: '/s' }
+        yield { type: 'assistant', session_id: 'sdk-stream-1',
+          message: { role: 'assistant', content: [{ type: 'text', text: `reply-${myCallIdx}` }] } }
+        yield { type: 'result', subtype: 'success', session_id: 'sdk-stream-1',
+          result: `reply-${myCallIdx}`, stop_reason: 'end_turn',
+          total_cost_usd: 0.001, num_turns: myCallIdx }
       })()
     },
   }
@@ -1226,13 +1219,13 @@ async function inProcess() {
     // Both turns still produced result events.
     const results = persistentCaptured.filter(c => c.name === 'claude:result')
     assert.equal(results.length, 2, 'expected 2 result events across rebuilt queries')
-    assert.equal(results[0].payload.result.result, 'reply-1-1')
-    assert.equal(results[1].payload.result.result, 'reply-2-1')
-    // Completed turns close the live query. A running turn still exposes
-    // currentQuery for readonly/control handlers until the result arrives.
+    assert.equal(results[0].payload.result.result, 'reply-1')
+    assert.equal(results[1].payload.result.result, 'reply-2')
+    // Completed turns do not keep a live query. The last currentQuery is
+    // retained for SDK metadata reads, matching Electron's queryInstance.
     const ss = mod.sessions.get('stream-1')
     assert.equal(ss.liveQuery, null)
-    assert.equal(ss.currentQuery, null)
+    assert.ok(ss.currentQuery)
   } finally {
     __setSdkOverrideForTests(undefined)
     restorePersistentSend()
@@ -1252,25 +1245,19 @@ async function inProcess() {
     queryCalls: 0,
     query({ prompt }) {
       this.queryCalls++
-      const userIter = prompt[Symbol.asyncIterator]()
+      const myCallIdx = this.queryCalls
       return (async function*() {
-        let turn = 0
-        while (true) {
-          const next = await userIter.next()
-          if (next.done) return
-          turn++
-          queuedCaptured.push(next.value?.message?.content)
-          yield { type: 'system', subtype: 'init', session_id: 'sdk-queued-1', cwd: '/q' }
-          yield { type: 'assistant', session_id: 'sdk-queued-1',
-            message: { role: 'assistant', content: [{ type: 'text', text: `queued-reply-${turn}` }] } }
-          if (turn === 1) {
-            firstTurnStartedResolve()
-            await new Promise(resolve => { releaseFirstResult = resolve })
-          }
-          yield { type: 'result', subtype: 'success', session_id: 'sdk-queued-1',
-            result: `queued-reply-${turn}`, stop_reason: 'end_turn',
-            total_cost_usd: 0.001, num_turns: turn }
+        queuedCaptured.push(prompt)
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-queued-1', cwd: '/q' }
+        yield { type: 'assistant', session_id: 'sdk-queued-1',
+          message: { role: 'assistant', content: [{ type: 'text', text: `queued-reply-${myCallIdx}` }] } }
+        if (myCallIdx === 1) {
+          firstTurnStartedResolve()
+          await new Promise(resolve => { releaseFirstResult = resolve })
         }
+        yield { type: 'result', subtype: 'success', session_id: 'sdk-queued-1',
+          result: `queued-reply-${myCallIdx}`, stop_reason: 'end_turn',
+          total_cost_usd: 0.001, num_turns: myCallIdx }
       })()
     },
   }
@@ -1294,25 +1281,20 @@ async function inProcess() {
     mod.sessions.get('queued-1')?.liveQuery?.close()
   }
 
-  // claude.stopTask: forwards task_id to the live query's stopTask
-  // control method. Errors gracefully when no live query exists.
+  // claude.stopTask: forwards task_id to the active query's stopTask
+  // control method. Errors gracefully when no query is active.
   const stopCaptured = []
+  let releaseStopResult
+  let stopTurnStartedResolve
+  const stopTurnStarted = new Promise(resolve => { stopTurnStartedResolve = resolve })
   const restoreStopSend = mod.__setSendEventForTests(() => {})
   const fakeSdkStop = {
-    query({ prompt }) {
-      const userIter = prompt[Symbol.asyncIterator]()
+    query() {
       const gen = (async function*() {
-        // Stay open: consume one user message + emit a turn, then idle
-        // forever so stopTask runs against an open generator.
-        const first = await userIter.next()
-        if (first.done) return
         yield { type: 'system', subtype: 'init', session_id: 'sdk-stop' }
+        stopTurnStartedResolve()
+        await new Promise(resolve => { releaseStopResult = resolve })
         yield { type: 'result', subtype: 'success', session_id: 'sdk-stop', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
-        // Idle until the iterator's done (close called).
-        while (true) {
-          const n = await userIter.next()
-          if (n.done) return
-        }
       })()
       gen.stopTask = async (taskId) => { stopCaptured.push(taskId) }
       gen.close = () => { /* ends the iterator */ }
@@ -1327,12 +1309,13 @@ async function inProcess() {
     const earlyStop = await dispatch({ jsonrpc: '2.0', id: 228, method: 'claude.stopTask',
       params: { sessionId: 'stop-1', taskId: 'task-x' } })
     assert.equal(earlyStop.result.ok, false)
-    assert.match(earlyStop.result.error, /no active live query/)
+    assert.match(earlyStop.result.error, /no active query/)
 
-    // Once the session has sent a message, stopTask routes through the
+    // While the session is running a message, stopTask routes through the
     // generator's control method.
-    await dispatch({ jsonrpc: '2.0', id: 229, method: 'claude.sendMessage',
+    const stopSend = dispatch({ jsonrpc: '2.0', id: 229, method: 'claude.sendMessage',
       params: { sessionId: 'stop-1', prompt: 'hello' } })
+    await stopTurnStarted
     const stopReply = await dispatch({ jsonrpc: '2.0', id: 230, method: 'claude.stopTask',
       params: { sessionId: 'stop-1', taskId: 'task-A' } })
     assert.equal(stopReply.result.ok, true)
@@ -1343,6 +1326,8 @@ async function inProcess() {
       params: { sessionId: 'stop-1', toolUseId: 'tool-Z' } })
     assert.equal(stopReply2.result.ok, true)
     assert.deepEqual(stopCaptured, ['task-A', 'tool-Z'])
+    releaseStopResult()
+    await stopSend
 
     // Missing args reject.
     const noSid = await dispatch({ jsonrpc: '2.0', id: 232, method: 'claude.stopTask',
@@ -1357,24 +1342,25 @@ async function inProcess() {
     mod.sessions.get('stop-1')?.liveQuery?.close()
   }
 
-  // setPermissionMode + setModel forward to the live query's control
-  // methods when one is open. Failure on the control method rebuilds
-  // on next sendMessage (closes liveQuery).
-  const ctrlCalls = { permissionMode: [], model: [] }
+  // setPermissionMode + setModel forward to the active query's control
+  // methods when one is open. autoCompactWindow closes the current query
+  // because it is applied through queryOptions.env on the next turn.
+  const ctrlCalls = { permissionMode: [], model: [], close: 0 }
+  let releaseCtrlResult
+  let ctrlTurnStartedResolve
+  const ctrlTurnStarted = new Promise(resolve => { ctrlTurnStartedResolve = resolve })
   const restoreCtrlSend = mod.__setSendEventForTests(() => {})
   const fakeSdkCtrl = {
-    query({ prompt }) {
-      const userIter = prompt[Symbol.asyncIterator]()
+    query() {
       const gen = (async function*() {
-        const first = await userIter.next()
-        if (first.done) return
         yield { type: 'system', subtype: 'init', session_id: 'sdk-ctrl' }
+        ctrlTurnStartedResolve()
+        await new Promise(resolve => { releaseCtrlResult = resolve })
         yield { type: 'result', subtype: 'success', session_id: 'sdk-ctrl', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
-        while (true) { const n = await userIter.next(); if (n.done) return }
       })()
       gen.setPermissionMode = async (m) => { ctrlCalls.permissionMode.push(m) }
       gen.setModel = async (m) => { ctrlCalls.model.push(m) }
-      gen.close = () => {}
+      gen.close = () => { ctrlCalls.close++; releaseCtrlResult?.() }
       return gen
     },
   }
@@ -1382,8 +1368,9 @@ async function inProcess() {
   try {
     await dispatch({ jsonrpc: '2.0', id: 234, method: 'claude.startSession',
       params: { sessionId: 'ctrl-1', options: { cwd: '/c' } } })
-    await dispatch({ jsonrpc: '2.0', id: 235, method: 'claude.sendMessage',
+    const ctrlSend = dispatch({ jsonrpc: '2.0', id: 235, method: 'claude.sendMessage',
       params: { sessionId: 'ctrl-1', prompt: 'hi' } })
+    await ctrlTurnStarted
     // Mode change must hit the control method.
     await dispatch({ jsonrpc: '2.0', id: 236, method: 'claude.setPermissionMode',
       params: { sessionId: 'ctrl-1', mode: 'plan' } })
@@ -1396,34 +1383,29 @@ async function inProcess() {
     await dispatch({ jsonrpc: '2.0', id: 238, method: 'claude.setModel',
       params: { sessionId: 'ctrl-1', model: 'claude-opus-4-7' } })
     assert.deepEqual(ctrlCalls.model, ['claude-opus-4-7'])
-    // Live query still open after control method success.
-    assert.equal(mod.sessions.get('ctrl-1').liveQuery.isClosed, false)
-    // autoCompactWindow change closes liveQuery (env var requires rebuild).
+    // autoCompactWindow change closes the current query (env var requires rebuild).
     await dispatch({ jsonrpc: '2.0', id: 239, method: 'claude.setModel',
       params: { sessionId: 'ctrl-1', autoCompactWindow: 200000 } })
-    assert.equal(mod.sessions.get('ctrl-1').liveQuery, null,
-      'autoCompactWindow change must close liveQuery so next send rebuilds with env')
+    assert.equal(mod.sessions.get('ctrl-1').currentQuery, null,
+      'autoCompactWindow change must close currentQuery so next send rebuilds with env')
+    await ctrlSend
   } finally {
     __setSdkOverrideForTests(undefined)
     restoreCtrlSend()
   }
 
   // closeLiveQuery cleanup: abortSession / stopSession / restSession /
-  // resetSession / resumeSession all close any open liveQuery so the
+  // resetSession / resumeSession all close any open currentQuery so the
   // SDK CLI subprocess doesn't outlive its session record. Verifies
-  // each handler tears down the live query reference.
+  // each handler tears down the query reference.
   const lcCalls = { close: 0 }
   const restoreLcSend = mod.__setSendEventForTests(() => {})
   function makeSdkLifecycle() {
     return {
-      query({ prompt }) {
-        const userIter = prompt[Symbol.asyncIterator]()
+      query() {
         const gen = (async function*() {
-          const first = await userIter.next()
-          if (first.done) return
           yield { type: 'system', subtype: 'init', session_id: 'sdk-lc' }
           yield { type: 'result', subtype: 'success', session_id: 'sdk-lc', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
-          while (true) { const n = await userIter.next(); if (n.done) return }
         })()
         gen.close = () => { lcCalls.close++ }
         return gen
@@ -1432,40 +1414,40 @@ async function inProcess() {
   }
   __setSdkOverrideForTests(makeSdkLifecycle())
   try {
-    // abortSession closes liveQuery.
+    // abortSession closes currentQuery.
     await dispatch({ jsonrpc: '2.0', id: 240, method: 'claude.startSession', params: { sessionId: 'lc-abort', options: { cwd: '/lc' } } })
     await dispatch({ jsonrpc: '2.0', id: 241, method: 'claude.sendMessage', params: { sessionId: 'lc-abort', prompt: 'hi' } })
-    assert.ok(mod.sessions.get('lc-abort').liveQuery, 'liveQuery built by sendMessage')
+    assert.ok(mod.sessions.get('lc-abort').currentQuery, 'currentQuery built by sendMessage')
     const closeBeforeAbort = lcCalls.close
     await dispatch({ jsonrpc: '2.0', id: 242, method: 'claude.abortSession', params: { sessionId: 'lc-abort' } })
-    assert.equal(mod.sessions.get('lc-abort').liveQuery, null, 'abortSession must null liveQuery')
+    assert.equal(mod.sessions.get('lc-abort').currentQuery, null, 'abortSession must null currentQuery')
     assert.ok(lcCalls.close > closeBeforeAbort, 'abortSession must call generator.close()')
 
-    // stopSession closes liveQuery + deletes session.
+    // stopSession closes currentQuery + deletes session.
     await dispatch({ jsonrpc: '2.0', id: 243, method: 'claude.startSession', params: { sessionId: 'lc-stop', options: { cwd: '/lc' } } })
     await dispatch({ jsonrpc: '2.0', id: 244, method: 'claude.sendMessage', params: { sessionId: 'lc-stop', prompt: 'hi' } })
     const stopCloseBefore = lcCalls.close
     await dispatch({ jsonrpc: '2.0', id: 245, method: 'claude.stopSession', params: { sessionId: 'lc-stop' } })
     assert.equal(mod.sessions.get('lc-stop'), undefined, 'stopSession deletes session record')
-    assert.ok(lcCalls.close > stopCloseBefore, 'stopSession must close liveQuery')
+    assert.ok(lcCalls.close > stopCloseBefore, 'stopSession must close currentQuery')
 
-    // resetSession closes liveQuery + deletes session.
+    // resetSession closes currentQuery + deletes session.
     await dispatch({ jsonrpc: '2.0', id: 246, method: 'claude.startSession', params: { sessionId: 'lc-reset', options: { cwd: '/lc' } } })
     await dispatch({ jsonrpc: '2.0', id: 247, method: 'claude.sendMessage', params: { sessionId: 'lc-reset', prompt: 'hi' } })
     const resetCloseBefore = lcCalls.close
     await dispatch({ jsonrpc: '2.0', id: 248, method: 'claude.resetSession', params: { sessionId: 'lc-reset' } })
     assert.equal(mod.sessions.get('lc-reset'), undefined, 'resetSession deletes session record')
-    assert.ok(lcCalls.close > resetCloseBefore, 'resetSession must close liveQuery')
+    assert.ok(lcCalls.close > resetCloseBefore, 'resetSession must close currentQuery')
 
-    // resumeSession closes existing liveQuery before swapping the record.
+    // resumeSession closes existing currentQuery before swapping the record.
     await dispatch({ jsonrpc: '2.0', id: 249, method: 'claude.startSession', params: { sessionId: 'lc-resume', options: { cwd: '/lc' } } })
     await dispatch({ jsonrpc: '2.0', id: 250, method: 'claude.sendMessage', params: { sessionId: 'lc-resume', prompt: 'hi' } })
     const resumeCloseBefore = lcCalls.close
     await dispatch({ jsonrpc: '2.0', id: 251, method: 'claude.resumeSession',
       params: { sessionId: 'lc-resume', sdkSessionId: 'sdk-lc-resumed', options: { cwd: '/lc' } } })
-    assert.ok(lcCalls.close > resumeCloseBefore, 'resumeSession must close prior liveQuery')
-    // New record has no liveQuery yet — first sendMessage rebuilds.
-    assert.equal(mod.sessions.get('lc-resume').liveQuery, undefined)
+    assert.ok(lcCalls.close > resumeCloseBefore, 'resumeSession must close prior currentQuery')
+    // New record has no currentQuery yet — first sendMessage rebuilds.
+    assert.equal(mod.sessions.get('lc-resume').currentQuery, undefined)
   } finally {
     __setSdkOverrideForTests(undefined)
     restoreLcSend()
