@@ -2412,19 +2412,21 @@ async function inProcess() {
     assert.equal(cs.result.connected, false)
     assert.equal(cs.result.info, null)
 
-    // remote.startServer is now real (#51) — its end-to-end behaviour is
-    // covered by the dedicated remote-server-impl block below. Here we
-    // only assert the still-stubbed client-side ops (connect/disconnect/
-    // testConnection/listProfiles) keep returning the {error} shape so
-    // SettingsPanel / ProfilePanel's `'error' in result` branches stay
-    // well-defined until the remote-client port lands.
-    const conn = await dispatch({ jsonrpc: '2.0', id: 9004, method: 'remote.connect', params: { host: 'h', port: 1, token: 't', fingerprint: 'f' } })
-    assert.equal(typeof conn.result.error, 'string')
-    const test = await dispatch({ jsonrpc: '2.0', id: 9005, method: 'remote.testConnection', params: { host: 'h', port: 1, token: 't', fingerprint: 'f' } })
+    // remote.startServer / connect / disconnect / clientStatus /
+    // testConnection / listProfiles are now all real (#51, #52). The
+    // end-to-end happy-path round trip is covered by the
+    // remote-client-impl block below. Here we only assert the
+    // input-validation branches that don't require a live server, since
+    // SettingsPanel's `'error' in result` branch reads these.
+    const conn = await dispatch({ jsonrpc: '2.0', id: 9004, method: 'remote.connect', params: { host: 'h', port: 1, token: 't' /* missing fingerprint */ } })
+    assert.equal(typeof conn.result.error, 'string', 'missing fingerprint must surface error')
+    assert.match(conn.result.error, /fingerprint/i)
+    const test = await dispatch({ jsonrpc: '2.0', id: 9005, method: 'remote.testConnection', params: { host: 'h', port: 1, token: 't' /* missing fingerprint */ } })
     assert.equal(test.result.ok, false)
-    assert.equal(typeof test.result.error, 'string')
-    const lp = await dispatch({ jsonrpc: '2.0', id: 9006, method: 'remote.listProfiles', params: { host: 'h', port: 1, token: 't', fingerprint: 'f' } })
+    assert.match(test.result.error, /fingerprint/i)
+    const lp = await dispatch({ jsonrpc: '2.0', id: 9006, method: 'remote.listProfiles', params: { host: 'h', port: 1, token: 't' /* missing fingerprint */ } })
     assert.equal(typeof lp.result.error, 'string')
+    assert.match(lp.result.error, /fingerprint/i)
 
     // tunnel.getConnection — loopback `boundHost` short-circuits to a
     // single 127.0.0.1 entry. The handler still returns `{error, addresses}`
@@ -2996,6 +2998,305 @@ async function inProcess() {
       server = null // skip the outer-finally stop
     } finally {
       if (server && server.isRunning) await server.stop()
+      rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  }
+
+  // remote-client-impl — outgoing RemoteClient against a live RemoteServer.
+  // Covers: fingerprint pinning happy/mismatch path, auth happy/wrong-token
+  // path, invoke-error round trip (server has no bridged handlers in this
+  // slice, so any allowed channel surfaces "not yet bridged"), event
+  // fan-out from broadcastHub through the renderer-emit hook, isConnected
+  // / connectionInfo / disconnect cleanup.
+  {
+    const { RemoteServer } = await import('../src/lib/remote-server-impl.mjs')
+    const { RemoteClient, __setRemoteClientEmitForTests, __setRemoteClientLoggerForTests } =
+      await import('../src/lib/remote-client-impl.mjs')
+    const { broadcastHub, __resetBroadcastHubForTests } = await import('../src/lib/remote-broadcast.mjs')
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { join } = await import('node:path')
+
+    // Silence the client's stderr logging during the test run (mismatch /
+    // close paths log expected errors).
+    const restoreLogger = __setRemoteClientLoggerForTests({ log: () => {}, error: () => {} })
+
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'bat-remote-client-'))
+    const dir = join(tmpRoot, 'cfg')
+    const server = new RemoteServer(dir)
+    let started
+    try {
+      started = await server.start({ port: 0, bindInterface: 'localhost' })
+
+      // (a) Happy path: connect with the right fingerprint + token, get
+      // {connected: true, info}. isConnected reflects open socket.
+      {
+        const client = new RemoteClient()
+        try {
+          const ok = await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+            label: 'test-laptop',
+          })
+          assert.equal(ok, true, 'happy-path connect should resolve true')
+          assert.equal(client.isConnected, true)
+          assert.deepEqual(client.connectionInfo, { host: '127.0.0.1', port: started.port })
+
+          // Server sees the labeled client.
+          const liveStatus = server.status()
+          assert.equal(liveStatus.clients.length, 1)
+          assert.equal(liveStatus.clients[0].label, 'test-laptop')
+        } finally {
+          client.disconnect()
+        }
+
+        // After disconnect: not connected, info null, generation bumped.
+        assert.equal(client.isConnected, false)
+        assert.equal(client.connectionInfo, null)
+
+        // Give the server a tick to drop the closed socket.
+        await new Promise(r => setTimeout(r, 50))
+      }
+
+      // (b) Fingerprint mismatch: connect resolves false, isConnected false.
+      // Use a syntactically valid SHA-256 fingerprint that's not the server's.
+      {
+        const wrongFp = 'AA:'.repeat(31) + 'AA'
+        const client = new RemoteClient()
+        try {
+          const ok = await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: wrongFp,
+          })
+          assert.equal(ok, false, 'mismatched fingerprint must reject')
+          assert.equal(client.isConnected, false)
+        } finally {
+          client.disconnect()
+        }
+      }
+
+      // (c) Wrong token: TLS handshake succeeds (fingerprint matches), but
+      // the auth-result frame carries an error → connect resolves false.
+      {
+        const client = new RemoteClient()
+        try {
+          const ok = await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: 'definitely-not-the-real-token',
+            fingerprint: started.fingerprint,
+          })
+          assert.equal(ok, false)
+          assert.equal(client.isConnected, false)
+        } finally {
+          client.disconnect()
+        }
+      }
+
+      // (d) Connect-time validation — missing fingerprint / host / port /
+      // token rejects synchronously without opening a socket.
+      {
+        const client = new RemoteClient()
+        await assert.rejects(client.connect({ host: 'h', port: 1, token: 't' }), /fingerprint is required/)
+        await assert.rejects(client.connect({ host: '', port: 1, token: 't', fingerprint: 'AA' }), /host is required/)
+        await assert.rejects(client.connect({ host: 'h', port: 0, token: 't', fingerprint: 'AA' }), /port is required/)
+        await assert.rejects(client.connect({ host: 'h', port: 1, token: '', fingerprint: 'AA' }), /token is required/)
+        await assert.rejects(client.connect(null), /options is required/)
+      }
+
+      // (e) invoke before connect → rejects with 'Not connected'.
+      {
+        const client = new RemoteClient()
+        await assert.rejects(client.invoke('claude:auth-status', []), /Not connected/)
+      }
+
+      // (f) invoke round trip — server has no bridged handlers so any
+      // allowed channel surfaces 'not yet bridged'. A non-allowlisted
+      // channel surfaces 'not exposed remotely'. Both come back through
+      // the pending-invoke promise as a rejection, exactly the same way
+      // the renderer's wrapper sees them.
+      {
+        const client = new RemoteClient()
+        try {
+          await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+          })
+          await assert.rejects(
+            client.invoke('claude:auth-status', []),
+            /not yet bridged/,
+          )
+          await assert.rejects(
+            client.invoke('evil:nuke-fs', []),
+            /not exposed remotely/,
+          )
+          // invoke channel-validation (empty) rejects synchronously.
+          await assert.rejects(client.invoke('', []), /non-empty string/)
+        } finally {
+          client.disconnect()
+        }
+      }
+
+      // (g) Event fan-out: broadcastHub.broadcast('claude:message', ...)
+      // on the server side reaches the client's emit hook. PROXIED_EVENTS
+      // gates which channels survive — non-allowlisted channels never fire.
+      {
+        const captured = []
+        const restoreEmit = __setRemoteClientEmitForTests((channel, args) => {
+          captured.push({ channel, args })
+        })
+        const client = new RemoteClient()
+        try {
+          await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+          })
+
+          // Emit one allowlisted event, one non-allowlisted event.
+          // 'claude:message' is in PROXIED_EVENTS; 'fake:ignored' is not.
+          broadcastHub.broadcast('claude:message', { id: 'm1', text: 'hi' })
+          broadcastHub.broadcast('fake:ignored', 'should-not-arrive')
+          // Wait for the message to round-trip.
+          const deadline = Date.now() + 1000
+          while (captured.length === 0 && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 20))
+          }
+          assert.equal(captured.length, 1, 'exactly one allowlisted event should fan out')
+          assert.equal(captured[0].channel, 'claude:message')
+          assert.deepEqual(captured[0].args, [{ id: 'm1', text: 'hi' }])
+        } finally {
+          restoreEmit()
+          client.disconnect()
+          __resetBroadcastHubForTests()
+        }
+      }
+
+      // (h) Pending invokes get rejected on disconnect.
+      {
+        const client = new RemoteClient()
+        try {
+          await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+          })
+          // Fire a long-timeout invoke we'll never await, then disconnect.
+          const inflight = client.invoke('claude:auth-status', [], 10_000).catch(e => e)
+          // Server replies fast with 'not yet bridged' — race that against
+          // disconnect. Either rejection message is fine (both come back
+          // as Error). Just ensure the promise settles, doesn't leak.
+          client.disconnect()
+          const err = await inflight
+          assert.ok(err instanceof Error)
+        } catch (err) {
+          // Connection might already be closed before invoke; both fine.
+          assert.ok(err)
+        }
+      }
+
+      // (i) Re-connect after explicit disconnect is allowed (generation
+      // bump). The fresh connection round-trips auth without surfacing a
+      // stale reconnect.
+      {
+        const client = new RemoteClient()
+        try {
+          let ok = await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+          })
+          assert.equal(ok, true)
+          client.disconnect()
+          ok = await client.connect({
+            host: '127.0.0.1',
+            port: started.port,
+            token: started.token,
+            fingerprint: started.fingerprint,
+          })
+          assert.equal(ok, true, 'reconnect after disconnect must succeed')
+          assert.equal(client.isConnected, true)
+        } finally {
+          client.disconnect()
+        }
+      }
+
+      // (j) Handler-level happy path through the dispatch surface.
+      // remote.connect / clientStatus / disconnect drive the singleton
+      // RemoteClient that the Tauri renderer talks to.
+      {
+        const connReply = await dispatch({
+          jsonrpc: '2.0', id: 9100, method: 'remote.connect',
+          params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: started.fingerprint, label: 'singleton' },
+        })
+        assert.equal(connReply.result.connected, true,
+          `remote.connect should succeed, got ${JSON.stringify(connReply.result)}`)
+        assert.deepEqual(connReply.result.info, { host: '127.0.0.1', port: started.port })
+
+        const csReply = await dispatch({ jsonrpc: '2.0', id: 9101, method: 'remote.clientStatus' })
+        assert.equal(csReply.result.connected, true)
+        assert.deepEqual(csReply.result.info, { host: '127.0.0.1', port: started.port })
+
+        const discReply = await dispatch({ jsonrpc: '2.0', id: 9102, method: 'remote.disconnect' })
+        assert.equal(discReply.result, true)
+
+        const csAfter = await dispatch({ jsonrpc: '2.0', id: 9103, method: 'remote.clientStatus' })
+        assert.equal(csAfter.result.connected, false)
+        assert.equal(csAfter.result.info, null)
+      }
+
+      // (k) testConnection through dispatch — happy path returns {ok:true},
+      // wrong fingerprint returns {ok:false}.
+      {
+        const okReply = await dispatch({
+          jsonrpc: '2.0', id: 9110, method: 'remote.testConnection',
+          params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: started.fingerprint },
+        })
+        assert.equal(okReply.result.ok, true,
+          `testConnection happy path should succeed, got ${JSON.stringify(okReply.result)}`)
+
+        const badReply = await dispatch({
+          jsonrpc: '2.0', id: 9111, method: 'remote.testConnection',
+          params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: 'AA:'.repeat(31) + 'BB' },
+        })
+        assert.equal(badReply.result.ok, false)
+
+        // Wrong-token returns ok:false (no error string — auth path resolves cleanly false).
+        const wrongTokenReply = await dispatch({
+          jsonrpc: '2.0', id: 9112, method: 'remote.testConnection',
+          params: { host: '127.0.0.1', port: started.port, token: 'wrong', fingerprint: started.fingerprint },
+        })
+        assert.equal(wrongTokenReply.result.ok, false)
+      }
+
+      // (l) listProfiles through dispatch — server has no profile:list
+      // bridged in this slice, so the client invoke surfaces 'not yet
+      // bridged' as the {error} field. SettingsPanel branches on
+      // `'error' in result` so the shape contract holds.
+      // NOTE: ban the testConnection IP first might not matter — we used
+      // valid token paths above.
+      {
+        // Short-circuit if the wrong-token testConnection above pushed us
+        // toward the 5/60s ban. We do at most 1 wrong-token attempt above
+        // so we're safely under the threshold.
+        const lpReply = await dispatch({
+          jsonrpc: '2.0', id: 9120, method: 'remote.listProfiles',
+          params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: started.fingerprint },
+        })
+        assert.equal(typeof lpReply.result.error, 'string')
+        assert.match(lpReply.result.error, /not yet bridged|not exposed/i)
+      }
+    } finally {
+      restoreLogger()
+      if (server.isRunning) await server.stop()
       rmSync(tmpRoot, { recursive: true, force: true })
     }
   }
