@@ -66,6 +66,7 @@
 - 2026-05-10：修正 Tauri Claude 第二輪送訊息與 resume 歷史缺口。sidecar 在每個 Claude turn 完成後會關閉 LiveQuery，下一輪用已捕捉的 `sdkSessionId` 重建 `resume` query，避免第二次 prompt 卡在沒有 consumer 的 persistent stream；`claude.resumeSession/startSession` 也會載入 `.claude/projects/*.jsonl` 並 emit `claude:resume-loading` / `claude:history`，讓歷史討論回到 UI。
 - 2026-05-10：降低 Tauri workspace state 檔案 I/O 阻塞風險。`workspace.load/save` 已改成 async command + `spawn_blocking`；啟動讀 `workspaces.json` 與工作區狀態儲存不再佔住 Tauri command handler，Electron/Tauri 回傳 shape 不變。
 - 2026-05-10：降低 Tauri Git/GitHub panel shell-out 阻塞風險。`git.*` 與 `github.*` Rust commands 仍沿用 Electron 的 `git` / `gh` CLI 行為，但 shell-out 與 timeout polling 已移到 `spawn_blocking`；GitPanel/GitHubPanel refresh、diff、status、PR/issue 查詢不再佔住 Tauri command handler。
+- 2026-05-10：降低 Tauri FolderPicker mutation UI 阻塞風險。`fs.mkdir` / `fs.deletePath` 行為仍對齊 Electron 的新資料夾與刪除資料夾流程，但 `create_dir`、`symlink_metadata`、`remove_dir_all` 已移到 `spawn_blocking`；慢磁碟或大量資料夾刪除不再佔住 Tauri command handler。
 
 ## 目前判斷
 

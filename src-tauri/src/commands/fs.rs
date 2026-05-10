@@ -311,6 +311,15 @@ fn validate_dir_name(name: &str) -> Result<(), &'static str> {
 
 #[tauri::command]
 pub async fn fs_mkdir(parent_path: String, name: String) -> PathOrError {
+    tauri::async_runtime::spawn_blocking(move || fs_mkdir_impl(parent_path, name))
+        .await
+        .unwrap_or_else(|e| PathOrError {
+            error: Some(e.to_string()),
+            ..Default::default()
+        })
+}
+
+fn fs_mkdir_impl(parent_path: String, name: String) -> PathOrError {
     let trimmed = name.trim();
     if let Err(msg) = validate_dir_name(&name) {
         return PathOrError {
@@ -348,6 +357,15 @@ pub async fn fs_mkdir(parent_path: String, name: String) -> PathOrError {
 
 #[tauri::command]
 pub async fn fs_delete_path(target_path: String) -> PathOrError {
+    tauri::async_runtime::spawn_blocking(move || fs_delete_path_impl(target_path))
+        .await
+        .unwrap_or_else(|e| PathOrError {
+            error: Some(e.to_string()),
+            ..Default::default()
+        })
+}
+
+fn fs_delete_path_impl(target_path: String) -> PathOrError {
     let abs = match std::path::absolute(&target_path) {
         Ok(p) => p,
         Err(e) => {
