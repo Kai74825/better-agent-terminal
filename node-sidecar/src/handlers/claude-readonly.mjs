@@ -300,7 +300,7 @@ registerHandler('claude.getWorktreeStatus', async (params) => {
 })
 // claude.scanSkills walks <cwd>/.claude/skills + ~/.claude/skills and
 // returns SkillMeta entries. No SDK dep — pure fs walk + YAML
-// frontmatter parsing. Mirrors electron/openai-agent/skills-scanner.ts.
+// frontmatter parsing.
 function restoreSessionCwdAfterWorktreeCleanup(sessionId, info) {
   const session = sessions.get(sessionId)
   if (!session?.options || typeof session.options !== 'object') return

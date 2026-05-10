@@ -89,6 +89,32 @@ async function main() {
     'legacy openai-agent sessions must not be assigned OpenAI Direct ownership',
   )
 
+  for (const removedFile of [
+    'electron/openai-agent-manager.ts',
+    'electron/openai-agent/models.ts',
+    'electron/openai-agent/persistence.ts',
+    'electron/openai-agent/skills-scanner.ts',
+    'electron/openai-agent/compaction.ts',
+    'electron/openai-tools/registry.ts',
+  ]) {
+    await assert.rejects(
+      readFile(removedFile, 'utf8'),
+      undefined,
+      `${removedFile} should be removed with OpenAI Direct runtime`,
+    )
+  }
+
+  const pkg = JSON.parse(await readFile('package.json', 'utf8')) as {
+    dependencies?: Record<string, string>
+  }
+  for (const removedDep of ['@ai-sdk/openai', 'ai', 'zod']) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(pkg.dependencies ?? {}, removedDep),
+      false,
+      `${removedDep} should not remain as a direct dependency`,
+    )
+  }
+
   console.log('OpenAI Direct cleanup migration: passed')
 }
 

@@ -1,7 +1,6 @@
 // Walks <cwd>/.claude/skills and ~/.claude/skills, picks up
 // SKILL.md inside subdirs and *.md files at the top level, parses YAML
 // frontmatter (name, description) and falls back to the first heading.
-// Mirrors electron/openai-agent/skills-scanner.ts.
 
 import { readdir, stat, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
