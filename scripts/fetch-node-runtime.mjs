@@ -3,9 +3,10 @@
 // so the Tauri release bundle ships a self-contained Node interpreter.
 //
 // Defaults to Node v20.18.1 (current LTS) and the current host platform/arch.
-// Pass --version=v22.x or --target=darwin-arm64 to override; --all fetches
-// every supported triple in one go (used in CI to produce per-platform
-// installers from a single build host).
+// Pass --version=v22.x or --target=darwin-aarch64 to override; --all fetches
+// every supported triple in one go. By default the script prunes other known
+// runtime triples so stale cross-platform runtimes are not bundled by Tauri;
+// pass --keep-other-targets to preserve them.
 //
 // Layout it produces, matching Node.org portable archives:
 //   windows-x86_64/node.exe
@@ -50,10 +51,11 @@ function detectHostTarget() {
 }
 
 function parseArgs(argv) {
-  const out = { version: DEFAULT_VERSION, targets: null, force: false }
+  const out = { version: DEFAULT_VERSION, targets: null, force: false, keepOtherTargets: false }
   for (const a of argv) {
     if (a === '--all') out.targets = Object.keys(TARGETS)
     else if (a === '--force') out.force = true
+    else if (a === '--keep-other-targets') out.keepOtherTargets = true
     else if (a.startsWith('--version=')) out.version = a.slice('--version='.length)
     else if (a.startsWith('--target=')) out.targets = [a.slice('--target='.length)]
   }
@@ -146,9 +148,24 @@ async function fetchOne(triple, version) {
   }
 }
 
+async function pruneUnselectedTargets(selectedTargets) {
+  const selected = new Set(selectedTargets)
+  for (const triple of Object.keys(TARGETS)) {
+    if (selected.has(triple)) continue
+    const staleDir = join(runtimeRoot, triple)
+    if (await pathExists(staleDir)) {
+      await rm(staleDir, { recursive: true, force: true })
+      console.log(`[fetch-node-runtime] ${triple}: pruned stale runtime`)
+    }
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2))
   await mkdir(runtimeRoot, { recursive: true })
+  if (!args.keepOtherTargets) {
+    await pruneUnselectedTargets(args.targets)
+  }
   for (const t of args.targets) {
     const expected = join(runtimeRoot, t, TARGETS[t]?.exePath ?? '')
     if (!args.force && TARGETS[t] && await pathExists(expected)) {
