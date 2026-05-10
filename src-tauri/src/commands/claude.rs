@@ -147,46 +147,49 @@ pub async fn claude_send_message(
 }
 
 #[tauri::command]
-pub fn claude_stop_session(
+pub async fn claude_stop_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.stopSession",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_abort_session(
+pub async fn claude_abort_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.abortSession",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_stop_task(
+pub async fn claude_stop_task(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     task_id: String,
 ) -> Result<bool, BridgeError> {
-    let value = call(
-        &app,
-        &state,
+    let value = call_blocking(
+        app,
+        state,
         "claude.stopTask",
         json!({ "sessionId": session_id, "taskId": task_id }),
-    )?;
+    )
+    .await?;
     Ok(value
         .as_bool()
         .or_else(|| value.get("ok").and_then(Value::as_bool))
@@ -385,17 +388,18 @@ pub fn claude_get_context_usage(
 }
 
 #[tauri::command]
-pub fn claude_get_worktree_status(
+pub async fn claude_get_worktree_status(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getWorktreeStatus",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
@@ -408,21 +412,22 @@ pub async fn claude_scan_skills(
 }
 
 #[tauri::command]
-pub fn claude_cleanup_worktree(
+pub async fn claude_cleanup_worktree(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.cleanupWorktree",
         json!({
             "sessionId": session_id,
             "deleteBranch": delete_branch,
         }),
     )
+    .await
 }
 
 // --- per-session state -----------------------------------------------------
@@ -626,45 +631,48 @@ pub fn claude_clear_archive(
 }
 
 #[tauri::command]
-pub fn claude_rest_session(
+pub async fn claude_rest_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.restSession",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_wake_session(
+pub async fn claude_wake_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.wakeSession",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_is_resting(
+pub async fn claude_is_resting(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.isResting",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
