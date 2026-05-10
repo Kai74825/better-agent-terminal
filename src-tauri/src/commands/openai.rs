@@ -1,9 +1,8 @@
-// openai.* — forwards to the Node sidecar.
+// openai.* — forwards Codex auth fallback key storage to the Node sidecar.
 //
-// Mirrors the Electron preload contract: 5 methods (getApiKeyStatus,
-// setApiKey, clearApiKey, listSessions, compactNow). All stubbed in the
-// sidecar today; real impls land when the OpenAI agent manager moves
-// over.
+// OpenAI Direct runtime is retired. Do not add session/runtime routes here;
+// renderer compatibility shims for deprecated list/compact methods live in
+// host-api and intentionally do not hit the backend.
 
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde_json::{json, Value};
@@ -60,28 +59,4 @@ pub async fn openai_clear_api_key(
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     call_blocking(app, state, "openai.clearApiKey", Value::Null).await
-}
-
-#[tauri::command]
-pub async fn openai_list_sessions(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    cwd: String,
-) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "openai.listSessions", json!({ "cwd": cwd })).await
-}
-
-#[tauri::command]
-pub async fn openai_compact_now(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    session_id: String,
-) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
-        state,
-        "openai.compactNow",
-        json!({ "sessionId": session_id }),
-    )
-    .await
 }

@@ -175,8 +175,6 @@ pub fn run() {
             openai_cmd::openai_get_api_key_status,
             openai_cmd::openai_set_api_key,
             openai_cmd::openai_clear_api_key,
-            openai_cmd::openai_list_sessions,
-            openai_cmd::openai_compact_now,
             worktree_cmd::worktree_create,
             worktree_cmd::worktree_remove,
             worktree_cmd::worktree_status,

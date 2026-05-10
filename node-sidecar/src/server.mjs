@@ -137,7 +137,6 @@ export {
   __resetClaudeCliCacheForTests,
 } from './handlers/claude-auth.mjs'
 export { resolveDataDir } from './lib/data-paths.mjs'
-export { listOpenAISessions, OPENAI_SESSIONS_ROOT } from './handlers/openai.mjs'
 export { AGENT_PRESET_IDS } from './handlers/agent.mjs'
 export {
   worktreeCreate,

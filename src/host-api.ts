@@ -864,25 +864,24 @@ function createTauriHost(): BatAppAPI {
       },
     }),
     openai: new Proxy({}, {
-      // Mirrors Electron preload openai.*: 5 methods. All go through the
-      // sidecar under their canonical method names.
+      // OpenAI Direct runtime is retired. Keep the renderer-facing methods
+      // for Electron preload compatibility, but only API-key storage still
+      // routes to the sidecar as a Codex auth fallback.
       get(_t, prop) {
         const key = String(prop)
         const map: Record<string, string> = {
           getApiKeyStatus: 'openai_get_api_key_status',
           setApiKey: 'openai_set_api_key',
           clearApiKey: 'openai_clear_api_key',
-          listSessions: 'openai_list_sessions',
-          compactNow: 'openai_compact_now',
         }
         if (key === 'setApiKey') {
           return (apiKey: string) => getInvoke()<unknown>('openai_set_api_key', { apiKey })
         }
         if (key === 'listSessions') {
-          return (cwd: string) => getInvoke()<unknown>('openai_list_sessions', { cwd })
+          return async () => []
         }
         if (key === 'compactNow') {
-          return (sessionId: string) => getInvoke()<unknown>('openai_compact_now', { sessionId })
+          return async () => false
         }
         if (map[key]) {
           return () => getInvoke()<unknown>(map[key])

@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
@@ -362,49 +362,6 @@ async function inProcess() {
       if (savedOpenAIEnv === undefined) delete process.env.OPENAI_API_KEY
       else process.env.OPENAI_API_KEY = savedOpenAIEnv
     }
-  }
-
-  // listOpenAISessions — fabricate a fake openai-sessions tree under the
-  // real ~/.better-agent-terminal/openai-sessions root with a unique date
-  // path so we don't collide with real sessions. Clean up after.
-  const { listOpenAISessions, OPENAI_SESSIONS_ROOT } = mod
-  // Use a year far in the future so it sorts first and can't conflict
-  // with a real session on disk.
-  const fakeYear = '9999'
-  const fakeDayDir = join(OPENAI_SESSIONS_ROOT, fakeYear, '01', '01')
-  mkdirSync(fakeDayDir, { recursive: true })
-  try {
-    const sessId = `test-${Date.now()}`
-    const file = join(fakeDayDir, `${sessId}.jsonl`)
-    const lines = [
-      JSON.stringify({ type: 'system', payload: { content: 'init' } }),
-      JSON.stringify({ type: 'user', payload: { content: 'first user prompt\nsecond line ignored' } }),
-      JSON.stringify({ type: 'assistant', payload: { content: 'reply' } }),
-      '',
-      'malformed-line',
-    ]
-    writeFileSync(file, lines.join('\n') + '\n')
-    const sessions = await listOpenAISessions()
-    const ours = sessions.find(s => s.sdkSessionId === sessId)
-    assert.ok(ours, `expected fixture session in result; got ${sessions.length} sessions`)
-    assert.equal(ours.preview, 'first user prompt')
-    // 4 non-empty lines, but one is malformed JSON; impl counts them all
-    // as message lines (matches Electron's behaviour) — assert >= 3.
-    assert.ok(ours.messageCount >= 3, `unexpected count: ${ours.messageCount}`)
-    assert.equal(typeof ours.timestamp, 'number')
-
-    for (let i = 0; i < 55; i += 1) {
-      const bulkFile = join(fakeDayDir, `bulk-${String(i).padStart(2, '0')}.jsonl`)
-      writeFileSync(bulkFile, JSON.stringify({ type: 'user', payload: { content: `bulk ${i}` } }) + '\n')
-      const ts = new Date(Date.UTC(9999, 0, 1, 0, i, 0))
-      utimesSync(bulkFile, ts, ts)
-    }
-    const capped = await listOpenAISessions()
-    assert.equal(capped.length, 50, 'OpenAI session list should match Electron 50-session cap')
-    assert.equal(capped[0].sdkSessionId, 'bulk-54')
-    assert.equal(capped.at(-1)?.sdkSessionId, 'bulk-05')
-  } finally {
-    rmSync(join(OPENAI_SESSIONS_ROOT, fakeYear), { recursive: true, force: true })
   }
 
   // scanSkills — fabricate a project-scoped .claude/skills/ tree and

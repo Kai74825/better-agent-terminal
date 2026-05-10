@@ -85,6 +85,7 @@
 - 2026-05-11：補 Rust-owned Codex worktree 的 sidecar rehydrate。`claude.startSession/resumeSession` 由 Rust app-server 接手 `codex-agent-worktree` 前，會 best-effort 呼叫 `worktree.rehydrate`，讓既有 Diff/close cleanup 等 worktree sidecar commands 在重開後仍有 activeWorktree state。
 - 2026-05-11：補 Rust-owned Codex metadata read-only route。`getSupportedModels` 對 Rust-owned Codex session 直接回 Codex model list，`getSupportedCommands/getSupportedAgents/getAccountInfo` 直接回空值，避免 Codex panel metadata refresh 落到 sidecar Claude SDK 路徑而顯示 Claude models 或產生不必要的 metadata latency。
 - 2026-05-11：補 Rust-owned Codex session controls。`resetSession` 會在 Rust app-server 建新 thread 並清空本地 turn/token/message state；`restSession` / `wakeSession` / `isResting` 由 Rust session state 直接處理，避免 Codex UI 控制落回 Node sidecar。
+- 2026-05-11：繼續 OpenAI Direct cleanup。Tauri `host.openai.listSessions/compactNow` 保留 renderer 相容方法但改成 host-level no-op，不再註冊 Rust command 或 sidecar handler；`getApiKeyStatus/setApiKey/clearApiKey` 保留作為 Codex auth fallback。
 
 ## 目前判斷
 

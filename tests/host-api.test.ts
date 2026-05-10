@@ -207,8 +207,6 @@ async function run() {
       if (cmd === 'openai_get_api_key_status') return { hasKey: false } as unknown as T
       if (cmd === 'openai_set_api_key') return true as unknown as T
       if (cmd === 'openai_clear_api_key') return true as unknown as T
-      if (cmd === 'openai_list_sessions') return [] as unknown as T
-      if (cmd === 'openai_compact_now') return false as unknown as T
       if (cmd === 'worktree_create') return { success: false, error: 'stub' } as unknown as T
       if (cmd === 'worktree_remove') return { success: false, error: 'stub' } as unknown as T
       if (cmd === 'worktree_status') return null as unknown as T
@@ -533,8 +531,9 @@ async function run() {
     assert.equal(await mod.host.claude.getContextUsage('s-1'), null)
     assert.equal(await mod.host.claude.getWorktreeStatus('s-1'), null)
 
-    // openai.* — sidecar-routed. API key storage is now real in the sidecar;
-    // listSessions/compact remain thin routes until the OpenAI runtime moves.
+    // openai.* — API key storage is still sidecar-routed as a Codex auth
+    // fallback. OpenAI Direct session runtime is retired, so deprecated
+    // list/compact methods are host-level no-ops and do not invoke Tauri.
     assert.deepEqual(await mod.host.openai.getApiKeyStatus(), { hasKey: false })
     assert.equal(await mod.host.openai.setApiKey('sk-x'), true)
     assert.equal(await mod.host.openai.clearApiKey(), true)
@@ -747,7 +746,7 @@ async function run() {
       { cmd: 'claude_account_remove', args: { accountId: 'a-1' } },
       { cmd: 'claude_account_mark_warning_shown', args: undefined },
       { cmd: 'claude_get_cli_path', args: undefined },
-      { cmd: 'claude_list_sessions', args: { cwd: '/cwd' } },
+      { cmd: 'claude_list_sessions', args: { cwd: '/cwd', agentKind: undefined } },
       { cmd: 'claude_scan_skills', args: { cwd: '/cwd' } },
       { cmd: 'claude_cleanup_worktree', args: { sessionId: 's-1', deleteBranch: true } },
       { cmd: 'claude_set_auto_continue', args: { sessionId: 's-1', opts: { enabled: true } } },
@@ -769,8 +768,6 @@ async function run() {
       { cmd: 'openai_get_api_key_status', args: undefined },
       { cmd: 'openai_set_api_key', args: { apiKey: 'sk-x' } },
       { cmd: 'openai_clear_api_key', args: undefined },
-      { cmd: 'openai_list_sessions', args: { cwd: '/cwd' } },
-      { cmd: 'openai_compact_now', args: { sessionId: 's-1' } },
       { cmd: 'worktree_create', args: { sessionId: 's-1', cwd: '/cwd' } },
       { cmd: 'worktree_remove', args: { sessionId: 's-1', deleteBranch: true } },
       { cmd: 'worktree_status', args: { sessionId: 's-1' } },
