@@ -1064,6 +1064,230 @@ async function inProcess() {
     restoreSendEvent()
   }
 
+  // LiveQuery — long-lived streaming-input mode SDK Query. Unwired in
+  // this slice; the sendMessage rewrite that consumes it lands later.
+  // We lock down the API surface here so the consumer slice can rely
+  // on push() / stopTask / interrupt / close / FIFO turn deferreds.
+  {
+    const { LiveQuery } = await import('../src/lib/live-query.mjs')
+
+    // Helper: build a fake SDK whose `query({prompt, options})` returns
+    // a generator that drains the prompt iterable, emitting a 3-message
+    // turn (system/init + assistant + result) per pushed user message.
+    // Control methods (stopTask / interrupt / setPermissionMode /
+    // setModel / close) are also stubbed so we can assert call counts.
+    function makeStreamingFakeSdk({ failOnFirstTurn = false } = {}) {
+      const calls = { query: 0, stopTask: [], interrupt: 0, setPermissionMode: [], setModel: [], close: 0 }
+      let turnIdx = 0
+      const sdk = {
+        query({ prompt, options }) {
+          calls.query++
+          calls.lastOptions = options
+          let userIter = null
+          const gen = (async function*() {
+            userIter = prompt[Symbol.asyncIterator]()
+            while (true) {
+              const next = await userIter.next()
+              if (next.done) return
+              turnIdx++
+              if (failOnFirstTurn && turnIdx === 1) {
+                throw new Error('simulated stream failure')
+              }
+              yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }
+              yield { type: 'assistant', session_id: 'sdk-1',
+                message: { role: 'assistant', content: [{ type: 'text', text: `turn-${turnIdx}` }] } }
+              yield { type: 'result', subtype: 'success', session_id: 'sdk-1',
+                result: `turn-${turnIdx}`, stop_reason: 'end_turn',
+                total_cost_usd: 0.001, num_turns: turnIdx }
+            }
+          })()
+          gen.stopTask = async (taskId) => { calls.stopTask.push(taskId) }
+          gen.interrupt = async () => { calls.interrupt++ }
+          gen.setPermissionMode = async (m) => { calls.setPermissionMode.push(m) }
+          gen.setModel = async (m) => { calls.setModel.push(m) }
+          gen.close = () => { calls.close++ }
+          return gen
+        },
+      }
+      return { sdk, calls }
+    }
+
+    // (a) Construction validates required deps. Missing sdk / onMessage
+    // throws synchronously so callers don't get an opaque later failure.
+    assert.throws(() => new LiveQuery({}), /sdk\.query is required/)
+    assert.throws(() => new LiveQuery({ sdk: { query: () => null } }), /onMessage callback is required/)
+
+    // (b) Single-turn round trip: sdk.query is called exactly once on
+    // construction, push() resolves with the result frame, onMessage is
+    // invoked for every yielded SDK message in order, isClosed=false
+    // throughout. Repeat push() reuses the same query (call count stays).
+    {
+      const { sdk, calls } = makeStreamingFakeSdk()
+      const seen = []
+      const lq = new LiveQuery({ sdk, queryOptions: { cwd: '/x' }, onMessage: (m) => seen.push(m) })
+      assert.equal(calls.query, 1, 'sdk.query must run exactly once on construction')
+      assert.equal(lq.isClosed, false)
+
+      const r1 = await lq.push({ type: 'user', message: { role: 'user', content: 'hi' } })
+      assert.equal(r1.type, 'result')
+      assert.equal(r1.result, 'turn-1')
+      // onMessage saw all three frames in order.
+      assert.equal(seen.length, 3)
+      assert.equal(seen[0].type, 'system')
+      assert.equal(seen[1].type, 'assistant')
+      assert.equal(seen[2].type, 'result')
+
+      // Second push: same query, no rebuild.
+      const r2 = await lq.push({ type: 'user', message: { role: 'user', content: 'follow up' } })
+      assert.equal(calls.query, 1, 'second push must NOT rebuild the query')
+      assert.equal(r2.result, 'turn-2')
+      assert.equal(seen.length, 6)
+
+      lq.close()
+      assert.equal(lq.isClosed, true)
+      assert.equal(calls.close, 1, 'close() must propagate to generator.close()')
+    }
+
+    // (c) FIFO turn deferreds: two pushes back-to-back resolve in order
+    // even though the second is queued before the first finishes. The
+    // fake SDK serialises turns through the iterator so order is kept.
+    {
+      const { sdk } = makeStreamingFakeSdk()
+      const lq = new LiveQuery({ sdk, queryOptions: {}, onMessage: () => {} })
+      try {
+        const p1 = lq.push({ type: 'user', message: { role: 'user', content: 'first' } })
+        const p2 = lq.push({ type: 'user', message: { role: 'user', content: 'second' } })
+        const [r1, r2] = await Promise.all([p1, p2])
+        assert.match(r1.result, /turn-/)
+        assert.match(r2.result, /turn-/)
+        // The two turns are distinct (turn-1, turn-2 in either order from
+        // the *previous* test's reset; this fresh sdk re-counts from 1).
+        assert.notEqual(r1.result, r2.result)
+      } finally { lq.close() }
+    }
+
+    // (d) Control methods route through the generator's methods. Each
+    // verifies the value is forwarded verbatim and call counts increment.
+    {
+      const { sdk, calls } = makeStreamingFakeSdk()
+      const lq = new LiveQuery({ sdk, queryOptions: {}, onMessage: () => {} })
+      try {
+        await lq.stopTask('task-1')
+        await lq.stopTask('task-2')
+        assert.deepEqual(calls.stopTask, ['task-1', 'task-2'])
+        await lq.interrupt()
+        assert.equal(calls.interrupt, 1)
+        await lq.setPermissionMode('plan')
+        assert.deepEqual(calls.setPermissionMode, ['plan'])
+        await lq.setModel('claude-opus-4-7')
+        assert.deepEqual(calls.setModel, ['claude-opus-4-7'])
+      } finally { lq.close() }
+
+      // After close, control methods reject — they'd hit a dead generator
+      // otherwise.
+      await assert.rejects(lq.stopTask('x'), /closed/)
+      await assert.rejects(lq.interrupt(), /closed/)
+      await assert.rejects(lq.setPermissionMode('default'), /closed/)
+      await assert.rejects(lq.setModel('x'), /closed/)
+      await assert.rejects(lq.push({ type: 'user', message: { role: 'user', content: 'late' } }), /closed/)
+    }
+
+    // (e) Control method without SDK support throws a clear error rather
+    // than silently swallowing. Build a generator that idles forever so
+    // the LiveQuery stays open while we probe its control methods.
+    {
+      let resolveIdle
+      const sdkBare = {
+        query() {
+          const gen = (async function*() {
+            await new Promise(r => { resolveIdle = r })
+          })()
+          gen.close = () => { if (resolveIdle) resolveIdle() }
+          // Note: NO stopTask / interrupt / setPermissionMode / setModel.
+          return gen
+        },
+      }
+      const lq = new LiveQuery({ sdk: sdkBare, queryOptions: {}, onMessage: () => {} })
+      try {
+        await assert.rejects(lq.stopTask('x'), /not supported by this SDK build/)
+        await assert.rejects(lq.interrupt(), /not supported/)
+        await assert.rejects(lq.setPermissionMode('plan'), /not supported/)
+        await assert.rejects(lq.setModel('x'), /not supported/)
+      } finally { lq.close() }
+    }
+
+    // (f) Generator throws → onError fires, all pending pushes reject,
+    // isClosed flips true. The simulated SDK throws on first turn.
+    {
+      const { sdk } = makeStreamingFakeSdk({ failOnFirstTurn: true })
+      const errors = []
+      const lq = new LiveQuery({ sdk, queryOptions: {}, onMessage: () => {}, onError: (e) => errors.push(e) })
+      const p = lq.push({ type: 'user', message: { role: 'user', content: 'doomed' } })
+      await assert.rejects(p, /simulated stream failure/)
+      // Wait a tick for the drain loop to clean up.
+      await new Promise(r => setTimeout(r, 10))
+      assert.equal(lq.isClosed, true)
+      assert.equal(errors.length, 1)
+      assert.match(errors[0].message, /simulated stream failure/)
+    }
+
+    // (g) onMessage that throws is funnelled through onError but doesn't
+    // halt the drain loop. Subsequent messages still arrive.
+    {
+      const { sdk } = makeStreamingFakeSdk()
+      const errors = []
+      let count = 0
+      const lq = new LiveQuery({
+        sdk, queryOptions: {},
+        onMessage: () => { count++; if (count === 1) throw new Error('boom in handler') },
+        onError: (e) => errors.push(e),
+      })
+      try {
+        const r = await lq.push({ type: 'user', message: { role: 'user', content: 'hi' } })
+        assert.equal(r.type, 'result')
+        // First message threw, second + third still got processed.
+        assert.equal(count, 3)
+        assert.equal(errors.length, 1)
+        assert.match(errors[0].message, /boom in handler/)
+      } finally { lq.close() }
+    }
+
+    // (h) Idempotent close: second call is a no-op.
+    {
+      const { sdk, calls } = makeStreamingFakeSdk()
+      const lq = new LiveQuery({ sdk, queryOptions: {}, onMessage: () => {} })
+      lq.close()
+      lq.close()
+      assert.equal(lq.isClosed, true)
+      assert.equal(calls.close, 1, 'second close must not re-call generator.close')
+    }
+
+    // (i) close() while a push is in-flight rejects the pending deferred
+    // with a closed error, never hangs. Use a fake SDK that holds the
+    // pump open without ever yielding so the push() never naturally
+    // resolves.
+    {
+      let resolveStream
+      const sdkSlow = {
+        query({ prompt }) {
+          const gen = (async function*() {
+            const it = prompt[Symbol.asyncIterator]()
+            await it.next() // consume the user message
+            // Wait forever (until close fires the abort).
+            await new Promise(r => { resolveStream = r })
+          })()
+          gen.close = () => { if (resolveStream) resolveStream() }
+          return gen
+        },
+      }
+      const lq = new LiveQuery({ sdk: sdkSlow, queryOptions: {}, onMessage: () => {} })
+      const inflight = lq.push({ type: 'user', message: { role: 'user', content: 'pending' } })
+      // Close before any 'result' frame.
+      setTimeout(() => lq.close(), 20)
+      await assert.rejects(inflight, /closed/i)
+    }
+  }
+
   // claude.resumeSession: rehydrates an existing SDK session id so the
   // next sendMessage carries `resume: <id>`. Aborts any in-flight query
   // first; defaults permissionMode to bypassPermissions; respects
