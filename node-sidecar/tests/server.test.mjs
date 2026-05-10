@@ -976,6 +976,23 @@ async function inProcess() {
     const wtEvent = wtEvents.find(e => e.name === 'claude:worktree-info')
     assert.equal(wtEvent?.payload.sessionId, 'state-wt')
     assert.equal(wtEvent?.payload.payload.worktreePath, wtPath)
+    const cleanupReply = await dispatch({ jsonrpc: '2.0', id: 2013, method: 'claude.cleanupWorktree',
+      params: { sessionId: 'state-wt', deleteBranch: false } })
+    assert.equal(cleanupReply.result, true)
+    assert.equal(mod.activeWorktrees.has('state-wt'), false)
+    const wtMetaAfterCleanup = await dispatch({ jsonrpc: '2.0', id: 2014, method: 'claude.getSessionMeta',
+      params: { sessionId: 'state-wt' } })
+    assert.equal(wtMetaAfterCleanup.result.cwd, wtRoot)
+    const cleanupInfoEvent = wtEvents.find(e =>
+      e.name === 'claude:worktree-info' &&
+      e.payload.sessionId === 'state-wt' &&
+      e.payload.payload === null)
+    assert.ok(cleanupInfoEvent, 'cleanup emits cleared worktree info')
+    const cleanupStatusEvent = wtEvents.find(e =>
+      e.name === 'claude:status' &&
+      e.payload.sessionId === 'state-wt' &&
+      e.payload.meta?.cwd === wtRoot)
+    assert.ok(cleanupStatusEvent, 'cleanup emits restored cwd status')
   } finally {
     restoreWorktreeSend()
     mod.activeWorktrees.delete('state-wt')

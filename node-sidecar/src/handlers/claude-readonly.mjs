@@ -10,7 +10,7 @@ import { join, basename } from 'node:path'
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
-import { sessions } from '../lib/state.mjs'
+import { sessions, buildSessionMeta } from '../lib/state.mjs'
 import { CLAUDE_BUILTIN_MODELS, CLAUDE_BUILTIN_DEDUP_KEYS } from '../lib/models.mjs'
 import { scanSkills } from '../lib/skills.mjs'
 import { activeWorktrees, worktreeStatus, worktreeRemove } from './worktree.mjs'
@@ -291,17 +291,33 @@ registerHandler('claude.getWorktreeStatus', async (params) => {
 // claude.scanSkills walks <cwd>/.claude/skills + ~/.claude/skills and
 // returns SkillMeta entries. No SDK dep — pure fs walk + YAML
 // frontmatter parsing. Mirrors electron/openai-agent/skills-scanner.ts.
-// claude.cleanupWorktree drops the worktree associated with a session.
-// In the Electron flow it also resets the agent session's cwd back to
-// originalCwd and emits claude:worktree-info — those happen in the
-// session manager, which still lives in the renderer/Electron side
-// for now. The sidecar just runs the disk-level cleanup.
+function restoreSessionCwdAfterWorktreeCleanup(sessionId, info) {
+  const session = sessions.get(sessionId)
+  if (!session?.options || typeof session.options !== 'object') return
+  const originalCwd = info?.originalCwd || session.options.originalCwd
+  if (typeof originalCwd !== 'string' || !originalCwd) return
+  const {
+    useWorktree: _useWorktree,
+    worktreePath: _worktreePath,
+    worktreeBranch: _worktreeBranch,
+    originalCwd: _originalCwd,
+    ...rest
+  } = session.options
+  session.options = { ...rest, cwd: originalCwd }
+  sendEvent('claude:status', { sessionId, meta: buildSessionMeta(session) })
+}
+
+// claude.cleanupWorktree drops the worktree associated with a session
+// and mirrors Electron's session reset by restoring cwd back to
+// originalCwd before notifying the renderer.
 registerHandler('claude.cleanupWorktree', async (params) => {
   const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
   const deleteBranch = params?.deleteBranch !== false
   if (!sessionId) return false
   try {
+    const info = activeWorktrees.get(sessionId)
     await worktreeRemove(sessionId, deleteBranch)
+    restoreSessionCwdAfterWorktreeCleanup(sessionId, info)
     sendEvent('claude:worktree-info', { sessionId, payload: null })
     return true
   } catch {

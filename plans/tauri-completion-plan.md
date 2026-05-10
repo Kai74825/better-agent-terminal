@@ -52,6 +52,7 @@
 - 2026-05-10：修正 Tauri `claude.resumeSession` adapter 參數截斷。Electron preload 會把 `agentPreset`、Codex sandbox/approval、permissionMode、effort 一起傳入 resume；Tauri host-api 先前只保留到 `agentPreset`，導致 Codex/OpenAI panel restore 後 sidecar state 可能退回 `bypassPermissions` 或遺失 effort。現在 Tauri route 會完整傳遞這些 options，host-api 測試鎖住 payload。
 - 2026-05-10：補 Codex sandbox/approval 的 Tauri state-level parity。`claude.setCodexSandboxMode` / `claude.setCodexApprovalPolicy` 不再由 Rust 固定回 `false`，改走 sidecar handler；sidecar 會驗證合法值、既有 session 才回 `true`，並保存到 session state，讓 Codex/OpenAI panel 的切換與 resume/start options 在完整 Codex runtime 搬移前仍有一致狀態。
 - 2026-05-10：補 Claude session worktree rehydrate parity。Tauri sidecar `claude.startSession/resumeSession` 現在遇到 `useWorktree + worktreePath` 且路徑存在時，會 rehydrate `activeWorktrees`、把 session effective cwd 切到 worktree path，並 emit `claude:worktree-info`；這讓 reload/resume 已有 worktree 的 Agent session 不再回到原始 repo cwd。
+- 2026-05-10：補 Claude session worktree cleanup parity。Tauri sidecar `claude.cleanupWorktree` 現在會在移除 active worktree 後把 session cwd 從 worktree path 還原到 original cwd，清掉 worktree options，並 emit `claude:status` 與 `claude:worktree-info=null`；Workspace 關閉 worktree 後不再留下錯誤 cwd。
 
 ## 目前判斷
 
