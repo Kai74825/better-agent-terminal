@@ -577,7 +577,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     setMessages(prev => prev.slice(excess))
     archivedCountRef.current += excess
     setHasMoreArchived(true)
-    window.batAppAPI.claude.archiveMessages(sessionId, toArchive)
+    host.claude.archiveMessages(sessionId, toArchive)
       .catch((err) => {
         host.debug.log?.('[ClaudeAgentPanel] archiveMessages failed:', String(err))
       })
@@ -591,7 +591,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     const container = messagesContainerRef.current
     const prevScrollHeight = container?.scrollHeight ?? 0
     try {
-      const result = await window.batAppAPI.claude.loadArchived(sessionId, loadedFromArchiveRef.current, LOAD_BATCH)
+      const result = await host.claude.loadArchived(sessionId, loadedFromArchiveRef.current, LOAD_BATCH)
       if (result.messages.length > 0) {
         loadedFromArchiveRef.current += result.messages.length
         setLoadedArchive(prev => [...(result.messages as MessageItem[]), ...prev])
@@ -630,7 +630,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   // Subscribe to IPC events
   useEffect(() => {
-    const api = window.batAppAPI.claude
+    const api = host.claude
     const tag = `[Claude:${sessionId.slice(0, 8)}]`
     host.debug.log(`${tag} subscribing to IPC events`)
 
@@ -654,7 +654,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             archivedCountRef.current = 0
             loadedFromArchiveRef.current = 0
             setHasMoreArchived(false)
-            window.batAppAPI.claude.clearArchive(sessionId).catch(() => {})
+            host.claude.clearArchive(sessionId).catch(() => {})
           }
           setStreamingText('')
           setStreamingThinking('')
@@ -1011,7 +1011,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         archivedCountRef.current = 0
         loadedFromArchiveRef.current = 0
         setHasMoreArchived(false)
-        window.batAppAPI.claude.clearArchive(sessionId).catch(() => {})
+        host.claude.clearArchive(sessionId).catch(() => {})
         setStreamingText('')
         setStreamingThinking('')
 
@@ -1032,7 +1032,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             timestamp: Date.now(),
           }])
           setIsStreaming(true)
-          window.batAppAPI.claude.sendMessage(sessionId, prompt, images, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+          host.claude.sendMessage(sessionId, prompt, images, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
         } else {
           dlog2(`${tag} onHistory setting messages (history only, no pending prompt)`)
           setMessages(historyItems)
@@ -1097,11 +1097,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       if (savedSdkSessionId) {
         dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
         historyLoadedRef.current = true
-        window.batAppAPI.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel, apiVersion,
+        host.claude.resumeSession(sessionId, savedSdkSessionId, cwd, savedModel, apiVersion,
           useWorktree ? true : undefined, terminal?.worktreePath, terminal?.worktreeBranch, terminal?.agentPreset)
       } else {
         dlog(`${stag} FRESH startSession`)
-        window.batAppAPI.claude.startSession(sessionId, {
+        host.claude.startSession(sessionId, {
           cwd, permissionMode, model: effectiveModel,
           effort: effectiveEffort as EffortLevel, apiVersion,
           agentPreset: terminal?.agentPreset,
@@ -1119,7 +1119,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   // Refresh session metadata when panel becomes active (fixes stale display after window switch)
   useEffect(() => {
     if (isActive) {
-      window.batAppAPI.claude.getSessionMeta(sessionId).then(meta => {
+      host.claude.getSessionMeta(sessionId).then(meta => {
         if (meta) {
           setSessionMeta(meta as unknown as SessionMeta)
           if ((meta as unknown as SessionMeta).model) setCurrentModel(prev => prev || (meta as unknown as SessionMeta).model!)
@@ -1142,7 +1142,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     let cancelled = false
     ;(async () => {
       try {
-        const status = await window.batAppAPI.claude.checkMcpJsonStatus(cwd) as
+        const status = await host.claude.checkMcpJsonStatus(cwd) as
           { exists: boolean; approved: boolean; servers: string[] } | undefined
         if (cancelled || !status?.exists || status.approved) return
         const servers = Array.isArray(status.servers) && status.servers.length > 0
@@ -1153,7 +1153,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           'Approve project MCP servers?'
         )
         if (!ok || cancelled) return
-        await window.batAppAPI.claude.enableAllProjectMcp(cwd)
+        await host.claude.enableAllProjectMcp(cwd)
         setMessages(prev => [...prev, {
           id: `sys-mcp-approve-${Date.now()}`,
           sessionId,
@@ -1169,7 +1169,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   // Fetch supported models on demand when model list is opened (no session required)
   useEffect(() => {
     if (showModelList && availableModels.length === 0) {
-      window.batAppAPI.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
+      host.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
         if (models && models.length > 0) setAvailableModels(models)
       }).catch(() => {})
     }
@@ -1183,7 +1183,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   useEffect(() => {
     if (isCodexSession) return
     const handler = () => {
-      window.batAppAPI.claude.getAccountInfo(sessionId).then(info => {
+      host.claude.getAccountInfo(sessionId).then(info => {
         if (info) setAccountInfo(info)
       }).catch(() => {})
     }
@@ -1193,22 +1193,22 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   useEffect(() => {
     if (sessionMeta?.sdkSessionId && availableModels.length === 0) {
-      window.batAppAPI.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
+      host.claude.getSupportedModels(sessionId).then((models: ModelInfo[]) => {
         if (models && models.length > 0) {
           setAvailableModels(models)
         }
       }).catch(() => {})
       if (!isCodexSession) {
-        window.batAppAPI.claude.getAccountInfo(sessionId).then(info => {
+        host.claude.getAccountInfo(sessionId).then(info => {
           if (info) setAccountInfo(info)
         }).catch(() => {})
-        window.batAppAPI.claude.getSupportedCommands(sessionId).then((cmds: SlashCommandInfo[]) => {
+        host.claude.getSupportedCommands(sessionId).then((cmds: SlashCommandInfo[]) => {
           if (cmds && cmds.length > 0) {
             setSlashCommands(cmds)
             window.dispatchEvent(new CustomEvent('claude-skills-updated', { detail: { sessionId, commands: cmds } }))
           }
         }).catch(() => {})
-        window.batAppAPI.claude.getSupportedAgents(sessionId).then((agentList) => {
+        host.claude.getSupportedAgents(sessionId).then((agentList) => {
           if (agentList && agentList.length > 0) {
             window.dispatchEvent(new CustomEvent('claude-agents-updated', { detail: { sessionId, agents: agentList } }))
           }
@@ -1251,7 +1251,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     if (existing && existing.length > 0) return // already have streamed messages
     const parentTask = allMessages.find(m => isToolCall(m) && m.id === taskModal.taskId) as ClaudeToolCall | undefined
     if (parentTask?.status === 'running') return // still streaming, don't fetch
-    window.batAppAPI.claude.fetchSubagentMessages(sessionId, taskModal.taskId).then((msgs: unknown[]) => {
+    host.claude.fetchSubagentMessages(sessionId, taskModal.taskId).then((msgs: unknown[]) => {
       if (msgs && msgs.length > 0) {
         subagentMessagesRef.current.set(taskModal.taskId, msgs as MessageItem[])
         setTaskModalTick(t => t + 1)
@@ -1335,7 +1335,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     setShowModelList(false)
     setCurrentModel(selectedModel)
     setTimeout(() => textareaRef.current?.focus(), 0)
-    await window.batAppAPI.claude.setModel(sessionId, selectedModel, getAutoCompactWindowForModel(selectedModel, settingsStore.getSettings().autoCompactWindow) || undefined)
+    await host.claude.setModel(sessionId, selectedModel, getAutoCompactWindowForModel(selectedModel, settingsStore.getSettings().autoCompactWindow) || undefined)
     workspaceStore.updateTerminalModel(sessionId, selectedModel)
     if (isCodexSession && selectedModel !== currentModel) {
       setMessages([])
@@ -1349,7 +1349,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       cacheHistoryRef.current = []
       lastResultRef.current = null
       setCacheCountdown(null)
-      await window.batAppAPI.claude.resetSession(sessionId)
+      await host.claude.resetSession(sessionId)
     }
   }, [sessionId, isCodexSession, isV2Session, currentModel, t])
 
@@ -1373,7 +1373,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     // Mark that history will be loaded — prevents sys-init from wiping messages
     historyLoadedRef.current = true
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
-    await window.batAppAPI.claude.resumeSession(sessionId, sdkSessionId, cwd, undefined, apiVersion, undefined, undefined, undefined, terminal?.agentPreset)
+    await host.claude.resumeSession(sessionId, sdkSessionId, cwd, undefined, apiVersion, undefined, undefined, undefined, terminal?.agentPreset)
     workspaceStore.setTerminalSdkSessionId(sessionId, sdkSessionId)
   }, [sessionId, cwd, isV2Session])
 
@@ -1384,7 +1384,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     if (!hasSdkSession || !workspaceId) return
     let result: { newSdkSessionId: string } | null = null
     try {
-      result = await window.batAppAPI.claude.forkSession(sessionId)
+      result = await host.claude.forkSession(sessionId)
     } catch (e) {
       dlog(`${tag} forkSession threw:`, e)
       alert('Fork failed: ' + (e instanceof Error ? e.message : String(e)))
@@ -1431,7 +1431,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
     let result: { newSdkSessionId: string; removedPromptCount: number } | { error: string }
     try {
-      result = await window.batAppAPI.claude.rewindToPrompt(sessionId, promptIndex)
+      result = await host.claude.rewindToPrompt(sessionId, promptIndex)
     } catch (e) {
       alert('Rewind failed: ' + (e instanceof Error ? e.message : String(e)))
       return
@@ -1521,7 +1521,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       const rest = trimmed.slice(cmd.length).trim()
       let content: string
       if (rest === 'off' || rest === 'stop') {
-        await window.batAppAPI.claude.setAutoContinue(sessionId, { enabled: false })
+        await host.claude.setAutoContinue(sessionId, { enabled: false })
         content = 'Auto-continue disabled.'
       } else {
         let max = 3
@@ -1533,7 +1533,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         } else if (rest) {
           prompt = rest
         }
-        await window.batAppAPI.claude.setAutoContinue(sessionId, { enabled: true, max, prompt })
+        await host.claude.setAutoContinue(sessionId, { enabled: true, max, prompt })
         content = `Auto-continue enabled (max ${max}). Prompt: "${prompt}"`
       }
       setMessages(prev => [...prev, {
@@ -1549,7 +1549,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       setResumeLoading(true)
       setShowResumeList(true)
       try {
-        const sessions = await window.batAppAPI.claude.listSessions(cwd)
+        const sessions = await host.claude.listSessions(cwd)
         setResumeSessions(sessions || [])
       } catch {
         setResumeSessions([])
@@ -1569,7 +1569,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     // Intercept /abort command — force stop current operation
     if (trimmed === '/abort') {
       clearInput()
-      window.batAppAPI.claude.abortSession(sessionId)
+      host.claude.abortSession(sessionId)
       setIsStreaming(false)
       setIsInterrupted(false)
       setStreamingText('')
@@ -1606,7 +1606,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       cacheHistoryRef.current = []
       lastResultRef.current = null
       setCacheCountdown(null)
-      await window.batAppAPI.claude.resetSession(sessionId)
+      await host.claude.resetSession(sessionId)
       return
     }
 
@@ -1617,9 +1617,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         id: `sys-login-${Date.now()}`, sessionId, role: 'system' as const,
         content: 'Opening Claude login...', timestamp: Date.now(),
       }])
-      const result = await window.batAppAPI.claude.authLogin()
+      const result = await host.claude.authLogin()
       if (result.success) {
-        const status = await window.batAppAPI.claude.authStatus()
+        const status = await host.claude.authStatus()
         setMessages(prev => [...prev, {
           id: `sys-login-ok-${Date.now()}`, sessionId, role: 'system' as const,
           content: status?.email
@@ -1629,7 +1629,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         }])
         // Auto-register account when account switching is enabled
         try {
-          await window.batAppAPI.claude.accountImportCurrent()
+          await host.claude.accountImportCurrent()
         } catch { /* ignore if not available */ }
       } else {
         setMessages(prev => [...prev, {
@@ -1643,7 +1643,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     // Intercept /logout command
     if (!isCodexSession && trimmed === '/logout') {
       clearInput()
-      const result = await window.batAppAPI.claude.authLogout()
+      const result = await host.claude.authLogout()
       setMessages(prev => [...prev, {
         id: `sys-logout-${Date.now()}`, sessionId, role: 'system' as const,
         content: result.success ? 'Logged out.' : `Logout failed: ${result.error || 'unknown error'}`,
@@ -1655,7 +1655,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     // Intercept /whoami command — show current auth status
     if (!isCodexSession && trimmed === '/whoami') {
       clearInput()
-      const status = await window.batAppAPI.claude.authStatus()
+      const status = await host.claude.authStatus()
       setMessages(prev => [...prev, {
         id: `sys-whoami-${Date.now()}`, sessionId, role: 'system' as const,
         content: status?.loggedIn
@@ -1671,7 +1671,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       const arg = trimmed.slice('/switch'.length).trim()
       clearInput()
       try {
-        const { accounts, activeAccountId } = await window.batAppAPI.claude.accountList()
+        const { accounts, activeAccountId } = await host.claude.accountList()
         if (accounts.length === 0) {
           setMessages(prev => [...prev, {
             id: `sys-switch-${Date.now()}`, sessionId, role: 'system' as const,
@@ -1713,7 +1713,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           }])
           return
         }
-        const success = await window.batAppAPI.claude.accountSwitch(target.id)
+        const success = await host.claude.accountSwitch(target.id)
         if (success) {
           window.dispatchEvent(new CustomEvent('claude-account-switched'))
           setMessages(prev => [...prev, {
@@ -1775,7 +1775,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         setIsInterrupted(false)
         setStreamingText('')
         setStreamingThinking('')
-        await window.batAppAPI.claude.sendMessage(sessionId, contextPrompt, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+        await host.claude.sendMessage(sessionId, contextPrompt, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
       } catch {
         setMessages(prev => [...prev, {
           id: `error-${Date.now()}`,
@@ -1847,7 +1847,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
     const __sendT1 = performance.now()
     try {
-      await window.batAppAPI.claude.sendMessage(sessionId, promptToSend, imageDataUrls.length > 0 ? imageDataUrls : undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+      await host.claude.sendMessage(sessionId, promptToSend, imageDataUrls.length > 0 ? imageDataUrls : undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
     } finally {
       const __sendT2 = performance.now()
       const sync = __sendT1 - __sendT0
@@ -1861,7 +1861,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
-    window.batAppAPI.claude.stopSession(sessionId)
+    host.claude.stopSession(sessionId)
     setIsInterrupted(true)
     setStreamingText('')
     setStreamingThinking('')
@@ -1872,7 +1872,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const handleStop = useCallback(() => {
     if (!isStreaming && !isInterrupted) return
     // Hard abort — immediately kill the query loop
-    window.batAppAPI.claude.abortSession(sessionId)
+    host.claude.abortSession(sessionId)
     setIsStreaming(false)
     setIsInterrupted(false)
     setStreamingText('')
@@ -1915,7 +1915,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     const idx = availableModes.indexOf(permissionMode as typeof permissionModes[number])
     const nextMode = availableModes[(idx + 1) % availableModes.length]
     setPermissionMode(nextMode)
-    await window.batAppAPI.claude.setPermissionMode(sessionId, nextMode)
+    await host.claude.setPermissionMode(sessionId, nextMode)
   }, [sessionId, permissionMode])
 
   useEffect(() => { showSlashMenuRef.current = showSlashMenu }, [showSlashMenu])
@@ -2078,14 +2078,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     const next = availableModels[(idx + 1) % availableModels.length]
     const selectedModel = normalizeClaudeModelSelection(next.value) || next.value
     setCurrentModel(selectedModel)
-    await window.batAppAPI.claude.setModel(sessionId, selectedModel, getAutoCompactWindowForModel(selectedModel, settingsStore.getSettings().autoCompactWindow) || undefined)
+    await host.claude.setModel(sessionId, selectedModel, getAutoCompactWindowForModel(selectedModel, settingsStore.getSettings().autoCompactWindow) || undefined)
     workspaceStore.updateTerminalModel(sessionId, selectedModel)
   }, [sessionId, currentModel, availableModels])
 
   const handleEffortChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value
     setEffortLevel(next)
-    await window.batAppAPI.claude.setEffort(sessionId, next)
+    await host.claude.setEffort(sessionId, next)
   }, [sessionId])
 
   const handleCodexSandboxModeChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -2131,20 +2131,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       : (['yes', 'no', 'custom'] as const)[choice]
 
     if (action === 'yes') {
-      window.batAppAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+      host.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
         behavior: 'allow',
         updatedInput: pendingPermission.input,
       })
       setPendingPermission(null)
     } else if (action === 'dontAskAgain') {
       if (pendingPermission.toolName === 'ExitPlanMode') {
-        window.batAppAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+        host.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
           behavior: 'allow',
           updatedInput: pendingPermission.input,
           dontAskAgain: true,
         })
       } else {
-        window.batAppAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+        host.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
           behavior: 'allow',
           updatedInput: pendingPermission.input,
           updatedPermissions: pendingPermission.suggestions,
@@ -2159,7 +2159,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         }
         return m
       }))
-      window.batAppAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+      host.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
         behavior: 'deny',
         message: "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
       })
@@ -2174,7 +2174,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         }
         return m
       }))
-      window.batAppAPI.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
+      host.claude.resolvePermission(sessionId, pendingPermission.toolUseId, {
         behavior: 'deny',
         message: msg,
       })
@@ -2335,7 +2335,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         finalAnswers[key] = text.trim()
       }
     }
-    window.batAppAPI.claude.resolveAskUser(sessionId, pendingQuestion.toolUseId, finalAnswers)
+    host.claude.resolveAskUser(sessionId, pendingQuestion.toolUseId, finalAnswers)
     setPendingQuestion(null)
     setAskAnswers({})
     setAskOtherText({})
@@ -3714,7 +3714,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             <button
               className="claude-worktree-btn"
               onClick={async () => {
-                const status = await window.batAppAPI.claude.getWorktreeStatus(sessionId)
+                const status = await host.claude.getWorktreeStatus(sessionId)
                 if (status?.diff) {
                   // Show diff as a system message
                   setMessages(prev => [...prev, {
@@ -3741,7 +3741,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               onClick={async () => {
                 if (!await host.dialog.confirm(`Merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then use host folder (${worktreeInfo.gitRoot}) to merge worktree folder (${worktreeInfo.worktreePath}). Steps:\n1. Stage and commit all changes in the worktree folder with a meaningful commit message\n2. Switch to host folder (${worktreeInfo.gitRoot}) and merge the worktree branch (${worktreeInfo.branchName}) into ${worktreeInfo.sourceBranch}\nDo not push to remote. Do not create a PR.`
-                await window.batAppAPI.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title={`Commit and merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}`}
             >Merge to Host</button>
@@ -3750,7 +3750,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               onClick={async () => {
                 if (!await host.dialog.confirm(`Push ${worktreeInfo.branchName} directly to origin/main?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then push directly to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Pull origin/main and resolve any conflicts if needed\n3. Push to origin/main\nDo not create a PR. Do not ask for confirmation.`
-                await window.batAppAPI.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title="Commit, pull, resolve conflicts, and push to origin/main"
             >Push to Main</button>
@@ -3758,7 +3758,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               className="claude-worktree-btn"
               onClick={async () => {
                 const cmd = `Commit all current changes and create or update a pull request to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Push this branch to origin\n3. Check if a PR from this branch to main already exists (gh pr list --head ${worktreeInfo.branchName})\n4. If a PR exists: update it with the latest changes summary (gh pr edit)\n5. If no PR exists: create one with gh pr create, include a summary of all changes in the description\nDo not merge the PR.`
-                await window.batAppAPI.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title="Commit, push branch, and create or update PR to main"
             >Create PR</button>
@@ -4463,7 +4463,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             <span key="sessionId" className="claude-statusline-item claude-statusline-clickable"
               onClick={async () => {
                 setResumeLoading(true); setShowResumeList(true)
-                try { setResumeSessions(await window.batAppAPI.claude.listSessions(cwd) || []) }
+                try { setResumeSessions(await host.claude.listSessions(cwd) || []) }
                 catch { setResumeSessions([]) }
                 finally { setResumeLoading(false) }
               }}
@@ -4479,7 +4479,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           ),
           tokens: () => !sessionMeta ? null : (
             <span key="tokens" className="claude-statusline-item claude-statusline-clickable" title={`context: ${(sessionMeta.contextTokens || 0).toLocaleString()} tok\ncumulative in: ${sessionMeta.inputTokens.toLocaleString()} / out: ${sessionMeta.outputTokens.toLocaleString()}\nclick to show context breakdown`}
-              onClick={() => { window.batAppAPI.claude.getContextUsage(sessionId).then(u => { if (u) setContextUsagePopup(u) }).catch(() => {}) }}>
+              onClick={() => { host.claude.getContextUsage(sessionId).then(u => { if (u) setContextUsagePopup(u) }).catch(() => {}) }}>
               {(sessionMeta.contextTokens || (sessionMeta.inputTokens + sessionMeta.outputTokens)).toLocaleString()} tok
             </span>
           ),
@@ -4503,7 +4503,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               : `model context window: ${sessionMeta.contextWindow.toLocaleString()} tokens`
             return (
               <span key="contextPct" className="claude-statusline-item claude-statusline-clickable" style={{ color: ctxColor }} title={`context: ${ctxTokens.toLocaleString()} / ${effectiveWindow.toLocaleString()} tokens\n${denominatorLabel}\ntotal: ${(sessionMeta.inputTokens + sessionMeta.outputTokens).toLocaleString()} tok\nclick to show context breakdown`}
-                onClick={() => { window.batAppAPI.claude.getContextUsage(sessionId).then(u => { if (u) setContextUsagePopup(u) }).catch(() => {}) }}>
+                onClick={() => { host.claude.getContextUsage(sessionId).then(u => { if (u) setContextUsagePopup(u) }).catch(() => {}) }}>
                 ctx {pct}%
               </span>
             )
