@@ -50,8 +50,7 @@ fn workspace_path(app: &tauri::AppHandle) -> Result<PathBuf, WorkspaceError> {
     Ok(dir.join("workspaces.json"))
 }
 
-#[tauri::command]
-pub fn workspace_load(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
+fn workspace_load_impl(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
     let path = workspace_path(&app)?;
     if !path.exists() {
         return Ok(None);
@@ -61,13 +60,30 @@ pub fn workspace_load(app: tauri::AppHandle) -> Result<Option<String>, CommandEr
 }
 
 #[tauri::command]
-pub fn workspace_save(app: tauri::AppHandle, data: String) -> Result<bool, CommandError> {
+pub async fn workspace_load(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || workspace_load_impl(app))
+        .await
+        .map_err(|err| CommandError {
+            message: format!("workspace.load worker failed: {err}"),
+        })?
+}
+
+fn workspace_save_impl(app: tauri::AppHandle, data: String) -> Result<bool, CommandError> {
     let path = workspace_path(&app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(WorkspaceError::from)?;
     }
     fs::write(&path, data).map_err(WorkspaceError::from)?;
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn workspace_save(app: tauri::AppHandle, data: String) -> Result<bool, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || workspace_save_impl(app, data))
+        .await
+        .map_err(|err| CommandError {
+            message: format!("workspace.save worker failed: {err}"),
+        })?
 }
 
 #[cfg(test)]
