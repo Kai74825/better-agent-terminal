@@ -199,71 +199,73 @@ pub async fn claude_stop_task(
 // --- account / auth ops ---------------------------------------------------
 
 #[tauri::command]
-pub fn claude_auth_login(
+pub async fn claude_auth_login(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.authLogin", Value::Null)
+    call_blocking(app, state, "claude.authLogin", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_auth_logout(
+pub async fn claude_auth_logout(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.authLogout", Value::Null)
+    call_blocking(app, state, "claude.authLogout", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_account_import_current(
+pub async fn claude_account_import_current(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountImportCurrent", Value::Null)
+    call_blocking(app, state, "claude.accountImportCurrent", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_account_login_new(
+pub async fn claude_account_login_new(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountLoginNew", Value::Null)
+    call_blocking(app, state, "claude.accountLoginNew", Value::Null).await
 }
 
 #[tauri::command]
-pub fn claude_account_switch(
+pub async fn claude_account_switch(
     app: AppHandle,
     state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.accountSwitch",
         json!({ "accountId": account_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_account_remove(
+pub async fn claude_account_remove(
     app: AppHandle,
     state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.accountRemove",
         json!({ "accountId": account_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_account_mark_warning_shown(
+pub async fn claude_account_mark_warning_shown(
     app: AppHandle,
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "claude.accountMarkWarningShown", Value::Null)
+    call_blocking(app, state, "claude.accountMarkWarningShown", Value::Null).await
 }
 
 // --- read-only metadata ---------------------------------------------------
@@ -346,45 +348,48 @@ pub async fn claude_get_account_info(
 }
 
 #[tauri::command]
-pub fn claude_get_session_state(
+pub async fn claude_get_session_state(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getSessionState",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_session_meta(
+pub async fn claude_get_session_meta(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getSessionMeta",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_context_usage(
+pub async fn claude_get_context_usage(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getContextUsage",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
@@ -433,138 +438,146 @@ pub async fn claude_cleanup_worktree(
 // --- per-session state -----------------------------------------------------
 
 #[tauri::command]
-pub fn claude_set_auto_continue(
+pub async fn claude_set_auto_continue(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     opts: Value,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setAutoContinue",
         json!({
             "sessionId": session_id, "opts": opts,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_get_auto_continue(
+pub async fn claude_get_auto_continue(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.getAutoContinue",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_set_permission_mode(
+pub async fn claude_set_permission_mode(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setPermissionMode",
         json!({
             "sessionId": session_id, "mode": mode,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_set_codex_sandbox_mode(
+pub async fn claude_set_codex_sandbox_mode(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setCodexSandboxMode",
         json!({
             "sessionId": session_id, "mode": mode,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_set_codex_approval_policy(
+pub async fn claude_set_codex_approval_policy(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     policy: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setCodexApprovalPolicy",
         json!({
             "sessionId": session_id, "policy": policy,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_set_model(
+pub async fn claude_set_model(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     model: String,
     auto_compact_window: Option<i64>,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setModel",
         json!({
             "sessionId": session_id, "model": model, "autoCompactWindow": auto_compact_window,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_set_effort(
+pub async fn claude_set_effort(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     effort: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.setEffort",
         json!({
             "sessionId": session_id, "effort": effort,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_reset_session(
+pub async fn claude_reset_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.resetSession",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_fork_session(
+pub async fn claude_fork_session(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
@@ -572,62 +585,66 @@ pub fn claude_fork_session(
     // Fork can take up to 60s in pathological cases (the SDK has to run a
     // full one-turn query to persist the new transcript). Use a generous
     // timeout to match the sidecar's internal limit + slack.
-    call_with_timeout(
-        &app,
-        &state,
+    call_with_timeout_blocking(
+        app,
+        state,
         "claude.forkSession",
         json!({ "sessionId": session_id }),
         Duration::from_secs(90),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_archive_messages(
+pub async fn claude_archive_messages(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     messages: Value,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.archiveMessages",
         json!({
             "sessionId": session_id, "messages": messages,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_load_archived(
+pub async fn claude_load_archived(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     offset: u32,
     limit: u32,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.loadArchived",
         json!({
             "sessionId": session_id, "offset": offset, "limit": limit,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_clear_archive(
+pub async fn claude_clear_archive(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.clearArchive",
         json!({ "sessionId": session_id }),
     )
+    .await
 }
 
 #[tauri::command]
@@ -698,21 +715,22 @@ pub async fn claude_fetch_subagent_messages(
 }
 
 #[tauri::command]
-pub fn claude_rewind_to_prompt(
+pub async fn claude_rewind_to_prompt(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     prompt_index: u32,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.rewindToPrompt",
         json!({
             "sessionId": session_id,
             "promptIndex": prompt_index,
         }),
     )
+    .await
 }
 
 #[tauri::command]
@@ -737,65 +755,69 @@ pub async fn claude_resume_session(
 }
 
 #[tauri::command]
-pub fn claude_resolve_permission(
+pub async fn claude_resolve_permission(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     tool_use_id: String,
     result: Value,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.resolvePermission",
         json!({
             "sessionId": session_id, "toolUseId": tool_use_id, "result": result,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_resolve_ask_user(
+pub async fn claude_resolve_ask_user(
     app: AppHandle,
     state: State<'_, SidecarState>,
     session_id: String,
     tool_use_id: String,
     answers: Value,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.resolveAskUser",
         json!({
             "sessionId": session_id, "toolUseId": tool_use_id, "answers": answers,
         }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_check_mcp_json_status(
+pub async fn claude_check_mcp_json_status(
     app: AppHandle,
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.checkMcpJsonStatus",
         json!({ "cwd": cwd }),
     )
+    .await
 }
 
 #[tauri::command]
-pub fn claude_enable_all_project_mcp(
+pub async fn claude_enable_all_project_mcp(
     app: AppHandle,
     state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
-    call(
-        &app,
-        &state,
+    call_blocking(
+        app,
+        state,
         "claude.enableAllProjectMcp",
         json!({ "cwd": cwd }),
     )
+    .await
 }
