@@ -9,6 +9,7 @@ use crate::event_hub::publish_runtime_event;
 use crate::sidecar::BridgeError;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -21,6 +22,7 @@ use tauri::{AppHandle, Manager};
 const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_START_TIMEOUT: Duration = Duration::from_secs(60);
+const MSG_BUFFER_CAP: usize = 300;
 
 type ReplySender = Sender<Result<Value, String>>;
 
@@ -499,6 +501,125 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
+fn codex_sessions_root(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .home_dir()
+        .ok()
+        .map(|home| home.join(".codex").join("sessions"))
+}
+
+fn read_session_meta_id(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let id = entry
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|value| *value == "session_meta")
+            .and_then(|_| entry.get("payload"))
+            .and_then(|payload| payload.get("id"))
+            .and_then(Value::as_str);
+        if let Some(id) = id.filter(|id| !id.is_empty()) {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+fn find_codex_session_log(root: &Path, thread_id: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_codex_session_log(&path, thread_id) {
+                return Some(found);
+            }
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let path_text = path.to_string_lossy();
+        if path_text.contains(thread_id)
+            || read_session_meta_id(&path).as_deref() == Some(thread_id)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn timestamp_or_now(_value: Option<&Value>) -> u128 {
+    // Renderer only requires a stable numeric timestamp. Rust std has no
+    // RFC3339 parser; keep the compatibility loader dependency-free and use
+    // current time when replaying history from Codex JSONL.
+    now_millis()
+}
+
+fn codex_history_items_from_content(session_id: &str, content: &str) -> Vec<Value> {
+    let mut items = Vec::new();
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let Some(payload) = entry.get("payload") else {
+            continue;
+        };
+        let timestamp = timestamp_or_now(entry.get("timestamp"));
+        match payload.get("type").and_then(Value::as_str) {
+            Some("user_message") => {
+                if let Some(message) = payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .filter(|message| !message.trim().is_empty())
+                {
+                    items.push(json!({
+                        "id": format!("hist-user-{}", items.len()),
+                        "sessionId": session_id,
+                        "role": "user",
+                        "content": message,
+                        "timestamp": timestamp,
+                    }));
+                }
+            }
+            Some("agent_message") => {
+                if let Some(message) = payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .filter(|message| !message.trim().is_empty())
+                {
+                    items.push(json!({
+                        "id": format!("hist-assistant-{}", items.len()),
+                        "sessionId": session_id,
+                        "role": "assistant",
+                        "content": message,
+                        "timestamp": timestamp,
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+fn load_codex_history_items(app: &AppHandle, session_id: &str, thread_id: &str) -> Vec<Value> {
+    let Some(root) = codex_sessions_root(app) else {
+        return Vec::new();
+    };
+    let Some(path) = find_codex_session_log(&root, thread_id) else {
+        return Vec::new();
+    };
+    fs::read_to_string(path)
+        .map(|content| codex_history_items_from_content(session_id, &content))
+        .unwrap_or_default()
+}
+
 fn item_type(item: &Value) -> Option<&str> {
     item.get("type").and_then(Value::as_str)
 }
@@ -873,6 +994,28 @@ impl CodexAppServerState {
         if let Some(payload) = worktree_payload(&options) {
             emit(app, "claude:worktree-info", &session_id, "payload", payload);
         }
+        let history_items = load_codex_history_items(app, &session_id, &sdk_session_id);
+        {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.messages = history_items
+                    .iter()
+                    .rev()
+                    .take(MSG_BUFFER_CAP)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+            }
+        }
+        emit(
+            app,
+            "claude:history",
+            &session_id,
+            "payload",
+            json!(history_items),
+        );
         emit(
             app,
             "claude:resume-loading",
@@ -1771,5 +1914,22 @@ mod tests {
         assert!(values.contains(&"gpt-5.5"));
         assert!(values.contains(&"gpt-5.3-codex"));
         assert!(!values.iter().any(|value| value.starts_with("claude-")));
+    }
+
+    #[test]
+    fn codex_history_loader_reads_user_and_assistant_messages() {
+        let content = r#"
+{"timestamp":"2026-05-11T00:00:00Z","type":"session_meta","payload":{"id":"thread-1"}}
+{"timestamp":"2026-05-11T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"ping"}}
+{"timestamp":"2026-05-11T00:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"pong"}}
+{"timestamp":"2026-05-11T00:00:03Z","type":"event_msg","payload":{"type":"other","message":"ignored"}}
+"#;
+        let items = codex_history_items_from_content("s-1", content);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["sessionId"], "s-1");
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(items[0]["content"], "ping");
+        assert_eq!(items[1]["role"], "assistant");
+        assert_eq!(items[1]["content"], "pong");
     }
 }
