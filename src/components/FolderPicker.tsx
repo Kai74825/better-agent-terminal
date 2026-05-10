@@ -47,7 +47,17 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
   const deletableEntries = selectedEntries.filter(entry => entry.isDirectory)
   const canDeleteSelected = !loading && !creating && deletableEntries.length > 0 && deletableEntries.length === selectedEntries.length
 
+  const logPerf = useCallback((label: string, startedAt: number, details: Record<string, unknown> = {}) => {
+    const elapsedMs = performance.now() - startedAt
+    if (elapsedMs >= 50) {
+      host.debug.log?.(`[FolderPicker] ${label}: ${elapsedMs.toFixed(0)}ms`, details)
+    }
+  }, [])
+
   const loadDir = useCallback(async (dirPath: string) => {
+    const startedAt = performance.now()
+    let entryCount = 0
+    let outcome = 'ok'
     setLoading(true)
     setError(null)
     try {
@@ -61,6 +71,7 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
             return a.name.localeCompare(b.name)
           })
           .map(e => ({ name: e.name, path: e.path, isDirectory: e.isDirectory }))
+        entryCount = visible.length
         const normalized = dirPath.replace(/[/\\]+$/, '') || dirPath
         const parentMatch = normalized.match(/^(.*)[/\\][^/\\]+$/)
         setCurrentPath(dirPath)
@@ -72,36 +83,57 @@ export function FolderPicker({ initialPath, multiSelect = true, mode = 'folders'
       }
       const result = await host.fs.listDirs(dirPath, showHidden)
       if ('error' in result) {
+        outcome = 'error'
         setError(result.error)
         return
       }
+      entryCount = result.entries.length
       setCurrentPath(result.current)
       setPathInput(result.current)
       setParent(result.parent)
       setEntries(result.entries.map(entry => ({ ...entry, isDirectory: true })))
       setSelected(new Set())
+    } catch (err) {
+      outcome = 'throw'
+      throw err
     } finally {
+      logPerf(mode === 'files' ? 'readdir' : 'listDirs', startedAt, {
+        mode,
+        path: dirPath,
+        includeHidden: showHidden,
+        entries: entryCount,
+        outcome,
+      })
       setLoading(false)
     }
-  }, [mode, showHidden])
+  }, [logPerf, mode, showHidden])
 
   // Resolve initial path: explicit prop, else home. Also load quick links.
   useEffect(() => {
     const init = async () => {
       let start = initialPath || ''
       if (!start) {
-        try { start = await host.fs.home() }
-        catch { start = '/' }
+        const homeStartedAt = performance.now()
+        try {
+          start = await host.fs.home()
+          logPerf('home', homeStartedAt)
+        } catch {
+          logPerf('home', homeStartedAt, { outcome: 'error' })
+          start = '/'
+        }
       }
       void loadDir(start)
+      const quickStartedAt = performance.now()
       try {
         const qls = await host.fs.quickLocations()
+        logPerf('quickLocations', quickStartedAt, { entries: qls.length })
         setQuickLocations(qls)
         if (!qls || qls.length === 0) {
           setQuickError('quickLocations returned empty')
           host.debug.log?.('[FolderPicker] quickLocations returned empty array')
         }
       } catch (err) {
+        logPerf('quickLocations', quickStartedAt, { outcome: 'error' })
         const msg = err instanceof Error ? err.message : String(err)
         host.debug.log?.('[FolderPicker] quickLocations failed:', msg)
         setQuickLocations([])
