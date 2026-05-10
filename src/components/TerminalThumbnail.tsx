@@ -84,7 +84,7 @@ const setupGlobalListener = () => {
   })
 
   // Claude agent messages for agent terminal previews
-  window.batAppAPI.claude.onMessage((sessionId, message) => {
+  host.claude.onMessage((sessionId, message) => {
     const msg = message as { role?: string; content?: string }
     if (msg.role === 'assistant' && msg.content) {
       const lines = msg.content.split('\n').slice(-8)
@@ -93,7 +93,7 @@ const setupGlobalListener = () => {
   })
 
   // Claude agent streaming text for live preview
-  window.batAppAPI.claude.onStream((sessionId, data) => {
+  host.claude.onStream((sessionId, data) => {
     const stream = data as { text?: string }
     if (stream.text) {
       const prev = previewCache.get(sessionId) || ''

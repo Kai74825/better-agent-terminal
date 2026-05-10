@@ -19,6 +19,7 @@
 - 2026-05-10：開始 sidecar JS bundle 瘦身。新增 `scripts/build-node-sidecar.mjs` 產生 `node-sidecar/dist/server.mjs`，Tauri resources 改優先打包 dist 單檔；Rust resolver 保留 `src/server.mjs` fallback，避免 dev/test 流程被迫先 build。
 - 2026-05-10：補上 sidecar `node_modules` native package prune。`prepare:tauri-bundle` 會在 sidecar install 後移除非目前 platform/arch 的 `@anthropic-ai/claude-agent-sdk-*` 與 `@openai/codex-*` 目錄，避免 stale optional binary 被 resources 帶進 release。
 - 2026-05-10：補上 Tauri resources 量測腳本。`pnpm run verify:tauri-resources` 會依 `src-tauri/tauri.conf.json` 統計 bundle resources 的檔案數與大小，並在 resource source 缺失時失敗，作為後續 mac cold-start 瘦身基準。
+- 2026-05-10：收斂部分 renderer direct `window.batAppAPI` 呼叫。`AgentsPanel`、`SkillsPanel`、`TerminalThumbnail` 已改走 `host.claude.*`，讓 Tauri 的 supported agents/commands/skills 與 agent preview event adapter 不再旁路 host-api。
 
 ## 目前判斷
 
