@@ -9,14 +9,28 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 const MAX_BYTES_PER_PANEL: usize = 1 << 20; // 1 MiB
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct WorkerBufferState {
-    inner: Mutex<HashMap<String, String>>,
+    inner: Arc<Mutex<HashMap<String, String>>>,
+}
+
+impl Default for WorkerBufferState {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl WorkerBufferState {
+    pub fn handle(&self) -> Arc<Mutex<HashMap<String, String>>> {
+        Arc::clone(&self.inner)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +44,42 @@ impl<E: std::fmt::Display> From<E> for CommandError {
             message: e.to_string(),
         }
     }
+}
+
+fn append_lines_to_map(map: &mut HashMap<String, String>, panel_id: &str, lines: &str) {
+    let buf = map.entry(panel_id.to_string()).or_default();
+    buf.push_str(lines);
+    trim_buffer_to_cap(buf);
+}
+
+fn trim_buffer_to_cap(buf: &mut String) {
+    if buf.len() <= MAX_BYTES_PER_PANEL {
+        return;
+    }
+    // Trim from the front when we exceed the per-panel cap. Drop whole
+    // lines so we don't slice a UTF-8 grapheme in half.
+    let drop_at = buf.len().saturating_sub(MAX_BYTES_PER_PANEL);
+    if let Some(pos) = buf[drop_at..].find('\n') {
+        *buf = buf.split_off(drop_at + pos + 1);
+    } else {
+        // No newline anywhere — just truncate to the cap from the back.
+        let keep = buf.split_off(buf.len() - MAX_BYTES_PER_PANEL);
+        *buf = keep;
+    }
+}
+
+pub fn append_worker_log_lines(
+    handle: &Arc<Mutex<HashMap<String, String>>>,
+    panel_id: &str,
+    lines: &str,
+) {
+    if panel_id.is_empty() || lines.is_empty() {
+        return;
+    }
+    let Ok(mut map) = handle.lock() else {
+        return;
+    };
+    append_lines_to_map(&mut map, panel_id, lines);
 }
 
 #[tauri::command]
@@ -59,22 +109,7 @@ pub fn worker_buffer_append(
         });
     }
     let mut map = state.inner.lock().expect("worker_buffer lock");
-    let buf = map.entry(panel_id).or_default();
-    buf.push_str(&lines);
-    // Trim from the front when we exceed the per-panel cap. Drop whole
-    // lines so we don't slice a UTF-8 grapheme in half.
-    if buf.len() > MAX_BYTES_PER_PANEL {
-        // Cut everything before the first newline past (len - cap) bytes;
-        // if no newline is found, fall back to discarding the leading half.
-        let drop_at = buf.len().saturating_sub(MAX_BYTES_PER_PANEL);
-        if let Some(pos) = buf[drop_at..].find('\n') {
-            *buf = buf.split_off(drop_at + pos + 1);
-        } else {
-            // No newline anywhere — just truncate to the cap from the back.
-            let keep = buf.split_off(buf.len() - MAX_BYTES_PER_PANEL);
-            *buf = keep;
-        }
-    }
+    append_lines_to_map(&mut map, &panel_id, &lines);
     Ok(true)
 }
 

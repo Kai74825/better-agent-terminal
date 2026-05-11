@@ -17,6 +17,7 @@
 
 use crate::app_data;
 use crate::commands::settings::resolve_shell_path;
+use crate::commands::worker_buffer::{append_worker_log_lines, WorkerBufferState};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -115,6 +116,13 @@ struct PtyExitEvent {
     exit_code: i32,
 }
 
+#[derive(Debug, Serialize)]
+struct WorkerLogEntry<'a> {
+    name: &'a str,
+    color: &'a str,
+    data: &'a str,
+}
+
 // Pure, host-agnostic "is this id safe to use as a key?" check we can
 // unit-test without touching the OS. The renderer generates short string
 // ids, but we still defend against empty / overly long inputs.
@@ -147,6 +155,15 @@ const TARGET_OS: &str = "unix";
 #[cfg(target_os = "windows")]
 const TARGET_OS: &str = "windows";
 const OUTPUT_FLUSH_MS: u64 = 8;
+const WORKER_PTY_SEPARATOR: &str = "__w__";
+
+fn worker_parts_from_pty_id(id: &str) -> Option<(&str, &str)> {
+    let (panel_id, process_name) = id.split_once(WORKER_PTY_SEPARATOR)?;
+    if panel_id.is_empty() || process_name.is_empty() {
+        return None;
+    }
+    Some((panel_id, process_name))
+}
 
 fn hash_history_key(id: &str) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -273,7 +290,33 @@ fn build_command(opts: &CreatePtyOptions, app_data_dir: Option<&Path>) -> Comman
     cmd
 }
 
-fn emit_pty_output(app: &AppHandle, id: &str, data: String) {
+fn persist_worker_output(
+    worker_buffer: &Arc<Mutex<HashMap<String, String>>>,
+    id: &str,
+    data: &str,
+) {
+    let Some((panel_id, process_name)) = worker_parts_from_pty_id(id) else {
+        return;
+    };
+    let Ok(line) = serde_json::to_string(&WorkerLogEntry {
+        name: process_name,
+        color: "",
+        data,
+    }) else {
+        return;
+    };
+    append_worker_log_lines(worker_buffer, panel_id, &(line + "\n"));
+}
+
+fn emit_pty_output(
+    app: &AppHandle,
+    worker_buffer: Option<&Arc<Mutex<HashMap<String, String>>>>,
+    id: &str,
+    data: String,
+) {
+    if let Some(worker_buffer) = worker_buffer {
+        persist_worker_output(worker_buffer, id, &data);
+    }
     let _ = app.emit(
         "pty:output",
         PtyOutputEvent {
@@ -283,11 +326,15 @@ fn emit_pty_output(app: &AppHandle, id: &str, data: String) {
     );
 }
 
-fn spawn_output_coalescer(app: AppHandle, id: String) -> Sender<String> {
+fn spawn_output_coalescer(
+    app: AppHandle,
+    id: String,
+    worker_buffer: Option<Arc<Mutex<HashMap<String, String>>>>,
+) -> Sender<String> {
     let (tx, rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         while let Ok(first) = rx.recv() {
-            emit_pty_output(&app, &id, first);
+            emit_pty_output(&app, worker_buffer.as_ref(), &id, first);
 
             let mut pending = String::new();
             let deadline = Instant::now() + Duration::from_millis(OUTPUT_FLUSH_MS);
@@ -301,7 +348,7 @@ fn spawn_output_coalescer(app: AppHandle, id: String) -> Sender<String> {
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         if !pending.is_empty() {
-                            emit_pty_output(&app, &id, pending);
+                            emit_pty_output(&app, worker_buffer.as_ref(), &id, pending);
                         }
                         return;
                     }
@@ -309,7 +356,7 @@ fn spawn_output_coalescer(app: AppHandle, id: String) -> Sender<String> {
             }
 
             if !pending.is_empty() {
-                emit_pty_output(&app, &id, pending);
+                emit_pty_output(&app, worker_buffer.as_ref(), &id, pending);
             }
         }
     });
@@ -319,6 +366,7 @@ fn spawn_output_coalescer(app: AppHandle, id: String) -> Sender<String> {
 fn start_pty_session(
     app: &AppHandle,
     map_handle: Arc<Mutex<HashMap<String, PtySession>>>,
+    worker_buffer_handle: Option<Arc<Mutex<HashMap<String, String>>>>,
     options: CreatePtyOptions,
 ) -> Result<String, CommandError> {
     if !is_valid_pty_id(&options.id) {
@@ -365,7 +413,11 @@ fn start_pty_session(
     // Lossy UTF-8 because xterm.js consumes strings and PTYs can split
     // codepoints across reads; renderer can stitch via terminal state.
     let id_for_reader = options.id.clone();
-    let output_tx = spawn_output_coalescer(app.clone(), id_for_reader.clone());
+    let output_tx = spawn_output_coalescer(
+        app.clone(),
+        id_for_reader.clone(),
+        worker_buffer_handle.clone(),
+    );
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
@@ -446,14 +498,18 @@ fn start_pty_session(
 pub async fn pty_create(
     app: AppHandle,
     state: State<'_, PtyState>,
+    worker_buffer: State<'_, WorkerBufferState>,
     options: CreatePtyOptions,
 ) -> Result<String, CommandError> {
     let handle = state.handle();
-    tauri::async_runtime::spawn_blocking(move || start_pty_session(&app, handle, options))
-        .await
-        .map_err(|e| CommandError {
-            message: format!("pty.create worker failed: {e}"),
-        })?
+    let worker_buffer_handle = worker_buffer.handle();
+    tauri::async_runtime::spawn_blocking(move || {
+        start_pty_session(&app, handle, Some(worker_buffer_handle), options)
+    })
+    .await
+    .map_err(|e| CommandError {
+        message: format!("pty.create worker failed: {e}"),
+    })?
 }
 
 #[tauri::command]
@@ -542,6 +598,7 @@ fn pty_restart_impl(
     start_pty_session(
         &app,
         handle,
+        None,
         CreatePtyOptions {
             id,
             cwd,
@@ -580,6 +637,17 @@ mod tests {
         assert!(is_valid_pty_id(&long));
         let too_long = "a".repeat(257);
         assert!(!is_valid_pty_id(&too_long));
+    }
+
+    #[test]
+    fn worker_pty_id_parts_are_detected() {
+        assert_eq!(
+            worker_parts_from_pty_id("terminal-1__w__typecheck"),
+            Some(("terminal-1", "typecheck"))
+        );
+        assert_eq!(worker_parts_from_pty_id("terminal-1"), None);
+        assert_eq!(worker_parts_from_pty_id("__w__typecheck"), None);
+        assert_eq!(worker_parts_from_pty_id("terminal-1__w__"), None);
     }
 
     #[test]

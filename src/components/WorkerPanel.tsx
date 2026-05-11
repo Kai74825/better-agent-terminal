@@ -1,4 +1,4 @@
-import { host } from '../host-api'
+import { host, isTauri } from '../host-api'
 import { useEffect, useRef, useState, memo, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -236,8 +236,9 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       if (visibleMap.get(entry.name) === false) continue
 
       const maxLen = Math.max(...processesRef.current.map(p => p.name.length))
+      const color = entry.color || processesRef.current.find(p => p.name === entry.name)?.color || '#ffffff'
       const paddedName = entry.name.padEnd(maxLen)
-      const prefix = ansiColor(entry.color, paddedName) + '\x1b[90m | \x1b[0m'
+      const prefix = ansiColor(color, paddedName) + '\x1b[90m | \x1b[0m'
       const formatted = prefixWorkerChunk(entry.data, prefix, !!midLineRef.current.get(entry.name))
       midLineRef.current.set(entry.name, formatted.midLine)
 
@@ -320,7 +321,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
   }, [procfilePath])
 
   // Write prefixed output to combined terminal
-  const writeOutput = useCallback((name: string, color: string, data: string) => {
+  const writeOutput = useCallback((name: string, color: string, data: string, persist = true) => {
     const terminal = terminalRef.current
     if (!terminal) return
 
@@ -328,8 +329,10 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     entriesRef.current.push(entry)
 
     // Queue for disk flush
-    pendingBatchRef.current.push(entry)
-    scheduleFlush()
+    if (persist) {
+      pendingBatchRef.current.push(entry)
+      scheduleFlush()
+    }
 
     // __header__ entries are pre-formatted, write directly
     if (name === '__header__') {
@@ -618,7 +621,7 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
             p.ptyId === id && p.status !== 'running' ? { ...p, status: 'running' as const, exitCode: undefined } : p
           ))
         }
-        writeOutput(proc.name, proc.color, data)
+        writeOutput(proc.name, proc.color, data, !isTauri())
       }
     })
 
