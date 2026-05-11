@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      package_preview:
+        description: 'Also build unsigned Windows/macOS Tauri preview installers'
+        required: false
+        default: false
+        type: boolean
   pull_request:
     paths:
       - '.github/workflows/tauri-pre-ci.yml'
@@ -156,9 +161,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build debug Tauri bundle
-        run: pnpm run tauri:build:debug
+        run: pnpm run tauri:build:debug:ci
 
       - name: Smoke test debug binary
+        if: runner.os == 'Windows'
         env:
           TAURI_PROFILE: debug
         run: pnpm run test:tauri-launch
@@ -169,3 +175,67 @@ jobs:
           name: tauri-debug-${{ runner.os }}
           path: src-tauri/target/debug/bundle/**
           if-no-files-found: warn
+
+  package-preview:
+    name: Package preview (${{ matrix.artifact }})
+    needs: preflight
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_preview }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows
+          - os: macos-latest
+            artifact: macos
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned Tauri preview installer
+        run: pnpm run tauri:build:ci
+
+      - name: Smoke test Windows release binary
+        if: runner.os == 'Windows'
+        run: pnpm run test:tauri-launch
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-preview-${{ matrix.artifact }}
+          path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.dmg
+          if-no-files-found: error

@@ -57,7 +57,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:dev:latest": "pnpm run prepare:tauri-bundle && tauri dev",
+    "tauri:build:ci": "pnpm run prepare:tauri-bundle:ci && tauri build",
     "tauri:build": "pnpm run prepare:tauri-bundle && tauri build",
+    "tauri:build:debug:ci": "pnpm run prepare:tauri-bundle:ci && tauri build --debug",
     "tauri:build:debug": "pnpm run prepare:tauri-bundle && tauri build --debug"
   },
   "dependencies": {
