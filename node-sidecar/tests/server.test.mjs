@@ -92,7 +92,11 @@ async function inProcess() {
       const loaded = await dispatch({ jsonrpc: '2.0', id: 33, method: 'profile.load', params: 'dev' })
       assert.equal(loaded.result.id, 'dev')
       const active = await dispatch({ jsonrpc: '2.0', id: 34, method: 'profile.getActiveIds' })
-      assert.deepEqual(active.result, ['dev'])
+      assert.deepEqual(active.result, ['default', 'dev'])
+      const activateAgain = await dispatch({ jsonrpc: '2.0', id: 35, method: 'profile.activate', params: 'dev' })
+      assert.equal(activateAgain.result, true)
+      const activeAfterDuplicate = await dispatch({ jsonrpc: '2.0', id: 36, method: 'profile.getActiveIds' })
+      assert.deepEqual(activeAfterDuplicate.result, ['default', 'dev'])
     } finally {
       if (saved === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
       else process.env.BAT_SIDECAR_DATA_DIR = saved

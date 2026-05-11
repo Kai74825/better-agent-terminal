@@ -73,6 +73,14 @@ function normalizeIndex(raw) {
   return { profiles: index.profiles, activeProfileIds: index.activeProfileIds }
 }
 
+function activateProfile(index, profileId) {
+  if (!index.profiles.some(profile => profile.id === profileId)) return false
+  if (!index.activeProfileIds.includes(profileId)) {
+    index.activeProfileIds.push(profileId)
+  }
+  return true
+}
+
 function hydrateRemoteTokens(index) {
   const store = readEncryptedJson(tokenPath())
   const tokens = store && typeof store === 'object' && store.tokens && typeof store.tokens === 'object'
@@ -158,10 +166,9 @@ export async function listProfiles() {
 
 async function loadProfile(profileId) {
   const index = await readIndex()
-  if (!index.profiles.some(profile => profile.id === profileId)) return null
+  if (!activateProfile(index, profileId)) return null
   const snapshot = await readSnapshot(profileId)
   if (!snapshot) return null
-  index.activeProfileIds = [profileId]
   await writeIndex(index)
   return snapshot
 }
@@ -173,8 +180,7 @@ registerHandler('profile.loadSnapshot', async (params) => readSnapshot(params?.p
 registerHandler('profile.activate', async (params) => {
   const profileId = params?.profileId ?? params
   const index = await readIndex()
-  if (!index.profiles.some(profile => profile.id === profileId)) return false
-  index.activeProfileIds = [profileId]
+  if (!activateProfile(index, profileId)) return false
   await writeIndex(index)
   return true
 })
