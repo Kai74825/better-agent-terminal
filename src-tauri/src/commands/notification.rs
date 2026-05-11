@@ -60,6 +60,13 @@ pub struct AgentNotificationSession {
     pub profile_id: Option<String>,
     pub cwd: String,
     pub agent_kind: Option<String>,
+    pub model: Option<String>,
+    pub permission_mode: Option<String>,
+    pub effort: Option<String>,
+    pub auto_compact_window: Option<i64>,
+    pub sdk_session_id: Option<String>,
+    pub codex_sandbox_mode: Option<String>,
+    pub codex_approval_policy: Option<String>,
 }
 
 #[derive(Default)]
@@ -228,6 +235,14 @@ pub fn register_agent_session_from_options(
     }
     let profile_id = Some(window_registry::get_entry(app, window_id).profile_id);
     let agent_kind = options.and_then(agent_kind_from_options);
+    let model = options.and_then(|value| string_option(value, "model"));
+    let permission_mode = options.and_then(|value| string_option(value, "permissionMode"));
+    let effort = options.and_then(|value| string_option(value, "effort"));
+    let auto_compact_window = options.and_then(|value| value.get("autoCompactWindow")?.as_i64());
+    let sdk_session_id = options.and_then(|value| string_option(value, "sdkSessionId"));
+    let codex_sandbox_mode = options.and_then(|value| string_option(value, "codexSandboxMode"));
+    let codex_approval_policy =
+        options.and_then(|value| string_option(value, "codexApprovalPolicy"));
     let state = app.state::<AgentNotificationState>();
     state.lock().insert(
         session_id.to_string(),
@@ -236,6 +251,13 @@ pub fn register_agent_session_from_options(
             profile_id,
             cwd,
             agent_kind,
+            model,
+            permission_mode,
+            effort,
+            auto_compact_window,
+            sdk_session_id,
+            codex_sandbox_mode,
+            codex_approval_policy,
         },
     );
 }
@@ -253,6 +275,15 @@ pub fn get_agent_session_cwd(app: &AppHandle, session_id: &str) -> Option<String
         .get(session_id)
         .map(|session| session.cwd.clone());
     cwd
+}
+
+pub fn get_agent_session_snapshot(
+    app: &AppHandle,
+    session_id: &str,
+) -> Option<AgentNotificationSession> {
+    let state = app.try_state::<AgentNotificationState>()?;
+    let session = state.lock().get(session_id).cloned();
+    session
 }
 
 pub fn add_agent_completion_from_event(app: &AppHandle, topic: &str, payload: &Value) {
@@ -400,6 +431,15 @@ fn agent_kind_from_options(options: &Value) -> Option<String> {
     }
 }
 
+fn string_option(options: &Value, key: &str) -> Option<String> {
+    options
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+}
+
 pub fn normalize_workspace_key(cwd: &str) -> String {
     let normalized = cwd
         .trim()
@@ -434,6 +474,19 @@ mod tests {
             read,
             agent_kind: None,
         }
+    }
+
+    #[test]
+    fn string_option_trims_empty_values() {
+        let options = serde_json::json!({
+            "model": " claude-sonnet-4-6 ",
+            "effort": ""
+        });
+        assert_eq!(
+            string_option(&options, "model").as_deref(),
+            Some("claude-sonnet-4-6")
+        );
+        assert_eq!(string_option(&options, "effort"), None);
     }
 
     #[test]

@@ -607,6 +607,55 @@ fn claude_builtin_models_native() -> Value {
     ])
 }
 
+fn claude_context_window_for_model(model: Option<&str>) -> u64 {
+    match model.unwrap_or_default() {
+        "claude-opus-4-7"
+        | "claude-opus-4-7[1m]"
+        | "claude-opus-4-7:1m"
+        | "claude-opus-4-6"
+        | "claude-opus-4-6[1m]"
+        | "claude-sonnet-4-6"
+        | "claude-sonnet-4-6[1m]" => 1_000_000,
+        "claude-haiku-4-5-20251001" => 200_000,
+        "claude-opus-4-7:auto-compact-200k" => 200_000,
+        "claude-opus-4-7:auto-compact-300k" => 300_000,
+        "claude-opus-4-7:auto-compact-400k" => 400_000,
+        value if value.ends_with("[1m]") => {
+            claude_context_window_for_model(Some(value.trim_end_matches("[1m]")))
+        }
+        _ => 0,
+    }
+}
+
+fn session_meta_from_notification_snapshot(
+    session: &notification_cmd::AgentNotificationSession,
+) -> Value {
+    let model = session.model.as_deref();
+    json!({
+        "permissionMode": session.permission_mode.as_deref().unwrap_or("default"),
+        "model": session.model.as_deref(),
+        "effort": session.effort.as_deref(),
+        "autoCompactWindow": session.auto_compact_window,
+        "sdkSessionId": session.sdk_session_id.as_deref(),
+        "cwd": session.cwd.as_str(),
+        "totalCost": 0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "durationMs": 0,
+        "numTurns": 0,
+        "contextWindow": claude_context_window_for_model(model),
+        "maxOutputTokens": 0,
+        "contextTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0,
+        "callCacheRead": 0,
+        "callCacheWrite": 0,
+        "lastQueryCalls": 0,
+        "codexSandboxMode": session.codex_sandbox_mode.as_deref(),
+        "codexApprovalPolicy": session.codex_approval_policy.as_deref(),
+    })
+}
+
 fn supported_commands_native(cwd: &Path) -> Vec<SlashCommandEntry> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
@@ -1585,6 +1634,9 @@ pub async fn claude_get_session_meta(
     if let Some(value) = codex_state.get_session_meta(&session_id) {
         return Ok(value);
     }
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+        return Ok(session_meta_from_notification_snapshot(&session));
+    }
     call_blocking(
         app,
         state,
@@ -2478,6 +2530,35 @@ mod tests {
             .unwrap()
             .iter()
             .all(|model| model["source"] == "builtin"));
+    }
+
+    #[test]
+    fn notification_session_meta_matches_sidecar_shape_defaults() {
+        let session = notification_cmd::AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "C:/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: Some("claude-opus-4-7:auto-compact-300k".into()),
+            permission_mode: Some("bypassPermissions".into()),
+            effort: Some("high".into()),
+            auto_compact_window: Some(300_000),
+            sdk_session_id: Some("sdk-1".into()),
+            codex_sandbox_mode: None,
+            codex_approval_policy: None,
+        };
+
+        let meta = session_meta_from_notification_snapshot(&session);
+        assert_eq!(meta["permissionMode"], "bypassPermissions");
+        assert_eq!(meta["model"], "claude-opus-4-7:auto-compact-300k");
+        assert_eq!(meta["effort"], "high");
+        assert_eq!(meta["autoCompactWindow"], 300_000);
+        assert_eq!(meta["sdkSessionId"], "sdk-1");
+        assert_eq!(meta["cwd"], "C:/repo");
+        assert_eq!(meta["contextWindow"], 300_000);
+        assert_eq!(meta["inputTokens"], 0);
+        assert_eq!(meta["outputTokens"], 0);
+        assert_eq!(meta["numTurns"], 0);
     }
 
     #[test]
