@@ -9,9 +9,10 @@
 //
 // File location: <app-data>/workspaces.json. We keep the filename stable
 // so an Electron→Tauri migration can copy the file from the old userData
-// directory without translation. Workspace detach/reattach remain unported;
-// cross-window move is handled here and emits the existing workspace:reload
-// event so renderer stores can reuse the Electron reload path.
+// directory without translation. Cross-window move emits the existing
+// workspace:reload event so renderer stores can reuse the Electron reload
+// path; detach/reattach create and close Tauri webview windows while emitting
+// the existing workspace:detached/workspace:reattached events.
 
 use crate::window_registry;
 use serde::Serialize;
