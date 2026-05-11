@@ -163,6 +163,7 @@
 - 2026-05-11：補 Tauri `claude.getWorktreeStatus` 的 Rust native read path。session registry 會記錄 worktreePath/branch/original cwd，status 讀取可直接用 git 取得 diff/sourceBranch；worktree cleanup 仍委派既有 sidecar manager，但成功後會同步清掉 Rust registry 的 worktree 狀態。
 - 2026-05-11：補 Tauri `claude.cleanupWorktree` 的 Rust native fast path。若 Rust registry 已有 worktreePath/branch，cleanup 會直接執行 `git worktree remove --force`、必要時刪目錄/prune、依選項刪 branch，並 emit 既有 `claude:status` / `claude:worktree-info` 事件；缺 registry 或 native cleanup 失敗才 fallback sidecar。
 - 2026-05-11：補 Rust session registry 對 `claude:worktree-info` 的同步。sidecar 或 Rust Codex 發出 worktree info/null 時會更新 Rust 記錄的 cwd/worktreePath/branch/original cwd，讓後續 native `getWorktreeStatus` / `cleanupWorktree` 能接住由舊路徑 rehydrate 的 session。
+- 2026-05-11：把 top-level Tauri `worktree.create/remove/status/merge/rehydrate` 搬到 Rust native。新增 Rust `WorktreeState` 保存 active worktree info，create/remove/status/merge/rehydrate 直接執行 git/fs 操作並保留 Electron-shaped result；worktree terminal 建立、關閉、狀態查詢與 merge 不再需要 Node sidecar。
 
 ## 目前判斷
 

@@ -35,6 +35,7 @@ pub fn run() {
         .manage(fs_cmd::FsWatcherState::default())
         .manage(snippet_cmd::SnippetState::default())
         .manage(worker_buffer_cmd::WorkerBufferState::default())
+        .manage(worktree_cmd::WorktreeState::default())
         .manage(event_hub::RuntimeEventHubState::default())
         .manage(codex_app_server::CodexAppServerState::default())
         .manage(window_registry::WindowRegistryState::default())
