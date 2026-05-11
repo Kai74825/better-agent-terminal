@@ -114,7 +114,9 @@ export default function App() {
   const [folderPickerInitialPath, setFolderPickerInitialPath] = useState<string | undefined>(undefined)
   const [folderPickerOpen, setFolderPickerOpen] = useState(false)
   const [activeProfileName, setActiveProfileName] = useState<string>('Default')
-  const [isRemoteConnected, setIsRemoteConnected] = useState(false)
+  const [activeProfileIsRemote, setActiveProfileIsRemote] = useState(false)
+  const [remoteClientConnected, setRemoteClientConnected] = useState(false)
+  const isRemoteConnected = activeProfileIsRemote && remoteClientConnected
   const [appNotification, setAppNotification] = useState<string | null>(null)
   const [envDialogWorkspaceId, setEnvDialogWorkspaceId] = useState<string | null>(null)
   // Right sidebar tabs
@@ -450,11 +452,13 @@ export default function App() {
               await host.profile.load(localProfile.id)
               const winIdx = await host.app.getWindowIndex()
               setActiveProfileName(`${localProfile.name}:${winIdx}`)
+              setActiveProfileIsRemote(false)
             }
           } else {
             const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${active.name}:${winIdx}`)
-            setIsRemoteConnected(true)
+            setActiveProfileIsRemote(true)
+            setRemoteClientConnected(true)
           }
         } else if (active?.type === 'remote') {
           // Remote profile missing connection info — fall back
@@ -468,6 +472,7 @@ export default function App() {
             await host.profile.load(localProfile.id)
             const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${localProfile.name}:${winIdx}`)
+            setActiveProfileIsRemote(false)
           }
         } else if (active) {
           // For local profiles opened in a new window, load the profile snapshot
@@ -477,11 +482,13 @@ export default function App() {
           }
           const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${active.name}:${winIdx}`)
+          setActiveProfileIsRemote(false)
         } else if (result.profiles.length > 0) {
           // Fallback: activeProfileId didn't match any profile — use first local profile
           const fallback = result.profiles.find(p => p.type !== 'remote') || result.profiles[0]
           const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${fallback.name}:${winIdx}`)
+          setActiveProfileIsRemote(fallback.type === 'remote')
         }
 
         // Store windowId for cross-window workspace drag
@@ -524,7 +531,7 @@ export default function App() {
 
     // Listen for system resume from sleep/hibernate — refresh remote connection status
     const unsubSystemResume = host.system.onResume(() => {
-      host.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+      host.remote.clientStatus().then(s => setRemoteClientConnected(s.connected))
     })
 
     // Listen for cross-window workspace reload
@@ -556,7 +563,7 @@ export default function App() {
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null
     const check = () => {
-      host.remote.clientStatus().then(s => setIsRemoteConnected(s.connected))
+      host.remote.clientStatus().then(s => setRemoteClientConnected(s.connected))
     }
     const cancelStart = scheduleTauriStartupBackgroundWork(() => {
       check()
