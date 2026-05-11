@@ -36,6 +36,22 @@ const DEFAULT_SNIPPET_WIDTH = 280
 const MIN_SNIPPET_WIDTH = 180
 const MAX_SNIPPET_WIDTH = 500
 
+type WindowAuthInfo = { email: string; subscriptionType?: string }
+
+function normalizeWindowAuthInfo(info: unknown): WindowAuthInfo | null {
+  if (!info || typeof info !== 'object') return null
+  const record = info as Record<string, unknown>
+  const email = typeof record.email === 'string' ? record.email.trim() : ''
+  if (!email) return null
+  const subscriptionType = typeof record.subscriptionType === 'string'
+    ? record.subscriptionType.trim()
+    : ''
+  return {
+    email,
+    ...(subscriptionType ? { subscriptionType } : {}),
+  }
+}
+
 // Compute parent of a path, supporting both POSIX and Windows separators.
 // Returns the input unchanged if at filesystem root.
 function parentPath(p: string): string {
@@ -138,7 +154,7 @@ export default function App() {
 
   // Sync window title with active profile, window index, and account info
   const [windowIndex, setWindowIndex] = useState<number>(1)
-  const [authInfo, setAuthInfo] = useState<{ email?: string; subscriptionType?: string } | null>(null)
+  const [authInfo, setAuthInfo] = useState<WindowAuthInfo | null>(null)
   useEffect(() => {
     host.app.getWindowIndex().then(setWindowIndex)
   }, [])
@@ -146,8 +162,8 @@ export default function App() {
     let interval: ReturnType<typeof setInterval> | null = null
     const fetchAuth = () => {
       host.claude.authStatus().then(info => {
-        if (info) setAuthInfo({ email: info.email, subscriptionType: info.subscriptionType })
-      }).catch(() => {})
+        setAuthInfo(normalizeWindowAuthInfo(info))
+      }).catch(() => setAuthInfo(null))
     }
     const onAccountSwitch = () => fetchAuth()
     const cancelStart = scheduleTauriStartupBackgroundWork(() => {
@@ -165,12 +181,12 @@ export default function App() {
     const profileTitle = /:\d+$/.test(activeProfileName)
       ? activeProfileName
       : `${activeProfileName}:${windowIndex}`
-    const profilePart = `${profileTitle}${isRemoteConnected ? ' (Remote)' : ''}`
+    const profilePart = `${profileTitle}${activeProfileIsRemote ? ' (Remote)' : ''}`
     const titleParts = [profilePart]
     if (authInfo?.email) titleParts.push(`(${authInfo.email} / ${authInfo.subscriptionType || 'unknown'})`)
     titleParts.push('Better Agent Terminal')
     document.title = titleParts.join(' | ')
-  }, [activeProfileName, windowIndex, isRemoteConnected, authInfo])
+  }, [activeProfileName, windowIndex, activeProfileIsRemote, authInfo])
 
   // Lazy mount: only render a workspace's terminals once it has been activated
   useEffect(() => {
