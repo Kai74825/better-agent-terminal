@@ -76,6 +76,91 @@ fn account_error(err: impl std::fmt::Display) -> BridgeError {
     }
 }
 
+fn claude_sdk_package_name(target_os: &str, arch: &str) -> Option<&'static str> {
+    match (target_os, arch) {
+        ("windows", "x86_64") => Some("claude-agent-sdk-win32-x64"),
+        ("windows", "aarch64") => Some("claude-agent-sdk-win32-arm64"),
+        ("macos", "x86_64") => Some("claude-agent-sdk-darwin-x64"),
+        ("macos", "aarch64") => Some("claude-agent-sdk-darwin-arm64"),
+        ("linux", "x86_64") => Some("claude-agent-sdk-linux-x64"),
+        ("linux", "aarch64") => Some("claude-agent-sdk-linux-arm64"),
+        _ => None,
+    }
+}
+
+fn claude_exe_name(target_os: &str) -> &'static str {
+    if target_os == "windows" {
+        "claude.exe"
+    } else {
+        "claude"
+    }
+}
+
+fn find_bundled_claude_cli_in_base(
+    base_dir: &Path,
+    target_os: &str,
+    arch: &str,
+) -> Option<PathBuf> {
+    let package = claude_sdk_package_name(target_os, arch)?;
+    let candidate = base_dir
+        .join("node-sidecar")
+        .join("node_modules")
+        .join("@anthropic-ai")
+        .join(package)
+        .join(claude_exe_name(target_os));
+    candidate.is_file().then_some(candidate)
+}
+
+fn find_claude_cli_on_path(
+    path_env: Option<&str>,
+    pathext_env: Option<&str>,
+    target_os: &str,
+) -> Option<PathBuf> {
+    let path_env = path_env?;
+    let exts = if target_os == "windows" {
+        pathext_env
+            .unwrap_or(".COM;.EXE;.BAT;.CMD")
+            .split(';')
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        vec![String::new()]
+    };
+    std::env::split_paths(path_env).find_map(|dir| {
+        exts.iter().find_map(|ext| {
+            let candidate = dir.join(format!("claude{ext}"));
+            candidate.is_file().then_some(candidate)
+        })
+    })
+}
+
+fn resolve_claude_cli_path(app: &AppHandle) -> String {
+    if let Ok(override_path) = std::env::var("BAT_SIDECAR_CLAUDE_BIN") {
+        if !override_path.trim().is_empty() {
+            return override_path;
+        }
+    }
+    let target_os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        if let Some(candidate) = find_bundled_claude_cli_in_base(&resource_dir, target_os, arch) {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(candidate) = find_bundled_claude_cli_in_base(&cwd, target_os, arch) {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    find_claude_cli_on_path(
+        std::env::var("PATH").ok().as_deref(),
+        std::env::var("PATHEXT").ok().as_deref(),
+        target_os,
+    )
+    .map(|path| path.to_string_lossy().to_string())
+    .unwrap_or_default()
+}
+
 fn archive_empty_page() -> Value {
     json!({ "messages": [], "total": 0, "hasMore": false })
 }
@@ -621,9 +706,9 @@ pub async fn claude_account_mark_warning_shown(
 #[tauri::command]
 pub async fn claude_get_cli_path(
     app: AppHandle,
-    state: State<'_, SidecarState>,
+    _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "claude.getCliPath", Value::Null).await
+    Ok(Value::String(resolve_claude_cli_path(&app)))
 }
 
 #[tauri::command]
@@ -1418,6 +1503,42 @@ mod tests {
             "bat-claude-command-{name}-{}-{stamp}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn claude_cli_resolves_bundled_sdk_binary_in_base() {
+        let base = temp_data_dir("claude-cli-bundled");
+        let bin = base
+            .join("node-sidecar")
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-agent-sdk-win32-x64")
+            .join("claude.exe");
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fs::write(&bin, b"fake").unwrap();
+
+        assert_eq!(
+            find_bundled_claude_cli_in_base(&base, "windows", "x86_64"),
+            Some(bin)
+        );
+
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn claude_cli_path_search_honors_windows_pathext() {
+        let base = temp_data_dir("claude-cli-path");
+        fs::create_dir_all(&base).unwrap();
+        let bin = base.join("claude.CMD");
+        fs::write(&bin, b"fake").unwrap();
+        let path = std::env::join_paths([base.clone()]).unwrap();
+
+        assert_eq!(
+            find_claude_cli_on_path(path.to_str(), Some(".CMD"), "windows"),
+            Some(bin)
+        );
+
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]
