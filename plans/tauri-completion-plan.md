@@ -208,6 +208,7 @@
 - 2026-05-11：把正式 release flow 切到 Tauri。既有 tag `v*` workflow 不再跑 Electron Builder，改為三平台 `tauri build`、上傳 Tauri installer artifacts 並建立 GitHub Release；Chocolatey 會使用實際 Tauri `.exe` 檔名與 checksum 產生套件。
 - 2026-05-11：接上 Tauri macOS 簽章/公證 secrets。Release workflow 會把既有 Electron `APPLE_CERTIFICATE_P12` / `APPLE_APP_SPECIFIC_PASSWORD` secrets 映射到 Tauri CLI 需要的 `APPLE_CERTIFICATE` / `APPLE_PASSWORD`，並在 macOS build 前檢查 certificate/password/team/notarization credentials。
 - 2026-05-12：加速 Tauri release build。Release workflow 改成只更新版本 metadata、不在 `build-version.js` 內 compile；新增 `verify:tauri-release-ci` 避免 release preflight 重跑 frontend compile；Tauri bundle step 改用已準備好的 sidecar/runtime，不再重複 `prepare:tauri-bundle:ci`。
+- 2026-05-12：修正 Windows prerelease bundle。Tauri/WiX MSI 不接受 `2.9.0-pre.N` 這類非純數字 prerelease identifier，release matrix 改為 Windows 只產 NSIS `.exe`、macOS 只產 `.dmg`、Linux 只產 `.AppImage`，同時減少不需要的 bundle 工作。
 
 ## 目前判斷
 

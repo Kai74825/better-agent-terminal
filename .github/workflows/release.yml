@@ -18,14 +18,17 @@ jobs:
             platform: win
             artifact: release-win
             release_exts: '.exe'
+            bundle: nsis
           - os: macos-latest
             platform: mac
             artifact: release-mac
             release_exts: '.dmg'
+            bundle: dmg
           - os: ubuntu-latest
             platform: linux
             artifact: release-linux
             release_exts: '.AppImage'
+            bundle: appimage
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -122,7 +125,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
-        run: pnpm run tauri:build:ci:prepared
+        run: pnpm run tauri:build:ci:prepared -- --bundles ${{ matrix.bundle }}
 
       - name: Smoke test Windows release binary
         if: matrix.platform == 'win'
@@ -141,7 +144,6 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             src-tauri/target/release/bundle/**/*.exe
-            src-tauri/target/release/bundle/**/*.msi
 
       - name: Upload macOS artifact
         if: matrix.platform == 'mac'
