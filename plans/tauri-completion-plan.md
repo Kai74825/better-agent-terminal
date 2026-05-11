@@ -171,6 +171,7 @@
 - 2026-05-11：補 Tauri preview preflight script。新增 `pnpm run verify:tauri-preview`，聚合 typecheck、compile、Rust tests、host API guards、Codex/OpenAI cleanup regression、renderer logging guard、resources 檢查與 Tauri launch smoke，作為發 preview 前的固定入口。
 - 2026-05-11：補 Tauri resources regression gate。`verify:tauri-resources` 現在除了 strict missing，也會限制 resources 在 7000 files / 400 MB 內，避免 sidecar/runtime 打包體積在 preview 前無聲膨脹。
 - 2026-05-11：修正 sidecar module prune 規則。`prune-node-sidecar-modules` 只刪 `@openai/codex-{platform}-{arch}` optional native package，不再誤刪 `@openai/codex` / `@openai/codex-sdk` 這類非 platform package；實測若把 `@openai/codex-sdk` 打進 packaged sidecar 會把 resources 拉到約 576 MB，暫不納入 preview bundle，Codex packaged 主路徑仍是 Rust app-server。
+- 2026-05-11：補 Tauri preview preflight coverage。`verify:tauri-preview` 現在也會跑 `test:sidecar`、`test:node-resolver` 與 `test:tauri-bundle-prune`，避免 sidecar/runtime startup 或 bundle prune regression 被 preview 前檢查漏掉。
 
 ## 目前判斷
 
