@@ -178,6 +178,7 @@
 - 2026-05-11：補 Tauri dynamic window dev URL。`Ctrl+N` 與 detached workspace 建立的動態 Tauri window 在 dev 模式明確載入 `http://127.0.0.1:5173/`，release 才載入 bundled `index.html`，避免動態 window 沒吃到 Vite dev server 時只顯示白畫面。
 - 2026-05-11：同步 Tauri preview version metadata。`src-tauri/tauri.conf.json` 版本從舊的 `0.1.0` 對齊 `package.json` 的 `2.1.3`，並加入 `test:tauri-version-sync` 到 preview preflight，避免 Tauri artifact metadata 與 Electron/package version 漂移。
 - 2026-05-11：補白畫面診斷。renderer startup log 現在會標出 host kind；Electron regular/detached window 會記錄 `did-fail-load`、renderer process gone、unresponsive 與 warning/error console message，方便確認白窗是 URL 載入、preload/renderer error，還是 renderer process crash。
+- 2026-05-11：修正 release version script。`scripts/build-version.js` 發版改版號時現在會同步更新 `package.json` 與 `src-tauri/tauri.conf.json`，並加入 `test:build-version-script` 到 preview preflight，避免發 pre 版時 Tauri artifact 又回到舊 metadata。
 
 ## 目前判斷
 
