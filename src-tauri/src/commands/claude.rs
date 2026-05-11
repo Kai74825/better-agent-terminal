@@ -681,6 +681,62 @@ fn session_state_from_notification_snapshot(
     })
 }
 
+fn value_u64(value: &Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(|item| {
+            item.as_u64()
+                .or_else(|| item.as_i64().and_then(|n| (n >= 0).then_some(n as u64)))
+        })
+        .unwrap_or(0)
+}
+
+fn context_usage_from_notification_snapshot(
+    session: &notification_cmd::AgentNotificationSession,
+) -> Option<Value> {
+    let meta = session.latest_meta.as_ref()?;
+    let model = meta
+        .get("model")
+        .and_then(Value::as_str)
+        .or(session.model.as_deref());
+    let input_tokens = value_u64(meta, "inputTokens");
+    let output_tokens = value_u64(meta, "outputTokens");
+    let cache_creation_tokens = value_u64(meta, "cacheCreationTokens");
+    let cache_read_tokens = value_u64(meta, "cacheReadTokens");
+    let total_tokens = value_u64(meta, "contextTokens")
+        .max(input_tokens + cache_creation_tokens + cache_read_tokens);
+    if total_tokens == 0 {
+        return None;
+    }
+    let context_window = value_u64(meta, "contextWindow");
+    let model_window = claude_context_window_for_model(model);
+    let max_tokens = if context_window > 0 {
+        context_window
+    } else if model_window > 0 {
+        model_window
+    } else {
+        200_000
+    };
+    let percentage = if max_tokens > 0 {
+        ((total_tokens as f64 / max_tokens as f64) * 100.0).round() as u64
+    } else {
+        0
+    };
+    Some(json!({
+        "categories": [{ "name": "Context", "tokens": total_tokens, "color": "#8B5CF6" }],
+        "totalTokens": total_tokens,
+        "maxTokens": max_tokens,
+        "percentage": percentage,
+        "model": model.unwrap_or("unknown"),
+        "apiUsage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_input_tokens": cache_creation_tokens,
+            "cache_read_input_tokens": cache_read_tokens,
+        },
+    }))
+}
+
 fn worktree_git_root_from_path(worktree_path: &str) -> Option<PathBuf> {
     Path::new(worktree_path)
         .parent()
@@ -1834,6 +1890,11 @@ pub async fn claude_get_context_usage(
     if codex_state.is_owned(&session_id) {
         return Ok(Value::Null);
     }
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+        if let Some(value) = context_usage_from_notification_snapshot(&session) {
+            return Ok(value);
+        }
+    }
     call_blocking(
         app,
         state,
@@ -2868,6 +2929,81 @@ mod tests {
         assert_eq!(state["autoCompactWindow"], 400_000);
         assert_eq!(state["codexSandboxMode"], "workspace-write");
         assert_eq!(state["codexApprovalPolicy"], "on-request");
+    }
+
+    #[test]
+    fn notification_context_usage_matches_sidecar_cached_shape() {
+        let session = notification_cmd::AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "C:/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: Some("claude-sonnet-4-6".into()),
+            permission_mode: Some("default".into()),
+            effort: None,
+            auto_compact_window: None,
+            sdk_session_id: Some("sdk-1".into()),
+            codex_sandbox_mode: None,
+            codex_approval_policy: None,
+            latest_meta: Some(json!({
+                "model": "claude-sonnet-4-6",
+                "inputTokens": 120,
+                "outputTokens": 40,
+                "cacheCreationTokens": 30,
+                "cacheReadTokens": 50,
+                "contextTokens": 200,
+                "contextWindow": 1_000_000,
+            })),
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
+            auto_continue: None,
+            is_resting: false,
+        };
+
+        let usage = context_usage_from_notification_snapshot(&session).expect("context usage");
+        assert_eq!(usage["totalTokens"], 200);
+        assert_eq!(usage["maxTokens"], 1_000_000);
+        assert_eq!(usage["percentage"], 0);
+        assert_eq!(usage["model"], "claude-sonnet-4-6");
+        assert_eq!(usage["categories"][0]["name"], "Context");
+        assert_eq!(usage["categories"][0]["tokens"], 200);
+        assert_eq!(usage["apiUsage"]["input_tokens"], 120);
+        assert_eq!(usage["apiUsage"]["output_tokens"], 40);
+        assert_eq!(usage["apiUsage"]["cache_creation_input_tokens"], 30);
+        assert_eq!(usage["apiUsage"]["cache_read_input_tokens"], 50);
+    }
+
+    #[test]
+    fn notification_context_usage_returns_none_without_tokens() {
+        let session = notification_cmd::AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "C:/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: Some("claude-sonnet-4-6".into()),
+            permission_mode: Some("default".into()),
+            effort: None,
+            auto_compact_window: None,
+            sdk_session_id: Some("sdk-1".into()),
+            codex_sandbox_mode: None,
+            codex_approval_policy: None,
+            latest_meta: Some(json!({
+                "model": "claude-sonnet-4-6",
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "cacheCreationTokens": 0,
+                "cacheReadTokens": 0,
+                "contextTokens": 0,
+            })),
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
+            auto_continue: None,
+            is_resting: false,
+        };
+
+        assert_eq!(context_usage_from_notification_snapshot(&session), None);
     }
 
     #[test]

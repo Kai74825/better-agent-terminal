@@ -167,6 +167,7 @@
 - 2026-05-11：補 Tauri Claude per-session UI state 的 Rust registry。`setAutoContinue/getAutoContinue` 對已登記 session 直接讀寫 Rust 狀態，避免純 UI toggle 喚醒 sidecar；`setPermissionMode/setModel/setEffort` 成功後同步更新 Rust session metadata registry，讓 native `getSessionMeta` 不會回舊 model/effort/mode。
 - 2026-05-11：把 Tauri `update.check` 搬到 Rust native HTTP。Rust 直接查 GitHub Releases latest、沿用 Electron/sidecar 的 version compare 與 `{hasUpdate,currentVersion,latestRelease}` shape，更新檢查不再為 Node fetch 喚醒 sidecar。
 - 2026-05-11：補 Tauri Claude session state/resting 的 Rust registry read path。已登記 session 的 `getSessionState` / `isResting` 可直接回 Rust 快取，`sendMessage` / `restSession` / `wakeSession` 會同步 resting flag；實際 rest/wake 仍保留 sidecar 控制 live query，避免中斷/關閉 SDK stream 行為退化。
+- 2026-05-11：補 Tauri Claude context usage 的 Rust registry read path。Rust event hub 已同步 `claude:status` meta，因此 `getContextUsage` 可直接用 cached token/contextWindow 算出 Electron-compatible popup shape；沒有 token 時才 fallback sidecar。
 
 ## 目前判斷
 
