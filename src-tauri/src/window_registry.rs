@@ -379,6 +379,41 @@ pub fn get_entry(app: &AppHandle, window_id: &str) -> WindowEntry {
     ensure_entry(app, window_id)
 }
 
+pub fn profile_id_for_window(app: &AppHandle, window_id: &str) -> Option<String> {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    entries
+        .iter()
+        .find(|entry| entry.id == window_id && entry.detached_workspace_id.is_none())
+        .map(|entry| entry.profile_id.clone())
+}
+
+pub fn has_other_live_profile_windows(
+    app: &AppHandle,
+    profile_id: &str,
+    current_window_id: &str,
+) -> bool {
+    let live_window_ids = app
+        .webview_windows()
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    entries.iter().any(|entry| {
+        entry.id != current_window_id
+            && entry.profile_id == profile_id
+            && entry.detached_workspace_id.is_none()
+            && live_window_ids.contains(&entry.id)
+    })
+}
+
 pub fn mark_window_active(app: &AppHandle, window_id: &str) {
     let state = app.state::<WindowRegistryState>();
     let mut entries = state.entries.lock().unwrap();

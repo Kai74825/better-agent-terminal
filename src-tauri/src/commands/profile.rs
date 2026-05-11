@@ -644,6 +644,18 @@ pub fn activate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
     write_index_at(&dir, index).is_ok()
 }
 
+pub fn deactivate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
+    let Some(dir) = profiles_dir(app) else {
+        return false;
+    };
+    let mut index = read_index_at(&dir);
+    index.active_profile_ids.retain(|id| id != profile_id);
+    if index.active_profile_ids.is_empty() {
+        index.active_profile_ids.push(DEFAULT_PROFILE_ID.into());
+    }
+    write_index_at(&dir, index).is_ok()
+}
+
 #[tauri::command]
 pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     if profile_id == DEFAULT_PROFILE_ID {
@@ -767,15 +779,7 @@ pub fn profile_activate(app: AppHandle, profile_id: String) {
 
 #[tauri::command]
 pub fn profile_deactivate(app: AppHandle, profile_id: String) {
-    let Some(dir) = profiles_dir(&app) else {
-        return;
-    };
-    let mut index = read_index_at(&dir);
-    index.active_profile_ids.retain(|id| id != &profile_id);
-    if index.active_profile_ids.is_empty() {
-        index.active_profile_ids.push(DEFAULT_PROFILE_ID.into());
-    }
-    let _ = write_index_at(&dir, index);
+    let _ = deactivate_profile_id(&app, &profile_id);
 }
 
 #[cfg(test)]

@@ -42,6 +42,12 @@ pub fn attach_window_lifecycle(window: &WebviewWindow) {
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Focused(true)) {
             window_registry::mark_window_active(&app, &window_id);
+        } else if matches!(event, WindowEvent::Destroyed) {
+            if let Some(profile_id) = window_registry::profile_id_for_window(&app, &window_id) {
+                if !window_registry::has_other_live_profile_windows(&app, &profile_id, &window_id) {
+                    let _ = profile_cmd::deactivate_profile_id(&app, &profile_id);
+                }
+            }
         }
     });
 }
