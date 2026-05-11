@@ -144,6 +144,7 @@
 - 2026-05-11：修正 renderer agent preset debug filter。`getVisiblePresets()` 原本讀不存在的 `window.electronAPI.debug.isDebugMode`，現在改讀實際 preload/shim contract `window.batAppAPI.debug.isDebugMode`，避免 debug-only preset/入口在 Electron/Tauri 都被錯誤隱藏；OpenAI cleanup regression 也補上此 guard。
 - 2026-05-11：補 direct host call regression guard。新增 `pnpm run test:host-direct-calls`，掃描 `src/App.tsx`、`src/components`、`src/stores`，防止 renderer UI/store 重新直接呼叫 `window.batAppAPI` / `window.electronAPI` 而旁路 Tauri `host.*` adapter。
 - 2026-05-11：補 Tauri `host.debug.isDebugMode` 同步判斷。Tauri host adapter 不再固定 `false`，會在 Vite dev mode、`?debug=1` / `?BAT_DEBUG=1`、或 `localStorage.BAT_DEBUG=1` 時啟用 debug-only UI；Electron 仍沿用 preload 的 `BAT_DEBUG`。
+- 2026-05-11：補 renderer-used Claude host coverage guard。新增 `pnpm run test:host-claude-coverage`，掃描 UI/store 實際呼叫的 `host.claude.*`，要求 Tauri `host-api` 有明確 route，避免新增功能時落回 permissive no-op。
 
 ## 目前判斷
 
