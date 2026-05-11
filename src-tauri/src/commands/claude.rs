@@ -670,6 +670,9 @@ pub async fn claude_get_context_usage(
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(value) = codex_state.get_context_usage(&session_id) {
+        return Ok(value);
+    }
     if codex_state.is_owned(&session_id) {
         return Ok(Value::Null);
     }

@@ -23,6 +23,7 @@ const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_START_TIMEOUT: Duration = Duration::from_secs(60);
 const MSG_BUFFER_CAP: usize = 300;
+const DEFAULT_CODEX_CONTEXT_WINDOW: u64 = 1_000_000;
 
 type ReplySender = Sender<Result<Value, String>>;
 
@@ -147,6 +148,7 @@ struct CodexSession {
 impl CodexSession {
     fn metadata(&self) -> Value {
         let context_tokens = self.input_tokens + self.output_tokens + self.cache_read_tokens;
+        let context_window = codex_context_window_for_model(&self.model);
         json!({
             "model": self.model,
             "sdkSessionId": self.thread_id,
@@ -156,7 +158,7 @@ impl CodexSession {
             "outputTokens": self.output_tokens,
             "durationMs": self.start_time.elapsed().as_millis() as u64,
             "numTurns": self.num_turns,
-            "contextWindow": 0,
+            "contextWindow": context_window,
             "maxOutputTokens": 0,
             "contextTokens": context_tokens,
             "cacheReadTokens": self.cache_read_tokens,
@@ -170,6 +172,22 @@ impl CodexSession {
             "lastTurnFirstTokenMs": self.last_turn_first_token_ms,
             "lastTurnDurationMs": self.last_turn_duration_ms,
         })
+    }
+}
+
+fn codex_context_window_for_model(model: &str) -> u64 {
+    match model {
+        "gpt-5.5"
+        | "gpt-5.4"
+        | "gpt-5.4-mini"
+        | "gpt-5.3-codex"
+        | "gpt-5.3-codex-spark"
+        | "codex-mini-latest"
+        | "o4-mini"
+        | "o3"
+        | "gpt-4.1" => DEFAULT_CODEX_CONTEXT_WINDOW,
+        _ if model.starts_with("gpt-5.") => DEFAULT_CODEX_CONTEXT_WINDOW,
+        _ => DEFAULT_CODEX_CONTEXT_WINDOW,
     }
 }
 
@@ -1308,6 +1326,34 @@ impl CodexAppServerState {
             .map(CodexSession::metadata)
     }
 
+    pub fn get_context_usage(&self, session_id: &str) -> Option<Value> {
+        let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+        let session = sessions.get(session_id)?;
+        let total_tokens = session.input_tokens + session.output_tokens + session.cache_read_tokens;
+        if total_tokens == 0 {
+            return None;
+        }
+        let max_tokens = codex_context_window_for_model(&session.model);
+        let percentage = if max_tokens > 0 {
+            ((total_tokens as f64 / max_tokens as f64) * 100.0).round() as u64
+        } else {
+            0
+        };
+        Some(json!({
+            "categories": [{ "name": "Context", "tokens": total_tokens, "color": "#10B981" }],
+            "totalTokens": total_tokens,
+            "maxTokens": max_tokens,
+            "percentage": percentage,
+            "model": session.model,
+            "apiUsage": {
+                "input_tokens": session.input_tokens,
+                "output_tokens": session.output_tokens,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": session.cache_read_tokens,
+            },
+        }))
+    }
+
     pub fn set_model(&self, app: &AppHandle, session_id: &str, model: String) -> Option<Value> {
         let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
         let session = sessions.get_mut(session_id)?;
@@ -1926,6 +1972,84 @@ mod tests {
         assert!(values.contains(&"gpt-5.5"));
         assert!(values.contains(&"gpt-5.3-codex"));
         assert!(!values.iter().any(|value| value.starts_with("claude-")));
+    }
+
+    #[test]
+    fn codex_metadata_includes_context_window() {
+        let session = CodexSession {
+            session_id: "s-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
+            cwd: "/repo".to_string(),
+            model: "gpt-5.3-codex".to_string(),
+            sandbox_mode: "workspace-write".to_string(),
+            approval_policy: "on-request".to_string(),
+            effort: "high".to_string(),
+            start_time: Instant::now(),
+            active_turn_id: None,
+            assistant_text: String::new(),
+            thinking_text: String::new(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: 25,
+            num_turns: 1,
+            last_turn_started_at: None,
+            last_turn_first_token_ms: None,
+            last_turn_duration_ms: None,
+            messages: Vec::new(),
+            is_running: false,
+            is_resting: false,
+        };
+
+        let meta = session.metadata();
+        assert_eq!(meta["contextWindow"], DEFAULT_CODEX_CONTEXT_WINDOW);
+        assert_eq!(meta["contextTokens"], 175);
+    }
+
+    #[test]
+    fn codex_context_usage_uses_cached_usage_shape() {
+        let state = CodexAppServerState::default();
+        state
+            .inner
+            .sessions
+            .lock()
+            .expect("codex sessions lock")
+            .insert(
+                "s-1".to_string(),
+                CodexSession {
+                    session_id: "s-1".to_string(),
+                    thread_id: Some("thread-1".to_string()),
+                    cwd: "/repo".to_string(),
+                    model: "gpt-5.5".to_string(),
+                    sandbox_mode: "workspace-write".to_string(),
+                    approval_policy: "on-request".to_string(),
+                    effort: "high".to_string(),
+                    start_time: Instant::now(),
+                    active_turn_id: None,
+                    assistant_text: String::new(),
+                    thinking_text: String::new(),
+                    input_tokens: 150,
+                    output_tokens: 30,
+                    cache_read_tokens: 250,
+                    num_turns: 1,
+                    last_turn_started_at: None,
+                    last_turn_first_token_ms: None,
+                    last_turn_duration_ms: None,
+                    messages: Vec::new(),
+                    is_running: false,
+                    is_resting: false,
+                },
+            );
+
+        let usage = state.get_context_usage("s-1").expect("usage");
+        assert_eq!(usage["totalTokens"], 430);
+        assert_eq!(usage["maxTokens"], DEFAULT_CODEX_CONTEXT_WINDOW);
+        assert_eq!(usage["percentage"], 0);
+        assert_eq!(usage["model"], "gpt-5.5");
+        assert_eq!(usage["apiUsage"]["input_tokens"], 150);
+        assert_eq!(usage["apiUsage"]["output_tokens"], 30);
+        assert_eq!(usage["apiUsage"]["cache_read_input_tokens"], 250);
+        assert_eq!(usage["categories"][0]["name"], "Context");
+        assert_eq!(state.get_context_usage("missing"), None);
     }
 
     #[test]
