@@ -4,7 +4,7 @@
 
 ## 進度紀錄
 
-- 2026-05-10：開始 M1/P0 補 adapter 斷線。已接上 `fs.resolvePathLinks` 與 `fs.watch/unwatch/onChanged` 的 Tauri 路徑：renderer `host.fs.*` → Rust command → Node sidecar handler；`fs:changed` 事件由 sidecar 經 Rust bridge emit 回 renderer。這讓 ChatMarkdown path link resolution 與 FileTree watcher 不再在 Tauri 下 throw/no-op。
+- 2026-05-10：開始 M1/P0 補 adapter 斷線。已接上 `fs.resolvePathLinks` 與 `fs.watch/unwatch/onChanged` 的 Tauri 路徑；`fs.resolvePathLinks` 後續已搬到 Rust native，`fs.watch/unwatch` 仍透過 Node sidecar handler，`fs:changed` 事件由 sidecar 經 Rust bridge emit 回 renderer。這讓 ChatMarkdown path link resolution 與 FileTree watcher 不再在 Tauri 下 throw/no-op。
 - 2026-05-10：接上 `claude.stopTask` 的 Tauri 路徑：renderer `host.claude.stopTask()` → Rust `claude_stop_task` → Node sidecar `claude.stopTask`。Rust command 會把 sidecar `{ok:boolean}` 正規化成 Electron preload 相容的 `boolean`，讓 Agent/Task 停止按鈕不因 host kind 拿到不同回傳 shape。
 - 2026-05-10：把 `setCodexSandboxMode` / `setCodexApprovalPolicy` 從 Tauri permissive `null` shim 拉成明確 Rust command route；目前因 CodexAgentManager 尚未 port 到 sidecar，兩者回 Electron-shaped `false` 表示 unsupported。完整 Codex sandbox/approval 生效仍歸 M3 Codex parity。
 - 2026-05-10：port `settings.clearTerminalHistory` 到 Tauri Rust。行為對齊 Electron：清 `<app-data>/terminal-history` 內所有項目但保留 `.zsh-wrapper`，目錄不存在也回 `true`。SettingsPanel 的清除歷史按鈕在 Tauri 下不再 throw。
@@ -78,6 +78,7 @@
 - 2026-05-10：修正 Rust Codex app-server sandbox protocol mapping。log 顯示 app-server 拒收 `dangerFullAccess`，實際 schema 需要 `danger-full-access` / `workspace-write` / `read-only`；已改回 kebab-case 並加 Rust regression test，避免 resume/fresh start 因 sandbox enum 失敗後 fallback Node sidecar。
 - 2026-05-10：讓 Rust Codex sandbox/approval 切換可對下一輪 prompt 生效。`setCodexSandboxMode` / `setCodexApprovalPolicy` 在 Rust-owned Codex session 會更新本地 session state 後，用同一個 thread id 呼叫 app-server `thread/resume` 重送 sandbox/approval/model/cwd，避免 UI 顯示已切換但 app-server thread 仍沿用舊設定。
 - 2026-05-10：調整 Tauri porting scope：OpenAI Direct / `openai-agent` 已判定為廢棄方向，不再列為 Tauri parity blocker。後續工作應移除或隱藏 OpenAI Direct 的 UI/route/setting 殘留，只保留 Codex 所需的 OpenAI/Codex auth fallback，不再實作 `OpenAIAgentManager` parity。
+- 2026-05-11：把 Tauri `fs.resolvePathLinks` 從 Node sidecar 搬到 Rust native，支援 Electron 相容的 path/line/column parsing、text extension filter、absolute/relative cwd resolution 與 200 筆去重上限；Markdown path-link resolution 不再為了純檔案判斷喚醒 sidecar。
 - 2026-05-10：開始 OpenAI Direct cleanup。`openai-agent` 從 renderer `AgentPresetId` 移除，`MainPanel` 不再 lazy import 或掛載 `OpenAIAgentPanel`，並刪除未被引用的 `OpenAIAgentPanel.tsx`；舊 workspace 若殘留 `openai-agent`，不會再啟動 OpenAI Direct runtime panel。
 - 2026-05-10：補 OpenAI Direct 舊資料 migration。settings 載入時若 `defaultAgent=openai-agent` 會轉成 `codex-agent`；workspace 載入時若 workspace default 或 terminal preset 殘留 `openai-agent`，也會轉成 `codex-agent`，避免重開後建立無效 OpenAI Direct panel。
 - 2026-05-10：補 OpenAI Direct cleanup regression test。`tests/openai-direct-cleanup.test.ts` 鎖住 `openai-agent` 不再註冊/顯示，並覆蓋 settings/workspace 舊資料 migration 到 `codex-agent`，避免後續重構把廢棄的 OpenAI Direct 入口帶回來。

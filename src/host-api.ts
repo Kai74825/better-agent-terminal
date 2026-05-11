@@ -347,9 +347,9 @@ function createTauriHost(): BatAppAPI {
           'fs_search',
           { dirPath, query },
         ),
-      // Path-link resolution + file watching live in the Node sidecar
-      // because the exact heuristics and recursive fs.watch behaviour
-      // mirror Electron's JS implementation.
+      // Path-link resolution is native Rust; file watching still lives in
+      // the Node sidecar because recursive fs.watch behaviour mirrors
+      // Electron's JS implementation.
       resolvePathLinks: (cwd: string, rawPaths: string[]) =>
         getInvoke()<
           { rawPath: string; path: string; exists: boolean; line?: number; column?: number }[]

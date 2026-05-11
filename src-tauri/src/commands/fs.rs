@@ -14,6 +14,7 @@ use crate::path_guard::is_sensitive_path;
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,6 +23,7 @@ use tauri::{AppHandle, State};
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(15);
+const RESOLVE_PATH_LINK_LIMIT: usize = 200;
 
 // Directory names we skip in listings/search — these are typically build
 // outputs or VCS internals, not anything the user wants to wade through.
@@ -37,6 +39,13 @@ const IGNORED_DIR_NAMES: &[&str] = &[
     ".DS_Store",
     "release",
     "target",
+];
+
+const RESOLVE_TEXT_EXTS: &[&str] = &[
+    "ts", "tsx", "js", "jsx", "json", "jsonl", "css", "scss", "less", "html", "htm", "md", "mdx",
+    "txt", "yml", "yaml", "toml", "xml", "svg", "sh", "bash", "zsh", "py", "rb", "go", "rs",
+    "java", "c", "cpp", "h", "hpp", "cs", "csproj", "sln", "slnx", "fs", "fsproj", "vue", "svelte",
+    "sql", "graphql", "log",
 ];
 
 fn is_ignored_name(name: &str) -> bool {
@@ -65,6 +74,18 @@ pub struct FsReadResult {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PathLinkResult {
+    pub raw_path: String,
+    pub path: String,
+    pub exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u64>,
 }
 
 #[tauri::command]
@@ -550,6 +571,138 @@ pub async fn fs_search(dir_path: String, query: String) -> Vec<FsEntry> {
         .unwrap_or_default()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedPathLink {
+    cleaned: String,
+    path_text: String,
+    line: Option<u64>,
+    column: Option<u64>,
+}
+
+fn trim_path_link(raw: &str) -> String {
+    raw.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '`' | '\'' | '"' | '(' | '<' | '[' | ')' | ',' | '.' | ';' | '>' | ']'
+        )
+    })
+    .to_string()
+}
+
+fn parse_path_link(raw: &str) -> ParsedPathLink {
+    let cleaned = trim_path_link(raw);
+    let mut path_text = cleaned.clone();
+    let mut line = None;
+    let mut column = None;
+
+    let parts = cleaned.split(':').collect::<Vec<_>>();
+    if parts.len() >= 2 {
+        let last_is_number = parts
+            .last()
+            .and_then(|part| part.parse::<u64>().ok())
+            .is_some();
+        if last_is_number {
+            let last_value = parts.last().and_then(|part| part.parse::<u64>().ok());
+            let previous_value = if parts.len() >= 3 {
+                parts
+                    .get(parts.len() - 2)
+                    .and_then(|part| part.parse::<u64>().ok())
+            } else {
+                None
+            };
+            if let Some(prev) = previous_value {
+                path_text = parts[..parts.len() - 2].join(":");
+                line = Some(prev);
+                column = last_value;
+            } else if let Some(last) = last_value {
+                path_text = parts[..parts.len() - 1].join(":");
+                line = Some(last);
+            }
+        }
+    }
+
+    ParsedPathLink {
+        cleaned,
+        path_text,
+        line,
+        column,
+    }
+}
+
+fn is_resolvable_text_path(path_text: &str) -> bool {
+    Path::new(path_text)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext = ext.to_lowercase();
+            RESOLVE_TEXT_EXTS.iter().any(|candidate| *candidate == ext)
+        })
+        .unwrap_or(false)
+}
+
+fn is_absolute_path_text(path_text: &str) -> bool {
+    Path::new(path_text).is_absolute()
+        || (path_text.len() >= 3
+            && path_text.as_bytes()[0].is_ascii_alphabetic()
+            && path_text.as_bytes()[1] == b':'
+            && matches!(path_text.as_bytes()[2], b'/' | b'\\'))
+}
+
+fn resolve_path_link_candidate(
+    cwd_abs: Option<&Path>,
+    parsed: ParsedPathLink,
+) -> Option<PathLinkResult> {
+    if parsed.path_text.is_empty() || !is_resolvable_text_path(&parsed.path_text) {
+        return None;
+    }
+    let candidate = if is_absolute_path_text(&parsed.path_text) {
+        PathBuf::from(&parsed.path_text)
+    } else {
+        cwd_abs?.join(&parsed.path_text)
+    };
+    let abs = std::path::absolute(&candidate).ok()?;
+    let abs_string = abs.to_string_lossy().to_string();
+    if is_sensitive_path(&abs_string) {
+        return None;
+    }
+    if !fs::metadata(&abs)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some(PathLinkResult {
+        raw_path: parsed.cleaned,
+        path: abs_string,
+        exists: true,
+        line: parsed.line,
+        column: parsed.column,
+    })
+}
+
+fn fs_resolve_path_links_impl(cwd: String, raw_paths: Vec<String>) -> Vec<PathLinkResult> {
+    let cwd_abs = if cwd.trim().is_empty() {
+        None
+    } else {
+        std::path::absolute(cwd).ok()
+    };
+    let mut seen = BTreeSet::new();
+    let mut results = Vec::new();
+    for raw in raw_paths {
+        if seen.len() >= RESOLVE_PATH_LINK_LIMIT {
+            break;
+        }
+        if raw.len() > 500 || !seen.insert(raw.clone()) {
+            continue;
+        }
+        if let Some(result) = resolve_path_link_candidate(cwd_abs.as_deref(), parse_path_link(&raw))
+        {
+            results.push(result);
+        }
+    }
+    results
+}
+
 fn call_sidecar_fs(
     app: &AppHandle,
     state: &SidecarState,
@@ -576,19 +729,10 @@ async fn call_sidecar_fs_blocking(
 }
 
 #[tauri::command]
-pub async fn fs_resolve_path_links(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    cwd: String,
-    raw_paths: Vec<String>,
-) -> Result<Value, BridgeError> {
-    call_sidecar_fs_blocking(
-        app,
-        state,
-        "fs.resolvePathLinks",
-        json!({ "cwd": cwd, "rawPaths": raw_paths }),
-    )
-    .await
+pub async fn fs_resolve_path_links(cwd: String, raw_paths: Vec<String>) -> Vec<PathLinkResult> {
+    tauri::async_runtime::spawn_blocking(move || fs_resolve_path_links_impl(cwd, raw_paths))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -626,6 +770,53 @@ mod tests {
         assert_eq!(result.content.as_deref(), Some("hello world"));
         assert!(result.error.is_none());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_path_link_extracts_line_and_column() {
+        assert_eq!(
+            parse_path_link("`src/main.ts:12:3`,"),
+            ParsedPathLink {
+                cleaned: "src/main.ts:12:3".into(),
+                path_text: "src/main.ts".into(),
+                line: Some(12),
+                column: Some(3),
+            }
+        );
+        assert_eq!(
+            parse_path_link("C:\\repo\\src\\main.ts:9"),
+            ParsedPathLink {
+                cleaned: "C:\\repo\\src\\main.ts:9".into(),
+                path_text: "C:\\repo\\src\\main.ts".into(),
+                line: Some(9),
+                column: None,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_path_links_keeps_existing_text_files_only() {
+        let dir = std::env::temp_dir().join(format!("bat-path-links-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.ts"), "export const a = 1").unwrap();
+        fs::write(dir.join("image.png"), "not really png").unwrap();
+
+        let results = fs_resolve_path_links_impl(
+            dir.to_string_lossy().into(),
+            vec![
+                "a.ts:7:2".into(),
+                "a.ts:7:2".into(),
+                "missing.ts".into(),
+                "image.png".into(),
+            ],
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].raw_path, "a.ts:7:2");
+        assert_eq!(results[0].line, Some(7));
+        assert_eq!(results[0].column, Some(2));
+        assert!(results[0].path.ends_with("a.ts"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
