@@ -5238,7 +5238,7 @@ async function inProcess() {
 
   // worktree.* — full create/status/remove/rehydrate round trip against a
   // real ephemeral git repo. Skipped if `git` isn't on PATH.
-  const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, activeWorktrees } = mod
+  const { worktreeCreate, worktreeRemove, worktreeStatus, worktreeRehydrate, worktreeGetGitRoot, worktreeMerge, activeWorktrees } = mod
   const gitAvailable = await new Promise(r => {
     const cp = spawn('git', ['--version'], { stdio: 'ignore' })
     cp.on('error', () => r(false))
@@ -5289,6 +5289,20 @@ async function inProcess() {
       assert.equal(status.worktreePath, info.worktreePath)
       assert.equal(status.sourceBranch, 'main')
       assert.equal(typeof status.diff, 'string')
+
+      // Commit a change in the worktree and merge it back into the host repo.
+      writeFileSync(join(info.worktreePath, 'README.md'), '# fixture\n\nmerged from worktree\n')
+      await new Promise((res, rej) => {
+        const c = spawn('git', ['add', 'README.md'], { cwd: info.worktreePath, stdio: 'ignore' })
+        c.on('exit', code => code === 0 ? res() : rej(new Error('git add in worktree failed')))
+      })
+      await new Promise((res, rej) => {
+        const c = spawn('git', ['commit', '-m', 'worktree change'], { cwd: info.worktreePath, stdio: 'ignore', env: { ...process.env, GIT_AUTHOR_DATE: '2024-01-02T00:00:00', GIT_COMMITTER_DATE: '2024-01-02T00:00:00' } })
+        c.on('exit', code => code === 0 ? res() : rej(new Error('git commit in worktree failed')))
+      })
+      const mergeResult = await worktreeMerge(sessionId, 'merge')
+      assert.equal(mergeResult.success, true, `worktree merge failed: ${mergeResult.error}`)
+      assert.match(readFileSync(join(repo, 'README.md'), 'utf-8'), /merged from worktree/)
 
       // status for unknown session is null.
       assert.equal(await worktreeStatus('does-not-exist'), null)

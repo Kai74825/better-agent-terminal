@@ -145,6 +145,7 @@ export {
   worktreeRehydrate,
   worktreeGetGitRoot,
   worktreeGetBranch,
+  worktreeMerge,
   activeWorktrees,
 } from './handlers/worktree.mjs'
 

@@ -890,8 +890,8 @@ function createTauriHost(): BatAppAPI {
       },
     }),
     worktree: new Proxy({}, {
-      // worktree.* — agent-tied. Sidecar handlers stub success=false for
-      // create/remove/merge until the agent worktree manager moves over.
+      // worktree.* — agent-tied. Sidecar handlers mirror the Electron
+      // WorktreeManager while keeping the renderer-facing shape stable.
       get(_t, prop) {
         const key = String(prop)
         if (key === 'create') {

@@ -215,6 +215,70 @@ export async function worktreeStatus(sessionId) {
   }
 }
 
+async function worktreeEnsureClean(gitRoot) {
+  const { stdout } = await execFileP(
+    'git',
+    ['status', '--porcelain'],
+    { cwd: gitRoot, maxBuffer: 1024 * 1024 },
+  )
+  if (stdout.trim()) {
+    throw new Error('Host repository has uncommitted changes; commit or stash before merging worktree')
+  }
+}
+
+export async function worktreeMerge(sessionId, strategy = 'merge') {
+  const info = activeWorktrees.get(sessionId)
+  if (!info) return { success: false, error: 'worktree.merge: unknown session' }
+  if (strategy !== 'merge' && strategy !== 'cherry-pick') {
+    return { success: false, error: `worktree.merge: unsupported strategy ${strategy}` }
+  }
+
+  try {
+    const sourceBranch = info.sourceBranch || await worktreeResolveSourceBranch(sessionId)
+    if (!sourceBranch) {
+      return { success: false, error: 'worktree.merge: missing source branch' }
+    }
+
+    await worktreeEnsureClean(info.gitRoot)
+
+    const currentBranch = await worktreeGetBranch(info.gitRoot)
+    if (currentBranch !== sourceBranch) {
+      await execFileP('git', ['checkout', sourceBranch], { cwd: info.gitRoot })
+    }
+
+    if (strategy === 'merge') {
+      await execFileP(
+        'git',
+        ['merge', '--no-ff', '--no-edit', info.branchName],
+        { cwd: info.gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+    } else {
+      const { stdout } = await execFileP(
+        'git',
+        ['rev-list', '--reverse', `${sourceBranch}..${info.branchName}`],
+        { cwd: info.gitRoot, maxBuffer: 10 * 1024 * 1024 },
+      )
+      const commits = stdout.trim().split('\n').filter(Boolean)
+      if (commits.length > 0) {
+        await execFileP(
+          'git',
+          ['cherry-pick', ...commits],
+          { cwd: info.gitRoot, maxBuffer: 10 * 1024 * 1024 },
+        )
+      }
+    }
+
+    return {
+      success: true,
+      strategy,
+      branchName: info.branchName,
+      sourceBranch,
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 // --- handlers --------------------------------------------------------------
 
 registerHandler('worktree.create', async (params) => {
@@ -246,15 +310,12 @@ registerHandler('worktree.status', async (params) => {
   if (!sessionId) return null
   return worktreeStatus(sessionId)
 })
-// merge stays a stub — the Electron register-handlers calls a method
-// (mergeWorktree) that doesn't exist on WorktreeManager, so the feature
-// is broken on Electron too. We keep it stub-routed and surface a
-// clear error rather than implementing something the Electron build
-// can't validate against.
-registerHandler('worktree.merge', async () => ({
-  success: false,
-  error: 'worktree.merge not implemented (electron parity)',
-}))
+registerHandler('worktree.merge', async (params) => {
+  const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
+  const strategy = typeof params?.strategy === 'string' ? params.strategy : 'merge'
+  if (!sessionId) return { success: false, error: 'worktree.merge: missing sessionId' }
+  return worktreeMerge(sessionId, strategy)
+})
 registerHandler('worktree.rehydrate', async (params) => {
   const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
   const cwd = typeof params?.cwd === 'string' ? params.cwd : ''

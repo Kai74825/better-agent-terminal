@@ -1,9 +1,7 @@
 // worktree.* — forwards to the Node sidecar.
 //
-// 5 methods (create, remove, status, merge, rehydrate). Stubbed in the
-// sidecar today. agent-tied: the real implementation lives in
-// electron/worktree-manager.ts and ports over with the rest of the
-// agent runtime.
+// 5 methods (create, remove, status, merge, rehydrate). agent-tied: the
+// implementation lives in the sidecar and mirrors electron/worktree-manager.ts.
 
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde_json::{json, Value};
