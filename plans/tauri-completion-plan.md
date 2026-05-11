@@ -189,6 +189,7 @@
 - 2026-05-11：修正 Electron userData test profile 載入路徑。Tauri `main` window 若沒有既有 snapshot 或只有空 snapshot，會從 Electron `windows.json` 裡最近且有內容的 regular window seed workspace/profile snapshot，避免真實 Electron 設定只有 `windows.json`、沒有 `workspaces.json` 時看起來像沒讀到 workspaces。
 - 2026-05-11：修正 Tauri active profile restore 誤開 remote profile。`restoreActiveProfiles` 現在會跳過缺 host/token/fingerprint 的 remote profile，避免 Electron test profile 的 `activeProfileIds=["bat","hyper"]` 在 Tauri 下自動開 `hyper`，又因 token 缺失 fallback 成第一個 local profile，造成兩個 `bat` 視窗。
 - 2026-05-11：保護 Electron encrypted remote token store。Tauri profile index 寫入時若遇到無法解密的 Electron `remote-tokens.enc.json` (`enc:true`)，且本輪沒有新的 token 寫入，會保留原檔不覆蓋成空 `{tokens:{}}`；完整 Electron safeStorage → Rust/keyring migration 仍待補。
+- 2026-05-11：補 Windows Electron safeStorage remote token migration。Tauri/Rust 現在可讀 Electron `Local State` 的 DPAPI-protected `os_crypt.encrypted_key`，再解 `remote-tokens.enc.json` 的 `v10` AES-256-GCM payload，讓 Windows 上從 Electron userData 複製過來的 remote token 可被 profile list rehydrate；macOS/Linux safeStorage migration 仍待分平台補。
 
 ## 目前判斷
 

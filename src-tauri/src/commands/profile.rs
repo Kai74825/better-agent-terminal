@@ -7,6 +7,8 @@
 // renderer-facing profile shape without exposing secrets in profile metadata.
 
 use crate::{app_data, window_registry};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 #[cfg(not(test))]
 use keyring::use_native_store;
 use keyring_core::Entry as KeyringEntry;
@@ -211,6 +213,14 @@ fn read_token_store_info(dir: &Path) -> TokenStoreRead {
         return TokenStoreRead::default();
     };
     if value.get("enc").and_then(Value::as_bool) == Some(true) {
+        if let Some(data) = value.get("data").and_then(Value::as_str) {
+            if let Some(store) = read_electron_safe_storage_token_store(dir, data) {
+                return TokenStoreRead {
+                    store,
+                    encrypted_unreadable: false,
+                };
+            }
+        }
         return TokenStoreRead {
             store: RemoteTokenStore::default(),
             encrypted_unreadable: true,
@@ -232,6 +242,76 @@ fn read_token_store_info(dir: &Path) -> TokenStoreRead {
 
 fn read_token_store(dir: &Path) -> RemoteTokenStore {
     read_token_store_info(dir).store
+}
+
+fn read_electron_safe_storage_token_store(dir: &Path, data: &str) -> Option<RemoteTokenStore> {
+    let app_data_dir = dir.parent()?;
+    let local_state = fs::read_to_string(app_data_dir.join("Local State")).ok()?;
+    let value = serde_json::from_str::<Value>(&local_state).ok()?;
+    let encrypted_key = value
+        .get("os_crypt")?
+        .get("encrypted_key")?
+        .as_str()
+        .and_then(decrypt_electron_os_crypt_key)?;
+    let encrypted = B64.decode(data).ok()?;
+    let plaintext = decrypt_electron_v10_blob(&encrypted_key, &encrypted)?;
+    serde_json::from_slice::<RemoteTokenStore>(&plaintext).ok()
+}
+
+fn decrypt_electron_os_crypt_key(encrypted_key: &str) -> Option<Vec<u8>> {
+    let raw = B64.decode(encrypted_key).ok()?;
+    let prefixed = raw.strip_prefix(b"DPAPI")?;
+    decrypt_with_current_user_dpapi(prefixed)
+}
+
+fn decrypt_electron_v10_blob(key: &[u8], encrypted: &[u8]) -> Option<Vec<u8>> {
+    let payload = encrypted.strip_prefix(b"v10")?;
+    if payload.len() < 12 + 16 {
+        return None;
+    }
+    let (nonce, ciphertext_and_tag) = payload.split_at(12);
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+    cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext_and_tag)
+        .ok()
+}
+
+#[cfg(windows)]
+fn decrypt_with_current_user_dpapi(data: &[u8]) -> Option<Vec<u8>> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: data.len().try_into().ok()?,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    let ok = unsafe {
+        CryptUnprotectData(
+            &input,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            0,
+            &mut output,
+        )
+    };
+    if ok == 0 || output.pbData.is_null() {
+        return None;
+    }
+    let decrypted =
+        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+    unsafe {
+        let _ = LocalFree(output.pbData.cast());
+    }
+    Some(decrypted)
+}
+
+#[cfg(not(windows))]
+fn decrypt_with_current_user_dpapi(_data: &[u8]) -> Option<Vec<u8>> {
+    None
 }
 
 #[cfg(not(test))]
@@ -993,6 +1073,25 @@ mod tests {
 
         assert_eq!(fs::read_to_string(dir.join(TOKEN_FILE)).unwrap(), encrypted);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn electron_v10_blob_decrypts_aes_gcm_payload() {
+        let key = [7_u8; 32];
+        let nonce = [3_u8; 12];
+        let plaintext = br#"{"tokens":{"remote":"secret"}}"#;
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let encrypted = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
+            .unwrap();
+        let mut blob = b"v10".to_vec();
+        blob.extend_from_slice(&nonce);
+        blob.extend_from_slice(&encrypted);
+
+        assert_eq!(
+            decrypt_electron_v10_blob(&key, &blob).as_deref(),
+            Some(plaintext.as_slice())
+        );
     }
 
     #[test]
