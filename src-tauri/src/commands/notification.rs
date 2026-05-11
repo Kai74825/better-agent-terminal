@@ -396,6 +396,26 @@ pub fn update_agent_session_meta_from_event(app: &AppHandle, topic: &str, payloa
     }
 }
 
+pub fn update_agent_session_worktree_from_event(app: &AppHandle, topic: &str, payload: &Value) {
+    if topic != "claude:worktree-info" {
+        return;
+    }
+    let Some(session_id) = payload.get("sessionId").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
+        return;
+    };
+    let mut sessions = agent_state.lock();
+    let Some(session) = sessions.get_mut(session_id) else {
+        return;
+    };
+    let Some(worktree) = payload.get("payload") else {
+        return;
+    };
+    apply_worktree_payload(session, worktree);
+}
+
 pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
     let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
         return;
@@ -409,6 +429,28 @@ pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
     }
     session.worktree_path = None;
     session.worktree_branch = None;
+}
+
+fn apply_worktree_payload(session: &mut AgentNotificationSession, worktree: &Value) {
+    if worktree.is_null() {
+        if let Some(original_cwd) = session.original_cwd.take() {
+            session.cwd = original_cwd;
+        }
+        session.worktree_path = None;
+        session.worktree_branch = None;
+        return;
+    }
+    let Some(worktree_path) = string_option(worktree, "worktreePath") else {
+        return;
+    };
+    if session.original_cwd.is_none() {
+        session.original_cwd = Some(session.cwd.clone());
+    }
+    session.cwd = worktree_path.clone();
+    session.worktree_path = Some(worktree_path);
+    if let Some(branch_name) = string_option(worktree, "branchName") {
+        session.worktree_branch = Some(branch_name);
+    }
 }
 
 fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {
@@ -567,6 +609,44 @@ mod tests {
             Some("claude-sonnet-4-6")
         );
         assert_eq!(string_option(&options, "effort"), None);
+    }
+
+    #[test]
+    fn apply_worktree_payload_sets_and_clears_session_worktree() {
+        let mut session = AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: None,
+            permission_mode: None,
+            effort: None,
+            auto_compact_window: None,
+            sdk_session_id: None,
+            codex_sandbox_mode: None,
+            codex_approval_policy: None,
+            latest_meta: None,
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
+        };
+
+        apply_worktree_payload(
+            &mut session,
+            &serde_json::json!({
+                "worktreePath": "/repo/.bat-worktrees/s-1",
+                "branchName": "bat/worktree-s-1"
+            }),
+        );
+        assert_eq!(session.cwd, "/repo/.bat-worktrees/s-1");
+        assert_eq!(session.original_cwd.as_deref(), Some("/repo"));
+        assert_eq!(session.worktree_branch.as_deref(), Some("bat/worktree-s-1"));
+
+        apply_worktree_payload(&mut session, &Value::Null);
+        assert_eq!(session.cwd, "/repo");
+        assert_eq!(session.original_cwd, None);
+        assert_eq!(session.worktree_path, None);
+        assert_eq!(session.worktree_branch, None);
     }
 
     #[test]
