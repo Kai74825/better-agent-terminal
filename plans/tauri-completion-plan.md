@@ -123,6 +123,8 @@
 - 2026-05-11：修正 Tauri profile active semantics。`profile.activate` / `profile.load` / `app.openNewInstance` 現在會把 profile 加進 `activeProfileIds` 而不是替換整個 active list，對齊 Electron 多 profile restore 行為。
 - 2026-05-11：補 Tauri profile window close lifecycle。非 detached profile window destroyed 時會檢查同 profile 是否仍有其他 live window；若沒有，會把該 profile deactivate，避免已關閉 profile 下次仍被 active restore。
 - 2026-05-11：補 Tauri profile window bounds parity。Rust 建立 profile window 時會套用 snapshot bounds，window move/resize 會寫回 `WindowRegistryState` 與 profile snapshot，讓下次 restore 更接近 Electron。
+- 2026-05-11：補 Rust-owned Codex context usage。Rust Codex app-server metadata 不再回 `contextWindow=0`，`claude.getContextUsage` 對 Rust-owned Codex session 會用 cached token usage 回 Electron-compatible popup shape，避免 statusline/context popup 走空值或落回 sidecar。
+- 2026-05-11：把 Tauri `claude.archiveMessages/loadArchived/clearArchive` 搬到 Rust native filesystem 實作。行為保留 Electron tail paging、sessionId sanitization 與 clear idempotency，Claude/Codex 兩種 panel 的長對話 archive 不再需要 sidecar bridge。
 
 ## 目前判斷
 
