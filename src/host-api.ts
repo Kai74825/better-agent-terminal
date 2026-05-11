@@ -306,10 +306,20 @@ function createTauriHost(): BatAppAPI {
       writeText: (text: string) => getInvoke()<boolean>('clipboard_write_text', { text }),
       saveImage: () => getInvoke()<string | null>('clipboard_save_image'),
       writeImage: (filePath: string) => getInvoke()<boolean>('clipboard_write_image', { filePath }),
-      // Listener-style: WorkerPanel registers this on mount. No copy
-      // shortcut event fires under Tauri yet — return a no-op unsub so
-      // the panel renders.
-      onCopyShortcut: () => () => {},
+      // Electron emits app:copy-shortcut from before-input-event. Tauri has
+      // no equivalent hook here, so emulate the same renderer callback from
+      // a capture-phase keydown listener.
+      onCopyShortcut: (callback: () => void) => {
+        if (typeof document === 'undefined') return () => {}
+        const handler = (event: KeyboardEvent) => {
+          if (event.defaultPrevented) return
+          if (event.shiftKey || !(event.ctrlKey || event.metaKey)) return
+          if (event.key.toLowerCase() !== 'c') return
+          callback()
+        }
+        document.addEventListener('keydown', handler, true)
+        return () => document.removeEventListener('keydown', handler, true)
+      },
     },
     image: {
       readAsDataUrl: (filePath: string) =>

@@ -133,6 +133,7 @@
 - 2026-05-11：把 Tauri `agent.listPresets` 搬成 Rust native fixed capability list。New terminal preset picker 不再為了讀固定 preset id 啟動 Node sidecar，且清單明確排除 retired `openai-agent`。
 - 2026-05-11：補 Tauri renderer debug log 持久化。`host.debug.log(...)` 會由 Rust 追加寫入 `<app-data>/logs/debug.log` 並保留 stderr 輸出，讓 packaged Tauri 的 Codex/Claude timing、sidecar metric 與 renderer debug 訊息可被 bug report 回收。
 - 2026-05-11：把 Tauri `fs.watch/unwatch` 從 Node sidecar 搬到 Rust native `notify` watcher，保留原本 500ms debounce、原始 `dirPath` key idempotency、sensitive path guard 與 `fs:changed` event contract；FileTree/Markdown preview watch 不再喚醒 Node sidecar。
+- 2026-05-11：補 Tauri `clipboard.onCopyShortcut` renderer adapter。Tauri 以 capture-phase `keydown` 模擬 Electron `app:copy-shortcut`，保留 Ctrl/Cmd+C、排除 Shift 與尊重 `defaultPrevented`，讓 WorkerPanel 等 listener-style copy shortcut 不再是 no-op。
 
 ## 目前判斷
 
