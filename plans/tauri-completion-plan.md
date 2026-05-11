@@ -141,6 +141,7 @@
 - 2026-05-11：把 logs folder 入口接到 Settings Advanced 的 Diagnostics 區塊。使用者可直接開啟 Tauri `debug.log` / `sidecar.log` 所在資料夾，降低 preview 回報問題時找 log 的成本。
 - 2026-05-11：修正 renderer agent preset debug filter。`getVisiblePresets()` 原本讀不存在的 `window.electronAPI.debug.isDebugMode`，現在改讀實際 preload/shim contract `window.batAppAPI.debug.isDebugMode`，避免 debug-only preset/入口在 Electron/Tauri 都被錯誤隱藏；OpenAI cleanup regression 也補上此 guard。
 - 2026-05-11：補 direct host call regression guard。新增 `pnpm run test:host-direct-calls`，掃描 `src/App.tsx`、`src/components`、`src/stores`，防止 renderer UI/store 重新直接呼叫 `window.batAppAPI` / `window.electronAPI` 而旁路 Tauri `host.*` adapter。
+- 2026-05-11：補 Tauri `host.debug.isDebugMode` 同步判斷。Tauri host adapter 不再固定 `false`，會在 Vite dev mode、`?debug=1` / `?BAT_DEBUG=1`、或 `localStorage.BAT_DEBUG=1` 時啟用 debug-only UI；Electron 仍沿用 preload 的 `BAT_DEBUG`。
 
 ## 目前判斷
 

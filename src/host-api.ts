@@ -195,6 +195,27 @@ function tauriDebugLog(...args: unknown[]): void {
   }
 }
 
+function readTauriDebugMode(): boolean {
+  if ((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true) {
+    return true
+  }
+  const win = (globalThis as unknown as {
+    window?: {
+      location?: { search?: string }
+      localStorage?: { getItem: (key: string) => string | null }
+    }
+  }).window ?? null
+  const params = new URLSearchParams(win?.location?.search || '')
+  const debugParam = params.get('debug') || params.get('BAT_DEBUG')
+  if (debugParam === '1' || debugParam === 'true') return true
+  try {
+    const stored = win?.localStorage?.getItem('BAT_DEBUG') ?? win?.localStorage?.getItem('bat.debug')
+    return stored === '1' || stored === 'true'
+  } catch {
+    return false
+  }
+}
+
 // Tauri's event bus is async (`listen()` returns Promise<UnlistenFn>) but
 // the Electron preload contract is `onX(cb): () => void`. We adapt by
 // resolving listen() synchronously through the Tauri-injected globals,
@@ -381,7 +402,7 @@ function createTauriHost(): BatAppAPI {
       log: (...args: unknown[]) => getInvoke()<void>('debug_log', { args }),
       openLogsFolder: () => getInvoke()<boolean>('debug_open_logs_folder'),
       // The renderer reads this synchronously during render.
-      isDebugMode: false,
+      get isDebugMode() { return readTauriDebugMode() },
     },
     workspace: {
       load: () => getInvoke()<string | null>('workspace_load'),

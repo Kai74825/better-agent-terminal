@@ -12,6 +12,7 @@ type WinShape = {
   __TAURI_INTERNALS__?: { invoke?: TauriInvoke }
   __TAURI__?: unknown
   location?: { search?: string }
+  localStorage?: { getItem: (key: string) => string | null }
 }
 const setWindow = (shape: WinShape | undefined) => {
   ;(globalThis as { window?: WinShape | undefined }).window = shape
@@ -859,14 +860,22 @@ async function run() {
       /tauri invoke not available/)
   }
 
-  // 6) Electron wins when both markers exist
+  // 6) Tauri debug mode is synchronously derived for renderer guards.
+  {
+    const invoke: TauriInvoke = async () => undefined as unknown as never
+    setWindow({ __TAURI_INTERNALS__: { invoke }, location: { search: '?debug=1' } })
+    const mod = await loadFreshAdapter()
+    assert.equal(mod.host.debug.isDebugMode, true)
+  }
+
+  // 7) Electron wins when both markers exist
   {
     setWindow({ batAppAPI: { ping: () => 'pong' }, __TAURI_INTERNALS__: { invoke: () => Promise.resolve(null) } })
     const mod = await loadFreshAdapter()
     assert.equal(mod.getHostKind(), 'electron')
   }
 
-  // 7) installTauriShim() lets unmigrated callsites no-op gracefully.
+  // 8) installTauriShim() lets unmigrated callsites no-op gracefully.
   //    - Ported APIs (settings.load) still go through invoke
   //    - Sync APIs return sensible defaults (workspace.getDetachedId -> null,
   //      platform -> detected)
@@ -908,7 +917,7 @@ async function run() {
     assert.deepEqual(invokeCalls, ['settings_load'])
   }
 
-  // 8) installTauriShim() is a no-op when not running under Tauri.
+  // 9) installTauriShim() is a no-op when not running under Tauri.
   {
     setWindow({ batAppAPI: { foo: 1 } })
     const mod = await loadFreshAdapter()
