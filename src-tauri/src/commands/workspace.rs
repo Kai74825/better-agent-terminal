@@ -14,12 +14,13 @@
 // path; detach/reattach create and close Tauri webview windows while emitting
 // the existing workspace:detached/workspace:reattached events.
 
+use super::app::renderer_url;
 use crate::window_registry;
 use serde::Serialize;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -188,21 +189,20 @@ pub fn workspace_detach(
         "index.html?detached={}",
         encode_query_component(&workspace_id)
     );
-    let detached_window =
-        match WebviewWindowBuilder::new(&app, &entry.id, WebviewUrl::App(url.into()))
-            .title("Better Agent Terminal")
-            .inner_size(900.0, 700.0)
-            .min_inner_size(600.0, 400.0)
-            .build()
-        {
-            Ok(win) => win,
-            Err(err) => {
-                let _ = window_registry::remove_detached_entry(&app, &workspace_id);
-                return Err(CommandError {
-                    message: format!("workspace.detach failed: {err}"),
-                });
-            }
-        };
+    let detached_window = match WebviewWindowBuilder::new(&app, &entry.id, renderer_url(&url))
+        .title("Better Agent Terminal")
+        .inner_size(900.0, 700.0)
+        .min_inner_size(600.0, 400.0)
+        .build()
+    {
+        Ok(win) => win,
+        Err(err) => {
+            let _ = window_registry::remove_detached_entry(&app, &workspace_id);
+            return Err(CommandError {
+                message: format!("workspace.detach failed: {err}"),
+            });
+        }
+    };
 
     let close_app = app.clone();
     let close_workspace_id = workspace_id.clone();

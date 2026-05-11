@@ -11,6 +11,8 @@ use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
+const TAURI_DEV_RENDERER_URL: &str = "http://127.0.0.1:5173";
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct OpenNewInstanceResult {
     #[serde(rename = "alreadyOpen")]
@@ -46,16 +48,32 @@ fn active_profiles_to_restore(
     seen
 }
 
+pub(crate) fn renderer_url(path: &str) -> WebviewUrl {
+    #[cfg(dev)]
+    {
+        let suffix = path.strip_prefix("index.html").unwrap_or(path);
+        let href = if suffix.is_empty() {
+            TAURI_DEV_RENDERER_URL.to_string()
+        } else {
+            format!("{TAURI_DEV_RENDERER_URL}/{suffix}")
+        };
+        WebviewUrl::External(href.parse().expect("static Tauri dev URL must parse"))
+    }
+    #[cfg(not(dev))]
+    {
+        WebviewUrl::App(path.into())
+    }
+}
+
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
         let _ = win.set_focus();
         return Ok(());
     }
-    let mut builder =
-        WebviewWindowBuilder::new(app, window_id, WebviewUrl::App("index.html".into()))
-            .title("Better Agent Terminal")
-            .min_inner_size(800.0, 600.0);
+    let mut builder = WebviewWindowBuilder::new(app, window_id, renderer_url("index.html"))
+        .title("Better Agent Terminal")
+        .min_inner_size(800.0, 600.0);
     if let Some((x, y, width, height)) = window_registry::window_bounds(app, window_id) {
         builder = builder.inner_size(width, height).position(x, y);
     } else {
@@ -303,5 +321,28 @@ mod tests {
             active_profiles_to_restore(&ids, Some("work")),
             vec!["default".to_string(), "remote".to_string()]
         );
+    }
+
+    #[test]
+    fn renderer_url_uses_dev_server_under_dev_cfg() {
+        let url = renderer_url("index.html?detached=w1");
+        #[cfg(dev)]
+        {
+            match url {
+                WebviewUrl::External(url) => {
+                    assert_eq!(url.as_str(), "http://127.0.0.1:5173/?detached=w1")
+                }
+                other => panic!("expected external dev URL, got {other:?}"),
+            }
+        }
+        #[cfg(not(dev))]
+        {
+            match url {
+                WebviewUrl::App(path) => {
+                    assert_eq!(path.to_string_lossy(), "index.html?detached=w1")
+                }
+                other => panic!("expected bundled app URL, got {other:?}"),
+            }
+        }
     }
 }

@@ -174,6 +174,8 @@
 - 2026-05-11：補 Tauri preview preflight coverage。`verify:tauri-preview` 現在也會跑 `test:sidecar`、`test:node-resolver` 與 `test:tauri-bundle-prune`，避免 sidecar/runtime startup 或 bundle prune regression 被 preview 前檢查漏掉。
 - 2026-05-11：補 Tauri preview preflight artifact freshness。`verify:tauri-preview` 會先跑 `build:tauri-sidecar` 重建 `node-sidecar/dist/server.mjs`，避免 sidecar source 已通過測試但 preview resources 仍打包舊 dist。
 - 2026-05-11：修正 Tauri Ctrl+N 新視窗白畫面。`src-tauri/capabilities/default.json` 原本只授權 `main` window，動態建立的 `profile-*` / `detached-*` window 沒有 renderer IPC capability，會在初始化時被 Tauri ACL 擋掉；現在 default capability 覆蓋這些動態 window label，並加入 `test:tauri-capabilities` guard 到 preview preflight。
+- 2026-05-11：補 Tauri preview release staging readiness。新增 `check-tauri-preview-readiness.mjs` 與 `verify:tauri-preview-readiness`，發 preview 前會檢查 Tauri resources 設定、`node-sidecar/dist/server.mjs`、`node-sidecar/node_modules` 與目前平台 bundled Node runtime 都已準備好，避免 source tests 綠但 packaged app 缺 release input。
+- 2026-05-11：補 Tauri dynamic window dev URL。`Ctrl+N` 與 detached workspace 建立的動態 Tauri window 在 dev 模式明確載入 `http://127.0.0.1:5173/`，release 才載入 bundled `index.html`，避免動態 window 沒吃到 Vite dev server 時只顯示白畫面。
 
 ## 目前判斷
 
