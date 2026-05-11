@@ -668,8 +668,9 @@ mod tests {
         let none = |_: &str| false;
         assert_eq!(select_shell(Some("/bin/zsh"), "unix", &none), "/bin/zsh");
         // Empty / whitespace falls back to auto-resolve.
-        assert_eq!(select_shell(Some("   "), "unix", &none), "/bin/bash");
-        assert_eq!(select_shell(Some(""), "unix", &none), "/bin/bash");
+        let auto = select_shell(None, "unix", &none);
+        assert_eq!(select_shell(Some("   "), "unix", &none), auto);
+        assert_eq!(select_shell(Some(""), "unix", &none), auto);
     }
 
     #[test]
