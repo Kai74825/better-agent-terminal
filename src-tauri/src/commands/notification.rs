@@ -68,6 +68,9 @@ pub struct AgentNotificationSession {
     pub codex_sandbox_mode: Option<String>,
     pub codex_approval_policy: Option<String>,
     pub latest_meta: Option<Value>,
+    pub original_cwd: Option<String>,
+    pub worktree_path: Option<String>,
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Default)]
@@ -244,6 +247,19 @@ pub fn register_agent_session_from_options(
     let codex_sandbox_mode = options.and_then(|value| string_option(value, "codexSandboxMode"));
     let codex_approval_policy =
         options.and_then(|value| string_option(value, "codexApprovalPolicy"));
+    let uses_worktree = options
+        .and_then(|value| value.get("useWorktree"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let original_cwd = uses_worktree
+        .then(|| options.and_then(|value| string_option(value, "cwd")))
+        .flatten();
+    let worktree_path = uses_worktree
+        .then(|| options.and_then(|value| string_option(value, "worktreePath")))
+        .flatten();
+    let worktree_branch = uses_worktree
+        .then(|| options.and_then(|value| string_option(value, "worktreeBranch")))
+        .flatten();
     let state = app.state::<AgentNotificationState>();
     state.lock().insert(
         session_id.to_string(),
@@ -260,6 +276,9 @@ pub fn register_agent_session_from_options(
             codex_sandbox_mode,
             codex_approval_policy,
             latest_meta: None,
+            original_cwd,
+            worktree_path,
+            worktree_branch,
         },
     );
 }
@@ -375,6 +394,21 @@ pub fn update_agent_session_meta_from_event(app: &AppHandle, topic: &str, payloa
     if let Some(policy) = string_option(meta, "codexApprovalPolicy") {
         session.codex_approval_policy = Some(policy);
     }
+}
+
+pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
+    let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
+        return;
+    };
+    let mut sessions = agent_state.lock();
+    let Some(session) = sessions.get_mut(session_id) else {
+        return;
+    };
+    if let Some(original_cwd) = session.original_cwd.take() {
+        session.cwd = original_cwd;
+    }
+    session.worktree_path = None;
+    session.worktree_branch = None;
 }
 
 fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {

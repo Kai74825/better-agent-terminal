@@ -41,6 +41,7 @@ const PREVIEW_LINE_LIMIT: usize = 20;
 const PREVIEW_CHARS: usize = 120;
 const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTH_LOGIN_TIMEOUT: Duration = Duration::from_secs(180);
+const WORKTREE_DIFF_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 fn call(
     app: &AppHandle,
@@ -657,6 +658,89 @@ fn session_meta_from_notification_snapshot(
         "codexSandboxMode": session.codex_sandbox_mode.as_deref(),
         "codexApprovalPolicy": session.codex_approval_policy.as_deref(),
     })
+}
+
+fn worktree_git_root_from_path(worktree_path: &str) -> Option<PathBuf> {
+    Path::new(worktree_path)
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+fn run_git_in_dir(
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+    max_bytes: usize,
+) -> Option<String> {
+    if !cwd.is_dir() {
+        return None;
+    }
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => return None,
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() || output.stdout.len() > max_bytes {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn worktree_status_from_notification_snapshot(
+    session: &notification_cmd::AgentNotificationSession,
+) -> Option<Value> {
+    let worktree_path = session.worktree_path.as_deref()?;
+    if !Path::new(worktree_path).is_dir() {
+        return None;
+    }
+    let branch_name = session
+        .worktree_branch
+        .as_deref()
+        .filter(|value| !value.is_empty())?;
+    let git_root = worktree_git_root_from_path(worktree_path)?;
+    let source_branch = run_git_in_dir(
+        &git_root,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        DEFAULT_TIMEOUT,
+        1024 * 1024,
+    )
+    .unwrap_or_default();
+    let diff = if source_branch.is_empty() {
+        String::new()
+    } else {
+        let range = format!("{source_branch}...{branch_name}");
+        run_git_in_dir(
+            &git_root,
+            &["diff", &range],
+            DEFAULT_TIMEOUT,
+            WORKTREE_DIFF_MAX_BYTES,
+        )
+        .unwrap_or_default()
+    };
+    Some(json!({
+        "diff": diff,
+        "branchName": branch_name,
+        "worktreePath": worktree_path,
+        "sourceBranch": source_branch,
+    }))
 }
 
 fn supported_commands_native(cwd: &Path) -> Vec<SlashCommandEntry> {
@@ -1677,6 +1761,18 @@ pub async fn claude_get_worktree_status(
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+        let status = tauri::async_runtime::spawn_blocking(move || {
+            worktree_status_from_notification_snapshot(&session)
+        })
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("claude.getWorktreeStatus native worker failed: {err}"),
+        })?;
+        if let Some(value) = status {
+            return Ok(value);
+        }
+    }
     call_blocking(
         app,
         state,
@@ -1703,8 +1799,8 @@ pub async fn claude_cleanup_worktree(
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.cleanupWorktree",
         json!({
@@ -1712,7 +1808,11 @@ pub async fn claude_cleanup_worktree(
             "deleteBranch": delete_branch,
         }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::clear_agent_session_worktree(&app, &session_id);
+    }
+    Ok(result)
 }
 
 // --- per-session state -----------------------------------------------------
@@ -2550,6 +2650,9 @@ mod tests {
             codex_sandbox_mode: None,
             codex_approval_policy: None,
             latest_meta: None,
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
@@ -2586,12 +2689,45 @@ mod tests {
                 "outputTokens": 5,
                 "numTurns": 1
             })),
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
         assert_eq!(meta["sdkSessionId"], "sdk-live");
         assert_eq!(meta["inputTokens"], 12);
         assert_eq!(meta["numTurns"], 1);
+    }
+
+    #[test]
+    fn worktree_status_returns_none_without_registered_worktree() {
+        let session = notification_cmd::AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "C:/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: None,
+            permission_mode: None,
+            effort: None,
+            auto_compact_window: None,
+            sdk_session_id: None,
+            codex_sandbox_mode: None,
+            codex_approval_policy: None,
+            latest_meta: None,
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
+        };
+
+        assert_eq!(worktree_status_from_notification_snapshot(&session), None);
+    }
+
+    #[test]
+    fn worktree_git_root_resolves_bat_worktree_parent() {
+        let root =
+            worktree_git_root_from_path("C:/repo/.bat-worktrees/abc123").expect("git root path");
+        assert!(root.ends_with(Path::new("C:/repo")));
     }
 
     #[test]

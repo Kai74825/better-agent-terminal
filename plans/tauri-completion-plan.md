@@ -160,6 +160,7 @@
 - 2026-05-11：補 Tauri `claude.getSupportedCommands/getSupportedAgents` 的 Rust native cwd-aware path。若 Rust 已在 start/resume 記錄 session cwd，commands 會直接掃 project/global `.claude/commands/*.md`，agents 會直接掃 project/global `.claude/agents/*.md` frontmatter；缺 cwd 的舊/邊界 session 才 fallback sidecar live-query。
 - 2026-05-11：補 Tauri `claude.getSessionMeta` 的 Rust native seed path。`startSession/resumeSession` 會在 Rust registry 記錄 cwd、model、permissionMode、effort、autoCompactWindow、sdkSessionId 與 Codex sandbox/approval，status line 初次載入可直接取得 Electron-compatible 19-field meta shape；live token/cost 後續仍由既有 runtime status event 更新。
 - 2026-05-11：補 Rust session metadata registry 的 live status 同步。Rust event hub 收到 `claude:status` meta 後會更新同一份 session registry，讓後續 `claude.getSessionMeta` 回最新 sdkSessionId/token/turn/cost shape，而不是停留在 start/resume 初始 seed。
+- 2026-05-11：補 Tauri `claude.getWorktreeStatus` 的 Rust native read path。session registry 會記錄 worktreePath/branch/original cwd，status 讀取可直接用 git 取得 diff/sourceBranch；worktree cleanup 仍委派既有 sidecar manager，但成功後會同步清掉 Rust registry 的 worktree 狀態。
 
 ## 目前判斷
 
