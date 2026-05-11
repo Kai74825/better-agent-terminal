@@ -394,9 +394,9 @@ function createTauriHost(): BatAppAPI {
       onReload: () => () => {},
     },
     profile: {
-      // Single-window MVP — see src-tauri/src/commands/profile.rs.
-      // Always reports one default local profile; mutating
-      // commands accept input but only the default slot exists.
+      // Tauri persists profile metadata and local profile snapshots using the
+      // Electron profile JSON layout. Multi-window profile opening is still a
+      // single-window MVP concern under app.openNewInstance below.
       list: () => getInvoke()<unknown>('profile_list'),
       listLocal: () => getInvoke()<unknown>('profile_list_local'),
       get: (profileId: string) => getInvoke()<unknown>('profile_get', { profileId }),

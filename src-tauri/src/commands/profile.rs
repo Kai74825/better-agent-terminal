@@ -123,6 +123,18 @@ fn profiles_dir(app: &AppHandle) -> Option<PathBuf> {
         .map(|dir| dir.join("profiles"))
 }
 
+fn app_data_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok()
+}
+
+fn workspace_path(app: &AppHandle) -> Option<PathBuf> {
+    app_data_dir(app).map(|dir| dir.join("workspaces.json"))
+}
+
+fn profile_path(dir: &Path, profile_id: &str) -> PathBuf {
+    dir.join(format!("{profile_id}.json"))
+}
+
 fn slugify(name: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
@@ -314,10 +326,118 @@ fn profile_from_options(
     }
 }
 
+fn empty_workspace_state() -> Value {
+    json!({
+        "workspaces": [],
+        "activeWorkspaceId": Value::Null,
+        "activeGroup": Value::Null,
+        "terminals": [],
+        "activeTerminalId": Value::Null,
+    })
+}
+
+fn snapshot_from_workspace(profile: &ProfileEntry, workspace: Value) -> Value {
+    json!({
+        "id": profile.id,
+        "name": profile.name,
+        "version": 2,
+        "windows": [{
+            "workspaces": workspace.get("workspaces").cloned().unwrap_or_else(|| json!([])),
+            "activeWorkspaceId": workspace.get("activeWorkspaceId").cloned().unwrap_or(Value::Null),
+            "activeGroup": workspace.get("activeGroup").cloned().unwrap_or(Value::Null),
+            "terminals": workspace.get("terminals").cloned().unwrap_or_else(|| json!([])),
+            "activeTerminalId": workspace.get("activeTerminalId").cloned().unwrap_or(Value::Null),
+        }],
+    })
+}
+
+fn empty_snapshot(profile: &ProfileEntry) -> Value {
+    json!({
+        "id": profile.id,
+        "name": profile.name,
+        "version": 2,
+        "windows": [],
+    })
+}
+
+fn migrate_snapshot(raw: Value) -> Option<Value> {
+    if raw.get("version").and_then(Value::as_i64) == Some(2) {
+        return Some(raw);
+    }
+    if raw.get("version").and_then(Value::as_i64) == Some(1) {
+        return Some(json!({
+            "id": raw.get("id").cloned().unwrap_or(Value::Null),
+            "name": raw.get("name").cloned().unwrap_or(Value::Null),
+            "version": 2,
+            "windows": [{
+                "workspaces": raw.get("workspaces").cloned().unwrap_or_else(|| json!([])),
+                "activeWorkspaceId": raw.get("activeWorkspaceId").cloned().unwrap_or(Value::Null),
+                "activeGroup": raw.get("activeGroup").cloned().unwrap_or(Value::Null),
+                "terminals": raw.get("terminals").cloned().unwrap_or_else(|| json!([])),
+                "activeTerminalId": raw.get("activeTerminalId").cloned().unwrap_or(Value::Null),
+            }],
+        }));
+    }
+    None
+}
+
+fn read_snapshot_at(dir: &Path, profile_id: &str) -> Option<Value> {
+    let raw = fs::read_to_string(profile_path(dir, profile_id)).ok()?;
+    let value = serde_json::from_str::<Value>(&raw).ok()?;
+    migrate_snapshot(value)
+}
+
+fn write_snapshot_at(dir: &Path, profile_id: &str, snapshot: &Value) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    write_owner_only(
+        &profile_path(dir, profile_id),
+        serde_json::to_string_pretty(snapshot).unwrap_or_else(|_| "{}".into()),
+    )
+}
+
+fn workspace_from_first_snapshot_window(snapshot: &Value) -> Option<Value> {
+    let first = snapshot.get("windows")?.as_array()?.first()?;
+    Some(json!({
+        "workspaces": first.get("workspaces").cloned().unwrap_or_else(|| json!([])),
+        "activeWorkspaceId": first.get("activeWorkspaceId").cloned().unwrap_or(Value::Null),
+        "activeGroup": first.get("activeGroup").cloned().unwrap_or(Value::Null),
+        "terminals": first.get("terminals").cloned().unwrap_or_else(|| json!([])),
+        "activeTerminalId": first.get("activeTerminalId").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn seed_default_snapshot_if_missing(dir: &Path, app: &AppHandle, index: &ProfileIndex) {
+    if read_snapshot_at(dir, DEFAULT_PROFILE_ID).is_some() {
+        return;
+    }
+    let Some(profile) = index
+        .profiles
+        .iter()
+        .find(|profile| profile.id == DEFAULT_PROFILE_ID)
+    else {
+        return;
+    };
+    let workspace = workspace_path(app)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(empty_workspace_state);
+    let snapshot = snapshot_from_workspace(profile, workspace);
+    let _ = write_snapshot_at(dir, DEFAULT_PROFILE_ID, &snapshot);
+}
+
 #[tauri::command]
 pub fn profile_list(app: AppHandle) -> ProfileListResponse {
     profiles_dir(&app)
-        .map(|dir| list_response_at(&dir))
+        .map(|dir| {
+            let response = list_response_at(&dir);
+            let index = ProfileIndex {
+                profiles: response.profiles.clone(),
+                active_profile_ids: response.active_profile_ids.clone(),
+                active_profile_id: None,
+            };
+            seed_default_snapshot_if_missing(&dir, &app, &index);
+            response
+        })
         .unwrap_or_else(|| ProfileListResponse {
             profiles: vec![default_entry()],
             active_profile_ids: vec![DEFAULT_PROFILE_ID.into()],
@@ -363,18 +483,82 @@ pub fn profile_create(
     let id = unique_profile_id(&index, &name);
     let entry = profile_from_options(id, name, options);
     index.profiles.push(entry.clone());
+    if entry.kind == "local" {
+        let _ = write_snapshot_at(&dir, &entry.id, &empty_snapshot(&entry));
+    }
     let _ = write_index_at(&dir, index);
     entry
 }
 
 #[tauri::command]
-pub fn profile_save(_app: AppHandle, _profile_id: String) -> bool {
-    true
+pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
+    let Some(dir) = profiles_dir(&app) else {
+        return false;
+    };
+    let index = read_index_at(&dir);
+    let Some(profile) = index
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id && profile.kind == "local")
+    else {
+        return false;
+    };
+    let workspace = workspace_path(&app)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(empty_workspace_state);
+    let snapshot = snapshot_from_workspace(profile, workspace);
+    if write_snapshot_at(&dir, &profile_id, &snapshot).is_err() {
+        return false;
+    }
+    let mut index = index;
+    if let Some(entry) = index
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.id == profile_id)
+    {
+        entry.updated_at = now_millis();
+    }
+    write_index_at(&dir, index).is_ok()
 }
 
 #[tauri::command]
-pub fn profile_load(_app: AppHandle, _profile_id: String) -> Value {
-    Value::Null
+pub fn profile_load(app: AppHandle, profile_id: String) -> Value {
+    let Some(dir) = profiles_dir(&app) else {
+        return Value::Null;
+    };
+    let index = read_index_at(&dir);
+    if !index
+        .profiles
+        .iter()
+        .any(|profile| profile.id == profile_id && profile.kind == "local")
+    {
+        return Value::Null;
+    }
+    let Some(snapshot) = read_snapshot_at(&dir, &profile_id) else {
+        return Value::Null;
+    };
+    if let Some(workspace) = workspace_from_first_snapshot_window(&snapshot) {
+        if let Some(path) = workspace_path(&app) {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(
+                path,
+                serde_json::to_string_pretty(&workspace).unwrap_or_else(|_| "{}".into()),
+            );
+        }
+    }
+    let mut index = index;
+    if index
+        .profiles
+        .iter()
+        .any(|profile| profile.id == profile_id)
+    {
+        index.active_profile_ids = vec![profile_id];
+        let _ = write_index_at(&dir, index);
+    }
+    snapshot
 }
 
 #[tauri::command]
@@ -392,6 +576,7 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     if before == index.profiles.len() {
         return false;
     }
+    let _ = fs::remove_file(profile_path(&dir, &profile_id));
     write_index_at(&dir, index).is_ok()
 }
 
@@ -409,7 +594,12 @@ pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> b
         return false;
     };
     profile.name = new_name;
+    let snapshot_name = profile.name.clone();
     profile.updated_at = now_millis();
+    if let Some(mut snapshot) = read_snapshot_at(&dir, &profile_id) {
+        snapshot["name"] = Value::String(snapshot_name);
+        let _ = write_snapshot_at(&dir, &profile_id, &snapshot);
+    }
     write_index_at(&dir, index).is_ok()
 }
 
@@ -475,6 +665,13 @@ pub fn profile_duplicate(
     copy.created_at = now;
     copy.updated_at = now;
     index.profiles.push(copy.clone());
+    if let Some(mut snapshot) = read_snapshot_at(&dir, &profile_id) {
+        snapshot["id"] = Value::String(copy.id.clone());
+        snapshot["name"] = Value::String(copy.name.clone());
+        let _ = write_snapshot_at(&dir, &copy.id, &snapshot);
+    } else if copy.kind == "local" {
+        let _ = write_snapshot_at(&dir, &copy.id, &empty_snapshot(&copy));
+    }
     write_index_at(&dir, index).ok()?;
     Some(copy)
 }
@@ -642,5 +839,47 @@ mod tests {
         assert!(ids.contains(&copy.id));
         assert_ne!(source.id, copy.id);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn snapshot_round_trip_uses_electron_v2_shape() {
+        let dir = temp_profile_dir("snapshot");
+        let profile = profile_from_options("local-1".into(), "Local".into(), None);
+        let snapshot = snapshot_from_workspace(
+            &profile,
+            json!({
+                "workspaces": [{"id": "w1"}],
+                "activeWorkspaceId": "w1",
+                "activeGroup": "g1",
+                "terminals": [{"id": "t1"}],
+                "activeTerminalId": "t1",
+            }),
+        );
+        write_snapshot_at(&dir, &profile.id, &snapshot).unwrap();
+
+        let loaded = read_snapshot_at(&dir, &profile.id).unwrap();
+        assert_eq!(loaded["version"], 2);
+        assert_eq!(loaded["windows"][0]["activeWorkspaceId"], "w1");
+        let workspace = workspace_from_first_snapshot_window(&loaded).unwrap();
+        assert_eq!(workspace["workspaces"][0]["id"], "w1");
+        assert_eq!(workspace["activeTerminalId"], "t1");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn snapshot_migrates_v1_shape() {
+        let migrated = migrate_snapshot(json!({
+            "id": "default",
+            "name": "Default",
+            "version": 1,
+            "workspaces": [{"id": "w1"}],
+            "activeWorkspaceId": "w1",
+            "activeGroup": null,
+            "terminals": [],
+            "activeTerminalId": null,
+        }))
+        .unwrap();
+        assert_eq!(migrated["version"], 2);
+        assert_eq!(migrated["windows"][0]["workspaces"][0]["id"], "w1");
     }
 }

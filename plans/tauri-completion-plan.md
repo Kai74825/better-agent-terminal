@@ -105,6 +105,7 @@
 - 2026-05-11：補 `worktree.merge` 實作。Electron WorktreeManager 與 Tauri sidecar handler 現在都支援保守的 merge / cherry-pick：先要求 host repo clean、切回 source branch，再合併 worktree branch；sidecar test 覆蓋實際 ephemeral git repo merge。
 - 2026-05-11：補 remote profile listing 的 sidecar handler。sidecar 新增 minimal `profile.list/getActiveIds/load/loadSnapshot/activate/deactivate` default-profile surface，讓 remote server 內部 `profile:list` bridge 不再回 method-not-found；`remote.listProfiles` sidecar test 改為期待 default profile。
 - 2026-05-11：補 Tauri profile metadata persistence。`profile.create/rename/update/delete/duplicate/activate/deactivate` 不再是 single-default stub，會寫入 `<app-data>/profiles/index.json`；remote token 會存到 `remote-tokens.enc.json` envelope 並於 list/get hydrate，避免 token 寫進 index。profile workspace snapshot save/load 仍沿用既有 workspace-store 路徑，待後續補 Electron ProfileManager snapshot parity。
+- 2026-05-11：補 Tauri local profile snapshot persistence。local profile create 會建立 Electron v2 profile snapshot，`profile.save` 會把目前 `workspaces.json` 包成 `<app-data>/profiles/{id}.json`，`profile.load` 會讀 v1/v2 snapshot 並把第一個 window 寫回 `workspaces.json`；仍不等於完整多視窗 profile switching，因 Tauri `app.openNewInstance` 仍是 single-window MVP。
 
 ## 目前判斷
 
