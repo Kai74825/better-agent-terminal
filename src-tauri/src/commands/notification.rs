@@ -71,6 +71,7 @@ pub struct AgentNotificationSession {
     pub original_cwd: Option<String>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
+    pub auto_continue: Option<Value>,
 }
 
 #[derive(Default)]
@@ -279,6 +280,7 @@ pub fn register_agent_session_from_options(
             original_cwd,
             worktree_path,
             worktree_branch,
+            auto_continue: Some(default_auto_continue()),
         },
     );
 }
@@ -431,6 +433,94 @@ pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
     session.worktree_branch = None;
 }
 
+pub fn set_agent_session_auto_continue(
+    app: &AppHandle,
+    session_id: &str,
+    opts: &Value,
+) -> Option<bool> {
+    let agent_state = app.try_state::<AgentNotificationState>()?;
+    let mut sessions = agent_state.lock();
+    let session = sessions.get_mut(session_id)?;
+    let mut auto = session
+        .auto_continue
+        .clone()
+        .unwrap_or_else(default_auto_continue);
+    if let Some(enabled) = opts.get("enabled").and_then(Value::as_bool) {
+        auto["enabled"] = Value::Bool(enabled);
+    }
+    if let Some(max) = opts.get("max").and_then(Value::as_i64) {
+        auto["max"] = Value::Number(max.into());
+    }
+    if let Some(prompt) = string_option(opts, "prompt") {
+        auto["prompt"] = Value::String(prompt);
+    }
+    auto["used"] = Value::Number(0.into());
+    session.auto_continue = Some(auto);
+    Some(true)
+}
+
+pub fn get_agent_session_auto_continue(app: &AppHandle, session_id: &str) -> Option<Value> {
+    let agent_state = app.try_state::<AgentNotificationState>()?;
+    let sessions = agent_state.lock();
+    let session = sessions.get(session_id)?;
+    Some(
+        session
+            .auto_continue
+            .clone()
+            .unwrap_or_else(default_auto_continue),
+    )
+}
+
+pub fn update_agent_session_permission_mode(app: &AppHandle, session_id: &str, mode: &str) {
+    update_agent_session_meta_field(
+        app,
+        session_id,
+        "permissionMode",
+        Value::String(mode.into()),
+    );
+}
+
+pub fn update_agent_session_model(
+    app: &AppHandle,
+    session_id: &str,
+    model: &str,
+    auto_compact_window: Option<i64>,
+) {
+    update_agent_session_meta_field(app, session_id, "model", Value::String(model.into()));
+    if let Some(value) = auto_compact_window {
+        update_agent_session_meta_field(
+            app,
+            session_id,
+            "autoCompactWindow",
+            Value::Number(value.into()),
+        );
+    }
+}
+
+pub fn update_agent_session_effort(app: &AppHandle, session_id: &str, effort: &str) {
+    update_agent_session_meta_field(app, session_id, "effort", Value::String(effort.into()));
+}
+
+fn update_agent_session_meta_field(app: &AppHandle, session_id: &str, key: &str, value: Value) {
+    let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
+        return;
+    };
+    let mut sessions = agent_state.lock();
+    let Some(session) = sessions.get_mut(session_id) else {
+        return;
+    };
+    match key {
+        "permissionMode" => session.permission_mode = value.as_str().map(String::from),
+        "model" => session.model = value.as_str().map(String::from),
+        "effort" => session.effort = value.as_str().map(String::from),
+        "autoCompactWindow" => session.auto_compact_window = value.as_i64(),
+        _ => {}
+    }
+    if let Some(Value::Object(map)) = session.latest_meta.as_mut() {
+        map.insert(key.to_string(), value);
+    }
+}
+
 fn apply_worktree_payload(session: &mut AgentNotificationSession, worktree: &Value) {
     if worktree.is_null() {
         if let Some(original_cwd) = session.original_cwd.take() {
@@ -562,6 +652,15 @@ fn string_option(options: &Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+fn default_auto_continue() -> Value {
+    serde_json::json!({
+        "enabled": false,
+        "max": 0,
+        "used": 0,
+        "prompt": "",
+    })
+}
+
 pub fn normalize_workspace_key(cwd: &str) -> String {
     let normalized = cwd
         .trim()
@@ -612,6 +711,15 @@ mod tests {
     }
 
     #[test]
+    fn default_auto_continue_matches_electron_shape() {
+        let value = default_auto_continue();
+        assert_eq!(value["enabled"], false);
+        assert_eq!(value["max"], 0);
+        assert_eq!(value["used"], 0);
+        assert_eq!(value["prompt"], "");
+    }
+
+    #[test]
     fn apply_worktree_payload_sets_and_clears_session_worktree() {
         let mut session = AgentNotificationSession {
             window_id: Some("main".into()),
@@ -629,6 +737,7 @@ mod tests {
             original_cwd: None,
             worktree_path: None,
             worktree_branch: None,
+            auto_continue: None,
         };
 
         apply_worktree_payload(

@@ -1926,6 +1926,10 @@ pub async fn claude_set_auto_continue(
     if codex_state.is_owned(&session_id) {
         return Ok(json!(false));
     }
+    if let Some(value) = notification_cmd::set_agent_session_auto_continue(&app, &session_id, &opts)
+    {
+        return Ok(json!(value));
+    }
     call_blocking(
         app,
         state,
@@ -1947,6 +1951,9 @@ pub async fn claude_get_auto_continue(
     if codex_state.is_owned(&session_id) {
         return Ok(Value::Null);
     }
+    if let Some(value) = notification_cmd::get_agent_session_auto_continue(&app, &session_id) {
+        return Ok(value);
+    }
     call_blocking(
         app,
         state,
@@ -1967,15 +1974,19 @@ pub async fn claude_set_permission_mode(
     if codex_state.is_owned(&session_id) {
         return Ok(json!(false));
     }
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.setPermissionMode",
         json!({
             "sessionId": session_id, "mode": mode,
         }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::update_agent_session_permission_mode(&app, &session_id, &mode);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2054,15 +2065,24 @@ pub async fn claude_set_model(
     if let Some(value) = codex_state.set_model(&app, &session_id, model.clone()) {
         return Ok(value);
     }
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.setModel",
         json!({
             "sessionId": session_id, "model": model, "autoCompactWindow": auto_compact_window,
         }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::update_agent_session_model(
+            &app,
+            &session_id,
+            &model,
+            auto_compact_window,
+        );
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2076,15 +2096,19 @@ pub async fn claude_set_effort(
     if let Some(value) = codex_state.set_effort(&app, &session_id, effort.clone()) {
         return Ok(value);
     }
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.setEffort",
         json!({
             "sessionId": session_id, "effort": effort,
         }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::update_agent_session_effort(&app, &session_id, &effort);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2751,6 +2775,7 @@ mod tests {
             original_cwd: None,
             worktree_path: None,
             worktree_branch: None,
+            auto_continue: None,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
@@ -2790,6 +2815,7 @@ mod tests {
             original_cwd: None,
             worktree_path: None,
             worktree_branch: None,
+            auto_continue: None,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
@@ -2816,6 +2842,7 @@ mod tests {
             original_cwd: None,
             worktree_path: None,
             worktree_branch: None,
+            auto_continue: None,
         };
 
         assert_eq!(worktree_status_from_notification_snapshot(&session), None);
