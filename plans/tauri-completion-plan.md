@@ -101,6 +101,7 @@
 - 2026-05-11：補 Codex regression aggregate script。新增 `pnpm run test:codex-auto-continue` 與 `pnpm run test:codex`，一次覆蓋 stale resume fallback、Codex `/resume` UI gate/參數保留、timeout auto-continue guard，避免 Codex porting 後續只跑到部分 regression。
 - 2026-05-11：收斂 agent panel renderer logging。Claude/Codex panel 的 IPC subscription debug logs 改走 `host.debug.log`，Codex tag 也從 `[Claude:*]` 修成 `[Codex:*]`；新增 `pnpm run test:renderer-logging` 防止 renderer `console.log` 回流。
 - 2026-05-11：強化 Rust Codex resume history transcript lookup。`~/.codex/sessions/**/*.jsonl` 搜尋現在優先比對 `session_meta.payload.id`，只有沒有 session_meta id 的舊格式才用 path contains fallback，避免路徑誤命中 stale transcript；Rust test 已覆蓋 meta 優先行為。
+- 2026-05-11：補 Tauri native drop DOM duplicate guard。Sidebar / Claude / Codex 的 DOM drop handler 在 Tauri + OS file drop 時會讓 native drop listener 負責處理，避免同一次 drop 被 DOM fallback 再處理一次並誤報「host needs to expose paths」。
 
 ## 目前判斷
 

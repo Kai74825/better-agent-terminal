@@ -1,4 +1,4 @@
-import { host } from '../host-api'
+import { host, isTauri } from '../host-api'
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Workspace } from '../types'
@@ -407,6 +407,17 @@ export function Sidebar({
           e.preventDefault()
           if (isRemoteConnected && e.dataTransfer.types.includes('Files')) {
             window.alert('Remote sessions can only add folders that exist on the host.')
+            setDragOverId(null)
+            setDragPosition(null)
+            return
+          }
+          // Under Tauri, native onDragDropEvent already added workspaces in
+          // the useEffect listener above. The DOM drop event fires too, but
+          // File.path is undefined so getPathForFile would basename-match
+          // against an already-claimed cache entry and surface a spurious
+          // "needs the host to expose paths" alert. Skip the DOM-path
+          // workspace addition entirely under Tauri.
+          if (isTauri() && e.dataTransfer.types.includes('Files')) {
             setDragOverId(null)
             setDragPosition(null)
             return

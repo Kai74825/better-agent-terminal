@@ -2462,6 +2462,12 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
+    // Under Tauri, OS file drops are already handled by the
+    // listenTauriNativeDrop effect below. The DOM drop also fires but
+    // File.path is undefined; suppress to avoid the spurious "needs
+    // the host to expose paths" alert. Browser-internal image drags
+    // (no 'Files' type) still flow through this handler.
+    if (isTauri() && e.dataTransfer.types.includes('Files')) return
     for (const file of e.dataTransfer.files) {
       const filePath = isRemoteConnected ? null : host.shell.getPathForFile(file)
       if (!filePath) {

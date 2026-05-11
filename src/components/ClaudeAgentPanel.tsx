@@ -2474,6 +2474,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
+    // Under Tauri, OS file drops are already handled by the
+    // listenTauriNativeDrop effect below (which has the absolute paths).
+    // The DOM drop event also fires but File.path is undefined, so
+    // getPathForFile would basename-match against an already-claimed
+    // cache entry and surface a spurious "needs the host to expose
+    // paths" alert. Skip OS-file drops here; the dataTransfer.files
+    // branch only matters for browser-internal image drags (no 'Files').
+    if (isTauri() && e.dataTransfer.types.includes('Files')) return
     for (const file of e.dataTransfer.files) {
       const filePath = isRemoteConnected ? null : host.shell.getPathForFile(file)
       if (!filePath) {
