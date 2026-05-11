@@ -18,7 +18,7 @@ use serde::Serialize;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -48,6 +48,19 @@ fn workspace_path(app: &tauri::AppHandle) -> Result<PathBuf, WorkspaceError> {
         .app_data_dir()
         .map_err(|e| WorkspaceError::AppDataDir(e.to_string()))?;
     Ok(dir.join("workspaces.json"))
+}
+
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 fn workspace_load_impl(
@@ -141,6 +154,86 @@ pub async fn workspace_move_to_window(
     Ok(true)
 }
 
+fn emit_detached_closed(app: &tauri::AppHandle, workspace_id: &str) {
+    let Some(entry) = window_registry::remove_detached_entry(app, workspace_id) else {
+        return;
+    };
+    if let Some(parent_id) = entry.detached_parent_window_id {
+        let _ = app.emit_to(&parent_id, "workspace:reattached", workspace_id.to_string());
+    }
+}
+
+#[tauri::command]
+pub fn workspace_detach(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    workspace_id: String,
+) -> Result<bool, CommandError> {
+    if let Some(existing) = window_registry::detached_entry_for_workspace(&app, &workspace_id) {
+        if let Some(win) = app.get_webview_window(&existing.id) {
+            let _ = win.set_focus();
+            return Ok(true);
+        }
+    }
+
+    let parent_window_id = window.label().to_string();
+    let Some(entry) =
+        window_registry::create_detached_entry(&app, &parent_window_id, &workspace_id)
+    else {
+        return Ok(false);
+    };
+
+    let url = format!(
+        "index.html?detached={}",
+        encode_query_component(&workspace_id)
+    );
+    let detached_window =
+        match WebviewWindowBuilder::new(&app, &entry.id, WebviewUrl::App(url.into()))
+            .title("Better Agent Terminal")
+            .inner_size(900.0, 700.0)
+            .min_inner_size(600.0, 400.0)
+            .build()
+        {
+            Ok(win) => win,
+            Err(err) => {
+                let _ = window_registry::remove_detached_entry(&app, &workspace_id);
+                return Err(CommandError {
+                    message: format!("workspace.detach failed: {err}"),
+                });
+            }
+        };
+
+    let close_app = app.clone();
+    let close_workspace_id = workspace_id.clone();
+    detached_window.on_window_event(move |event| {
+        if matches!(
+            event,
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
+        ) {
+            emit_detached_closed(&close_app, &close_workspace_id);
+        }
+    });
+
+    let _ = app.emit_to(&parent_window_id, "workspace:detached", workspace_id);
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn workspace_reattach(
+    app: tauri::AppHandle,
+    workspace_id: String,
+) -> Result<bool, CommandError> {
+    let Some(entry) = window_registry::detached_entry_for_workspace(&app, &workspace_id) else {
+        return Ok(true);
+    };
+    if let Some(win) = app.get_webview_window(&entry.id) {
+        let _ = win.close();
+        return Ok(true);
+    }
+    emit_detached_closed(&app, &workspace_id);
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,5 +245,14 @@ mod tests {
         // on-disk file (which would lose user workspace state on upgrade).
         let p = PathBuf::from("/fake/app-data").join("workspaces.json");
         assert_eq!(p.file_name().unwrap(), "workspaces.json");
+    }
+
+    #[test]
+    fn query_component_encoder_percent_encodes_unsafe_bytes() {
+        assert_eq!(encode_query_component("abc-_.~123"), "abc-_.~123");
+        assert_eq!(
+            encode_query_component("a b/中文"),
+            "a%20b%2F%E4%B8%AD%E6%96%87"
+        );
     }
 }

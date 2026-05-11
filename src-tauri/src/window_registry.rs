@@ -36,6 +36,10 @@ pub struct WindowEntry {
     pub profile_id: String,
     #[serde(flatten)]
     pub snapshot: WindowSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detached_parent_window_id: Option<String>,
     pub last_active_at: i64,
 }
 
@@ -227,9 +231,13 @@ fn persist_entries(app: &AppHandle, entries: &[WindowEntry]) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
+    let persistent = entries
+        .iter()
+        .filter(|entry| entry.detached_workspace_id.is_none())
+        .collect::<Vec<_>>();
     let _ = fs::write(
         path,
-        serde_json::to_string_pretty(entries).unwrap_or_else(|_| "[]".into()),
+        serde_json::to_string_pretty(&persistent).unwrap_or_else(|_| "[]".into()),
     );
 }
 
@@ -316,7 +324,7 @@ fn profile_name(app: &AppHandle, profile_id: &str) -> Option<String> {
 fn profile_windows(entries: &[WindowEntry], profile_id: &str) -> Vec<WindowSnapshot> {
     entries
         .iter()
-        .filter(|entry| entry.profile_id == profile_id)
+        .filter(|entry| entry.profile_id == profile_id && entry.detached_workspace_id.is_none())
         .map(|entry| entry.snapshot.clone())
         .collect()
 }
@@ -327,6 +335,14 @@ fn make_window_id(profile_id: &str, index: usize) -> String {
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     format!("profile-{safe}-{}-{index}", now_millis())
+}
+
+fn make_detached_window_id(workspace_id: &str) -> String {
+    let safe = workspace_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    format!("detached-{safe}-{}", now_millis())
 }
 
 pub fn ensure_entry(app: &AppHandle, window_id: &str) -> WindowEntry {
@@ -346,6 +362,8 @@ pub fn ensure_entry(app: &AppHandle, window_id: &str) -> WindowEntry {
         } else {
             empty_snapshot()
         },
+        detached_workspace_id: None,
+        detached_parent_window_id: None,
         last_active_at: now_millis(),
     };
     entries.push(entry.clone());
@@ -391,6 +409,8 @@ pub fn save_workspace_json(app: &AppHandle, window_id: &str, data: &str) -> bool
             id: window_id.to_string(),
             profile_id: DEFAULT_PROFILE_ID.into(),
             snapshot: empty_snapshot(),
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
             last_active_at: now_millis(),
         });
     entry.snapshot = snapshot_from_workspace_value(value);
@@ -468,6 +488,81 @@ pub fn move_workspace(
     Some((source_json, target_json))
 }
 
+pub fn detached_entry_for_workspace(app: &AppHandle, workspace_id: &str) -> Option<WindowEntry> {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    entries
+        .iter()
+        .find(|entry| entry.detached_workspace_id.as_deref() == Some(workspace_id))
+        .cloned()
+}
+
+pub fn create_detached_entry(
+    app: &AppHandle,
+    parent_window_id: &str,
+    workspace_id: &str,
+) -> Option<WindowEntry> {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    if let Some(entry) = entries
+        .iter()
+        .find(|entry| entry.detached_workspace_id.as_deref() == Some(workspace_id))
+        .cloned()
+    {
+        return Some(entry);
+    }
+    let parent = entries
+        .iter()
+        .find(|entry| entry.id == parent_window_id)
+        .cloned()
+        .unwrap_or_else(|| WindowEntry {
+            id: parent_window_id.to_string(),
+            profile_id: DEFAULT_PROFILE_ID.into(),
+            snapshot: if parent_window_id == "main" {
+                read_global_workspace_snapshot(app)
+            } else {
+                empty_snapshot()
+            },
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
+            last_active_at: now_millis(),
+        });
+    if !value_array(&parent.snapshot.workspaces)
+        .iter()
+        .any(|workspace| value_id(workspace) == Some(workspace_id))
+    {
+        return None;
+    }
+    let entry = WindowEntry {
+        id: make_detached_window_id(workspace_id),
+        profile_id: parent.profile_id,
+        snapshot: parent.snapshot,
+        detached_workspace_id: Some(workspace_id.to_string()),
+        detached_parent_window_id: Some(parent_window_id.to_string()),
+        last_active_at: now_millis(),
+    };
+    entries.push(entry.clone());
+    Some(entry)
+}
+
+pub fn remove_detached_entry(app: &AppHandle, workspace_id: &str) -> Option<WindowEntry> {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    let index = entries
+        .iter()
+        .position(|entry| entry.detached_workspace_id.as_deref() == Some(workspace_id))?;
+    Some(entries.remove(index))
+}
+
 pub fn entries_for_profile(app: &AppHandle, profile_id: &str) -> Vec<WindowEntry> {
     let state = app.state::<WindowRegistryState>();
     let mut entries = state.entries.lock().unwrap();
@@ -476,7 +571,7 @@ pub fn entries_for_profile(app: &AppHandle, profile_id: &str) -> Vec<WindowEntry
     }
     entries
         .iter()
-        .filter(|entry| entry.profile_id == profile_id)
+        .filter(|entry| entry.profile_id == profile_id && entry.detached_workspace_id.is_none())
         .cloned()
         .collect()
 }
@@ -501,6 +596,8 @@ pub fn create_entries_for_profile(app: &AppHandle, profile_id: &str) -> Vec<Wind
             id: make_window_id(profile_id, idx + 1),
             profile_id: profile_id.to_string(),
             snapshot,
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
             last_active_at: now_millis(),
         };
         entries.push(entry.clone());
@@ -520,6 +617,8 @@ pub fn create_empty_entry_for_profile(app: &AppHandle, profile_id: &str) -> Wind
         id: make_window_id(profile_id, entries.len() + 1),
         profile_id: profile_id.to_string(),
         snapshot: empty_snapshot(),
+        detached_workspace_id: None,
+        detached_parent_window_id: None,
         last_active_at: now_millis(),
     };
     entries.push(entry.clone());
@@ -571,6 +670,8 @@ mod tests {
                 ],
                 "activeTerminalId": "t1"
             })),
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
             last_active_at: 0,
         };
         let mut target = WindowEntry {
@@ -582,6 +683,8 @@ mod tests {
                 "terminals": [{"id": "t4", "workspaceId": "w3"}],
                 "activeTerminalId": "t4"
             })),
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
             last_active_at: 0,
         };
 

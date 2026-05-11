@@ -11,6 +11,7 @@ type WinShape = {
   batAppAPI?: unknown
   __TAURI_INTERNALS__?: { invoke?: TauriInvoke }
   __TAURI__?: unknown
+  location?: { search?: string }
 }
 const setWindow = (shape: WinShape | undefined) => {
   ;(globalThis as { window?: WinShape | undefined }).window = shape
@@ -98,6 +99,8 @@ async function run() {
       if (cmd === 'pty_get_cwd') return '/x' as unknown as T
       if (cmd === 'workspace_load') return null as unknown as T
       if (cmd === 'workspace_save') return true as unknown as T
+      if (cmd === 'workspace_detach') return true as unknown as T
+      if (cmd === 'workspace_reattach') return true as unknown as T
       if (cmd === 'workspace_move_to_window') return true as unknown as T
       if (cmd === 'update_get_version') return '0.1.0' as unknown as T
       if (cmd === 'update_check') {
@@ -331,7 +334,15 @@ async function run() {
     assert.equal(wsLoaded, null)
     const wsSaved = await mod.host.workspace.save('{"workspaces":[]}')
     assert.equal(wsSaved, true)
+    assert.equal(await mod.host.workspace.detach('workspace-1'), true)
+    assert.equal(await mod.host.workspace.reattach('workspace-1'), true)
     assert.equal(await mod.host.workspace.moveToWindow('main', 'win-2', 'workspace-1', 0), true)
+    const unsubWorkspaceDetached = mod.host.workspace.onDetached(() => {})
+    assert.equal(typeof unsubWorkspaceDetached, 'function')
+    unsubWorkspaceDetached()
+    const unsubWorkspaceReattached = mod.host.workspace.onReattached(() => {})
+    assert.equal(typeof unsubWorkspaceReattached, 'function')
+    unsubWorkspaceReattached()
     const unsubWorkspaceReload = mod.host.workspace.onReload(() => {})
     assert.equal(typeof unsubWorkspaceReload, 'function')
     unsubWorkspaceReload()
@@ -656,6 +667,8 @@ async function run() {
       { cmd: 'pty_get_cwd', args: { id: 'term-1' } },
       { cmd: 'workspace_load', args: undefined },
       { cmd: 'workspace_save', args: { data: '{"workspaces":[]}' } },
+      { cmd: 'workspace_detach', args: { workspaceId: 'workspace-1' } },
+      { cmd: 'workspace_reattach', args: { workspaceId: 'workspace-1' } },
       {
         cmd: 'workspace_move_to_window',
         args: {
@@ -816,10 +829,7 @@ async function run() {
     // namespace that's still entirely unrouted (none right now — every
     // preload namespace is at least stub-routed). We retain the per-method
     // canaries below to cover that case explicitly.
-    // Within a ported namespace, individually unported entries still throw
-    // the same way.
-    assert.throws(() => (mod.host as { workspace: { detach: () => unknown } }).workspace.detach(),
-      /workspace\.detach is not yet implemented under Tauri/)
+    assert.equal(await mod.host.workspace.detach('workspace-1'), undefined)
     // claude.* unported methods used to throw, but the surface is too
     // large for that to be useful — unrecognized keys now return
     // Promise.resolve(null) with a one-time console.warn so panel

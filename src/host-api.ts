@@ -376,9 +376,10 @@ function createTauriHost(): BatAppAPI {
     workspace: {
       load: () => getInvoke()<string | null>('workspace_load'),
       save: (data: string) => getInvoke()<boolean>('workspace_save', { data }),
-      // Detach/reattach still need dedicated Tauri window lifecycle work.
-      detach: () => notImplemented('workspace.detach'),
-      reattach: () => notImplemented('workspace.reattach'),
+      detach: (workspaceId: string) =>
+        getInvoke()<boolean>('workspace_detach', { workspaceId }),
+      reattach: (workspaceId: string) =>
+        getInvoke()<boolean>('workspace_reattach', { workspaceId }),
       moveToWindow: (
         sourceWindowId: string,
         targetWindowId: string,
@@ -390,11 +391,14 @@ function createTauriHost(): BatAppAPI {
         workspaceId,
         insertIndex,
       }),
-      // Synchronous query the renderer reads during initial render — the
-      // Tauri build never opens a detached child window, so always null.
-      getDetachedId: () => null,
-      onDetached: () => () => {},
-      onReattached: () => () => {},
+      getDetachedId: () => {
+        const search = typeof window !== 'undefined' ? window.location?.search || '' : ''
+        return new URLSearchParams(search).get('detached')
+      },
+      onDetached: (callback: (workspaceId: string) => void) =>
+        listenAdapter<string>('workspace:detached', callback),
+      onReattached: (callback: (workspaceId: string) => void) =>
+        listenAdapter<string>('workspace:reattached', callback),
       onReload: (callback: (data?: string) => void) =>
         listenAdapter<string | undefined>('workspace:reload', callback),
     },
