@@ -17,7 +17,7 @@
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const MAX_ENTRIES: usize = 50;
 
@@ -118,11 +118,26 @@ pub fn notification_mark_all_read(app: AppHandle, state: State<'_, NotificationS
 }
 
 #[tauri::command]
-pub fn notification_mark_window_read(app: AppHandle, state: State<'_, NotificationState>) -> bool {
-    // Single-window MVP — same effect as markAllRead. Once we have
-    // multiple windows we'll resolve the calling window's id and
-    // narrow this filter.
-    notification_mark_all_read(app, state)
+pub fn notification_mark_window_read(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, NotificationState>,
+) -> bool {
+    let window_id = window.label().to_string();
+    let mut changed = false;
+    {
+        let mut entries = state.lock();
+        for e in entries.iter_mut() {
+            if !e.read && e.window_id.as_deref() == Some(&window_id) {
+                e.read = true;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        emit_update(&app, &state);
+    }
+    true
 }
 
 #[tauri::command]
@@ -144,34 +159,64 @@ pub fn notification_clear(app: AppHandle, state: State<'_, NotificationState>) -
 
 #[tauri::command]
 pub fn notification_focus_latest_unread(
+    app: AppHandle,
     state: State<'_, NotificationState>,
 ) -> Option<FocusResult> {
-    let entries = state.lock();
-    for e in entries.iter() {
-        if !e.read {
-            if let Some(window_id) = &e.window_id {
-                return Some(FocusResult {
-                    id: e.id.clone(),
-                    window_id: window_id.clone(),
-                });
-            }
-        }
-    }
-    None
+    let (id, window_id) = {
+        let entries = state.lock();
+        entries
+            .iter()
+            .find(|entry| !entry.read && entry.window_id.is_some())
+            .map(|entry| (entry.id.clone(), entry.window_id.clone().unwrap()))?
+    };
+    focus_notification_window(&app, &window_id)?;
+    mark_entry_read_and_emit(&app, &state, &id);
+    Some(FocusResult { id, window_id })
 }
 
 #[tauri::command]
 pub fn notification_focus_entry(
+    app: AppHandle,
     state: State<'_, NotificationState>,
     id: String,
 ) -> Option<FocusResult> {
-    let entries = state.lock();
-    let entry = entries.iter().find(|e| e.id == id)?;
-    let window_id = entry.window_id.clone()?;
-    Some(FocusResult {
-        id: entry.id.clone(),
-        window_id,
-    })
+    let window_id = {
+        let entries = state.lock();
+        entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.window_id.clone())?
+    };
+    focus_notification_window(&app, &window_id)?;
+    mark_entry_read_and_emit(&app, &state, &id);
+    Some(FocusResult { id, window_id })
+}
+
+fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {
+    let win = app.get_webview_window(window_id)?;
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+    Some(())
+}
+
+fn mark_entry_read_and_emit(app: &AppHandle, state: &State<'_, NotificationState>, id: &str) {
+    let changed = {
+        let mut entries = state.lock();
+        if let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) {
+            if entry.read {
+                false
+            } else {
+                entry.read = true;
+                true
+            }
+        } else {
+            false
+        }
+    };
+    if changed {
+        emit_update(app, state);
+    }
 }
 
 // Internal helper — push the current entry list to all listeners.
@@ -298,6 +343,18 @@ mod tests {
         changed
     }
 
+    fn raw_mark_window_read(state: &NotificationState, window_id: &str) -> bool {
+        let mut entries = state.lock();
+        let mut changed = false;
+        for e in entries.iter_mut() {
+            if !e.read && e.window_id.as_deref() == Some(window_id) {
+                e.read = true;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     fn raw_clear(state: &NotificationState) -> bool {
         let mut entries = state.lock();
         if entries.is_empty() {
@@ -339,6 +396,32 @@ mod tests {
         assert!(!raw_mark_all_read(&state));
         let entries = state.lock();
         assert!(entries.iter().all(|e| e.read));
+    }
+
+    #[test]
+    fn mark_window_read_only_marks_current_window() {
+        let state = NotificationState::default();
+        raw_add(&state, sample_entry("main", "/r1", false));
+        let mut other = sample_entry("other", "/r2", false);
+        other.window_id = Some("win-2".into());
+        raw_add(&state, other);
+
+        assert!(raw_mark_window_read(&state, "main"));
+        let entries = state.lock();
+        assert!(
+            entries
+                .iter()
+                .find(|entry| entry.id == "main")
+                .unwrap()
+                .read
+        );
+        assert!(
+            !entries
+                .iter()
+                .find(|entry| entry.id == "other")
+                .unwrap()
+                .read
+        );
     }
 
     #[test]

@@ -111,6 +111,7 @@
 - 2026-05-11：開始 Tauri Rust multi-window profile MVP。新增 Rust `WindowRegistryState` 與 `<app-data>/windows.json`，`workspace.load/save` 依目前 Tauri window label 讀寫 per-window state 並同步 profile snapshot；`app.openNewInstance(profileId)` 會讀 local profile snapshot 建立/focus Tauri windows，`getWindowId/getWindowProfile/getWindowIndex/newWindow/focusNextWindow` 不再是 single-window constants。`workspace.detach/reattach/moveToWindow` 仍待下一步補。
 - 2026-05-11：補 Tauri Rust workspace 跨視窗搬移。`workspace.moveToWindow` 現在會在 Rust window registry 搬移 workspace 與其 terminals、修正 source/target active workspace/terminal、同步 windows/profile/global snapshot，並透過既有 `workspace:reload` event 把 serialized state 推回 renderer；`detach/reattach` 仍待補。
 - 2026-05-11：補 Tauri Rust workspace detach/reattach。`workspace.detach` 會建立 transient detached webview window 並用 `?detached=<workspaceId>` 沿用既有 App detached mode；transient entry 不寫入 windows/profile snapshot，關窗或 `workspace.reattach` 會 emit 既有 `workspace:reattached`，主視窗隱藏/恢復 workspace 的 renderer 行為不需改 UI。
+- 2026-05-11：補 Tauri notification 多視窗 parity。`notification.markWindowRead` 改為只標記目前 Tauri window 的 unread entries；`focusLatestUnread/focusEntry` 會聚焦目標 webview window 並 mark read，對齊 Electron notification center 行為。
 
 ## 目前判斷
 
