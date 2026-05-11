@@ -83,6 +83,20 @@ fn load_legacy_file_key(data_dir: &Path) -> Option<String> {
     }
 }
 
+pub fn configured_openai_key_for_runtime(app: &AppHandle) -> Option<String> {
+    if let Some(key) = load_keyring_key() {
+        return Some(key);
+    }
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        if let Some(key) = load_legacy_file_key(&data_dir) {
+            return Some(key);
+        }
+    }
+    std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+}
+
 fn save_legacy_file_key(data_dir: &Path, api_key: &str) -> io::Result<()> {
     fs::create_dir_all(data_dir)?;
     let path = key_file_path(data_dir);

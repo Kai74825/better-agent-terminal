@@ -5,6 +5,7 @@
 // thread/turn/item notifications back into the existing claude:* event shape
 // consumed by the renderer.
 
+use crate::commands::openai;
 use crate::event_hub::publish_runtime_event;
 use crate::sidecar::BridgeError;
 use serde_json::{json, Value};
@@ -424,7 +425,7 @@ fn resolve_codex_binary(app: &AppHandle) -> CodexBinary {
 }
 
 fn build_codex_command(app: &AppHandle) -> Command {
-    match resolve_codex_binary(app) {
+    let mut command = match resolve_codex_binary(app) {
         CodexBinary::Native(path) => {
             let mut command = Command::new(path);
             command.arg("app-server");
@@ -444,7 +445,11 @@ fn build_codex_command(app: &AppHandle) -> Command {
                 command
             }
         }
+    };
+    if let Some(api_key) = openai::configured_openai_key_for_runtime(app) {
+        command.env("OPENAI_API_KEY", api_key);
     }
+    command
 }
 
 fn text_from_value(value: &Value) -> String {
