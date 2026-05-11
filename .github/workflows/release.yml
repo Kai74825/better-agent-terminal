@@ -19,9 +19,14 @@ jobs:
             artifact: release-win
             release_exts: '.exe'
             bundle: nsis
-          - os: macos-latest
+          - os: macos-15-intel
             platform: mac
-            artifact: release-mac
+            artifact: release-mac-x64
+            release_exts: '.dmg'
+            bundle: dmg
+          - os: macos-14
+            platform: mac
+            artifact: release-mac-arm64
             release_exts: '.dmg'
             bundle: dmg
           - os: ubuntu-latest
