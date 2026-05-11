@@ -324,9 +324,21 @@ fn profile_name(app: &AppHandle, profile_id: &str) -> Option<String> {
 fn profile_windows(entries: &[WindowEntry], profile_id: &str) -> Vec<WindowSnapshot> {
     entries
         .iter()
-        .filter(|entry| entry.profile_id == profile_id && entry.detached_workspace_id.is_none())
+        .filter(|entry| {
+            entry.profile_id == profile_id
+                && entry.detached_workspace_id.is_none()
+                && snapshot_has_content(&entry.snapshot)
+        })
         .map(|entry| entry.snapshot.clone())
         .collect()
+}
+
+fn snapshot_has_content(snapshot: &WindowSnapshot) -> bool {
+    !value_array(&snapshot.workspaces).is_empty()
+        || !value_array(&snapshot.terminals).is_empty()
+        || snapshot.active_workspace_id.is_some()
+        || snapshot.active_terminal_id.is_some()
+        || snapshot.active_group.is_some()
 }
 
 fn bounds_tuple(value: &Value) -> Option<(f64, f64, f64, f64)> {
@@ -496,14 +508,41 @@ pub fn mark_window_active(app: &AppHandle, window_id: &str) {
 
 pub fn window_index(app: &AppHandle, window_id: &str) -> u32 {
     let entry = ensure_entry(app, window_id);
+    let live_window_ids = app
+        .webview_windows()
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
     let state = app.state::<WindowRegistryState>();
     let entries = state.entries.lock().unwrap();
+    window_index_for_entries(&entries, &live_window_ids, &entry)
+}
+
+fn window_index_for_entries(
+    entries: &[WindowEntry],
+    live_window_ids: &HashSet<String>,
+    entry: &WindowEntry,
+) -> u32 {
     entries
         .iter()
-        .filter(|candidate| candidate.profile_id == entry.profile_id)
-        .position(|candidate| candidate.id == window_id)
+        .filter(|candidate| {
+            candidate.profile_id == entry.profile_id
+                && candidate.detached_workspace_id.is_none()
+                && live_window_ids.contains(&candidate.id)
+        })
+        .position(|candidate| candidate.id == entry.id)
         .map(|idx| idx as u32 + 1)
-        .unwrap_or(1)
+        .unwrap_or_else(|| {
+            entries
+                .iter()
+                .filter(|candidate| {
+                    candidate.profile_id == entry.profile_id
+                        && candidate.detached_workspace_id.is_none()
+                })
+                .position(|candidate| candidate.id == entry.id)
+                .map(|idx| idx as u32 + 1)
+                .unwrap_or(1)
+        })
 }
 
 pub fn workspace_json(app: &AppHandle, window_id: &str) -> Option<String> {
@@ -864,6 +903,70 @@ mod tests {
             .map(|entry| entry.id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["detached-a", "profile-b-1"]);
+    }
+
+    #[test]
+    fn profile_windows_ignores_empty_snapshots() {
+        let mut filled = empty_snapshot();
+        filled.workspaces = json!([{"id": "w1"}]);
+        let entries = vec![
+            WindowEntry {
+                id: "main".into(),
+                profile_id: "default".into(),
+                snapshot: filled,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 0,
+            },
+            WindowEntry {
+                id: "profile-default-stale".into(),
+                profile_id: "default".into(),
+                snapshot: empty_snapshot(),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 0,
+            },
+        ];
+
+        assert_eq!(profile_windows(&entries, "default").len(), 1);
+    }
+
+    #[test]
+    fn window_index_counts_only_live_profile_windows() {
+        let entries = vec![
+            WindowEntry {
+                id: "main".into(),
+                profile_id: "default".into(),
+                snapshot: empty_snapshot(),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 0,
+            },
+            WindowEntry {
+                id: "profile-default-stale".into(),
+                profile_id: "default".into(),
+                snapshot: empty_snapshot(),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 0,
+            },
+            WindowEntry {
+                id: "profile-default-live".into(),
+                profile_id: "default".into(),
+                snapshot: empty_snapshot(),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 0,
+            },
+        ];
+        let live_window_ids = ["main".to_string(), "profile-default-live".to_string()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            window_index_for_entries(&entries, &live_window_ids, &entries[2]),
+            2
+        );
     }
 
     #[test]
