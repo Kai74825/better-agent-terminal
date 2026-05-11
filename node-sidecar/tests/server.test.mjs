@@ -3715,7 +3715,7 @@ async function inProcess() {
   // real one-commit repo in tmpdir, confirm happy paths against it,
   // then exercise the empty-cwd / non-repo defaults.
   {
-    const { mkdtempSync, writeFileSync, rmSync } = await import('fs')
+    const { mkdtempSync, writeFileSync, rmSync, realpathSync } = await import('fs')
     const { join } = await import('path')
     const { tmpdir } = await import('os')
     const { execSync } = await import('child_process')
@@ -3759,8 +3759,9 @@ async function inProcess() {
         const rootReply = await dispatch({ jsonrpc: '2.0', id: 900, method: 'git.getRoot',
           params: { cwd: repoRoot } })
         assert.equal(typeof rootReply.result, 'string')
-        assert.equal(resolve(rootReply.result).toLowerCase(),
-          resolve(repoRoot).toLowerCase(),
+        const canonical = (p) => realpathSync.native(resolve(p)).toLowerCase()
+        assert.equal(canonical(rootReply.result),
+          canonical(repoRoot),
           'git.getRoot should resolve to the temp repo root')
 
         // (b) git.branch — returns the current branch name. New repos
