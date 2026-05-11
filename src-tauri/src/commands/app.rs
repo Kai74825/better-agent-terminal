@@ -33,6 +33,32 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
         .map_err(|err| err.to_string())
 }
 
+fn parse_launch_profile_args<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let arg = arg.as_ref();
+        if let Some(profile_id) = arg.strip_prefix("--profile=") {
+            let profile_id = profile_id.trim();
+            if !profile_id.is_empty() {
+                return Some(profile_id.to_string());
+            }
+        }
+        if arg == "--profile" {
+            if let Some(profile_id) = iter.next() {
+                let profile_id = profile_id.as_ref().trim();
+                if !profile_id.is_empty() {
+                    return Some(profile_id.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub fn app_get_window_id(window: WebviewWindow) -> String {
     window.label().to_string()
@@ -45,7 +71,7 @@ pub fn app_get_window_index(app: AppHandle, window: WebviewWindow) -> u32 {
 
 #[tauri::command]
 pub fn app_get_launch_profile() -> Option<String> {
-    None
+    parse_launch_profile_args(std::env::args())
 }
 
 #[tauri::command]
@@ -159,5 +185,18 @@ mod tests {
         assert_eq!(badge_count_value(0), None);
         assert_eq!(badge_count_value(-1), None);
         assert_eq!(badge_count_value(42), Some(42));
+    }
+
+    #[test]
+    fn parse_launch_profile_supports_equals_and_split_args() {
+        assert_eq!(
+            parse_launch_profile_args(["bat", "--profile=remote-1"]),
+            Some("remote-1".into())
+        );
+        assert_eq!(
+            parse_launch_profile_args(["bat", "--profile", "local-2"]),
+            Some("local-2".into())
+        );
+        assert_eq!(parse_launch_profile_args(["bat", "--profile="]), None);
     }
 }
