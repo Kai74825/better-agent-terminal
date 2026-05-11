@@ -11,8 +11,6 @@ use serde::Serialize;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
-const TAURI_DEV_RENDERER_URL: &str = "http://127.0.0.1:5173";
-
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct OpenNewInstanceResult {
     #[serde(rename = "alreadyOpen")]
@@ -49,20 +47,7 @@ fn active_profiles_to_restore(
 }
 
 pub(crate) fn renderer_url(path: &str) -> WebviewUrl {
-    #[cfg(dev)]
-    {
-        let suffix = path.strip_prefix("index.html").unwrap_or(path);
-        let href = if suffix.is_empty() {
-            TAURI_DEV_RENDERER_URL.to_string()
-        } else {
-            format!("{TAURI_DEV_RENDERER_URL}/{suffix}")
-        };
-        WebviewUrl::External(href.parse().expect("static Tauri dev URL must parse"))
-    }
-    #[cfg(not(dev))]
-    {
-        WebviewUrl::App(path.into())
-    }
+    WebviewUrl::App(path.into())
 }
 
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
@@ -324,25 +309,13 @@ mod tests {
     }
 
     #[test]
-    fn renderer_url_uses_dev_server_under_dev_cfg() {
+    fn renderer_url_uses_app_url_for_dynamic_windows() {
         let url = renderer_url("index.html?detached=w1");
-        #[cfg(dev)]
-        {
-            match url {
-                WebviewUrl::External(url) => {
-                    assert_eq!(url.as_str(), "http://127.0.0.1:5173/?detached=w1")
-                }
-                other => panic!("expected external dev URL, got {other:?}"),
+        match url {
+            WebviewUrl::App(path) => {
+                assert_eq!(path.to_string_lossy(), "index.html?detached=w1")
             }
-        }
-        #[cfg(not(dev))]
-        {
-            match url {
-                WebviewUrl::App(path) => {
-                    assert_eq!(path.to_string_lossy(), "index.html?detached=w1")
-                }
-                other => panic!("expected bundled app URL, got {other:?}"),
-            }
+            other => panic!("expected Tauri app URL, got {other:?}"),
         }
     }
 }
