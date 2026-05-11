@@ -185,6 +185,20 @@ fn normalize_index(mut index: ProfileIndex) -> ProfileIndex {
     index
 }
 
+fn activate_profile_in_index(index: &mut ProfileIndex, profile_id: &str) -> bool {
+    if !index
+        .profiles
+        .iter()
+        .any(|profile| profile.id == profile_id)
+    {
+        return false;
+    }
+    if !index.active_profile_ids.iter().any(|id| id == profile_id) {
+        index.active_profile_ids.push(profile_id.to_string());
+    }
+    true
+}
+
 fn read_token_store(dir: &Path) -> RemoteTokenStore {
     let path = dir.join(TOKEN_FILE);
     let Ok(raw) = fs::read_to_string(path) else {
@@ -613,15 +627,21 @@ pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -
         );
     }
     let mut index = index;
-    if index
-        .profiles
-        .iter()
-        .any(|profile| profile.id == profile_id)
-    {
-        index.active_profile_ids = vec![profile_id];
+    if activate_profile_in_index(&mut index, &profile_id) {
         let _ = write_index_at(&dir, index);
     }
     snapshot
+}
+
+pub fn activate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
+    let Some(dir) = profiles_dir(app) else {
+        return false;
+    };
+    let mut index = read_index_at(&dir);
+    if !activate_profile_in_index(&mut index, profile_id) {
+        return false;
+    }
+    write_index_at(&dir, index).is_ok()
 }
 
 #[tauri::command]
@@ -742,18 +762,7 @@ pub fn profile_duplicate(
 
 #[tauri::command]
 pub fn profile_activate(app: AppHandle, profile_id: String) {
-    let Some(dir) = profiles_dir(&app) else {
-        return;
-    };
-    let mut index = read_index_at(&dir);
-    if index
-        .profiles
-        .iter()
-        .any(|profile| profile.id == profile_id)
-    {
-        index.active_profile_ids = vec![profile_id];
-        let _ = write_index_at(&dir, index);
-    }
+    let _ = activate_profile_id(&app, &profile_id);
 }
 
 #[tauri::command]
@@ -841,6 +850,39 @@ mod tests {
             .iter()
             .any(|profile| profile.id == entry.id));
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn activate_profile_appends_without_dropping_existing_active_profiles() {
+        let mut index = ProfileIndex {
+            profiles: vec![
+                default_entry(),
+                profile_from_options("local-1".into(), "Local 1".into(), None),
+                profile_from_options("local-2".into(), "Local 2".into(), None),
+            ],
+            active_profile_ids: vec![DEFAULT_PROFILE_ID.into(), "local-1".into()],
+            active_profile_id: None,
+        };
+
+        assert!(activate_profile_in_index(&mut index, "local-2"));
+        assert_eq!(
+            index.active_profile_ids,
+            vec![
+                DEFAULT_PROFILE_ID.to_string(),
+                "local-1".into(),
+                "local-2".into()
+            ]
+        );
+        assert!(activate_profile_in_index(&mut index, "local-2"));
+        assert_eq!(
+            index.active_profile_ids,
+            vec![
+                DEFAULT_PROFILE_ID.to_string(),
+                "local-1".into(),
+                "local-2".into()
+            ]
+        );
+        assert!(!activate_profile_in_index(&mut index, "missing"));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 // profile restore now live in Rust so profile windows do not need the Node
 // sidecar.
 
+use super::profile as profile_cmd;
 use crate::window_registry;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -125,6 +126,7 @@ pub fn app_focus_next_window(app: AppHandle, window: WebviewWindow) -> bool {
 
 #[tauri::command]
 pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInstanceResult {
+    let _ = profile_cmd::activate_profile_id(&app, &profile_id);
     let live = window_registry::entries_for_profile(&app, &profile_id)
         .into_iter()
         .filter(|entry| app.get_webview_window(&entry.id).is_some())

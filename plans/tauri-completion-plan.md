@@ -120,6 +120,7 @@
 - 2026-05-11：補 Tauri `profile.load` 與 window registry 同步。profile load/fallback 不再只寫舊 `workspaces.json`，也會把 snapshot 第一個 window 載入目前 Tauri window entry，避免 workspace.load 從 registry 讀到切 profile 前的 stale workspace。
 - 2026-05-11：補 Tauri `app.getLaunchProfile` CLI parity。Tauri 現在會讀 `--profile=<id>` / `--profile <id>`，讓外部以 profile 參數啟動時走與 Electron 相同的 profile selection path。
 - 2026-05-11：補 Tauri window focus lifecycle。main 與 Rust 建立的新 webview window 會在 focus 時更新 `WindowRegistryState.last_active_at`，讓 `app.openNewInstance(profileId)` focus 已開啟 profile 時能選最近使用視窗，而不是只靠 workspace save 時間。
+- 2026-05-11：修正 Tauri profile active semantics。`profile.activate` / `profile.load` / `app.openNewInstance` 現在會把 profile 加進 `activeProfileIds` 而不是替換整個 active list，對齊 Electron 多 profile restore 行為。
 
 ## 目前判斷
 
