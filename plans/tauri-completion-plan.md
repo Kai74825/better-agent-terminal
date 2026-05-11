@@ -4,7 +4,7 @@
 
 ## 進度紀錄
 
-- 2026-05-10：開始 M1/P0 補 adapter 斷線。已接上 `fs.resolvePathLinks` 與 `fs.watch/unwatch/onChanged` 的 Tauri 路徑；`fs.resolvePathLinks` 後續已搬到 Rust native，`fs.watch/unwatch` 仍透過 Node sidecar handler，`fs:changed` 事件由 sidecar 經 Rust bridge emit 回 renderer。這讓 ChatMarkdown path link resolution 與 FileTree watcher 不再在 Tauri 下 throw/no-op。
+- 2026-05-10：開始 M1/P0 補 adapter 斷線。已接上 `fs.resolvePathLinks` 與 `fs.watch/unwatch/onChanged` 的 Tauri 路徑；`fs.resolvePathLinks` 與 `fs.watch/unwatch` 後續已搬到 Rust native，`fs:changed` 事件由 Rust watcher emit 回 renderer。這讓 ChatMarkdown path link resolution 與 FileTree watcher 不再在 Tauri 下 throw/no-op。
 - 2026-05-10：接上 `claude.stopTask` 的 Tauri 路徑：renderer `host.claude.stopTask()` → Rust `claude_stop_task` → Node sidecar `claude.stopTask`。Rust command 會把 sidecar `{ok:boolean}` 正規化成 Electron preload 相容的 `boolean`，讓 Agent/Task 停止按鈕不因 host kind 拿到不同回傳 shape。
 - 2026-05-10：把 `setCodexSandboxMode` / `setCodexApprovalPolicy` 從 Tauri permissive `null` shim 拉成明確 Rust command route；目前因 CodexAgentManager 尚未 port 到 sidecar，兩者回 Electron-shaped `false` 表示 unsupported。完整 Codex sandbox/approval 生效仍歸 M3 Codex parity。
 - 2026-05-10：port `settings.clearTerminalHistory` 到 Tauri Rust。行為對齊 Electron：清 `<app-data>/terminal-history` 內所有項目但保留 `.zsh-wrapper`，目錄不存在也回 `true`。SettingsPanel 的清除歷史按鈕在 Tauri 下不再 throw。
@@ -132,6 +132,7 @@
 - 2026-05-11：把 Tauri `openai.getApiKeyStatus/setApiKey/clearApiKey` 從 Node sidecar 搬到 Rust native。OpenAI Direct runtime 仍維持 retired；這三個 command 只作為 Codex auth fallback，優先 OS keyring，並保留 legacy `openai-api-key.bin`、Codex OAuth token、`OPENAI_API_KEY` status fallback；Rust Codex app-server spawn 也會把 configured key 注入 `OPENAI_API_KEY`。
 - 2026-05-11：把 Tauri `agent.listPresets` 搬成 Rust native fixed capability list。New terminal preset picker 不再為了讀固定 preset id 啟動 Node sidecar，且清單明確排除 retired `openai-agent`。
 - 2026-05-11：補 Tauri renderer debug log 持久化。`host.debug.log(...)` 會由 Rust 追加寫入 `<app-data>/logs/debug.log` 並保留 stderr 輸出，讓 packaged Tauri 的 Codex/Claude timing、sidecar metric 與 renderer debug 訊息可被 bug report 回收。
+- 2026-05-11：把 Tauri `fs.watch/unwatch` 從 Node sidecar 搬到 Rust native `notify` watcher，保留原本 500ms debounce、原始 `dirPath` key idempotency、sensitive path guard 與 `fs:changed` event contract；FileTree/Markdown preview watch 不再喚醒 Node sidecar。
 
 ## 目前判斷
 

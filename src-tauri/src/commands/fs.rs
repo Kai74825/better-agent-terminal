@@ -11,18 +11,20 @@
 // crate::path_guard so we can unit-test it independently of Tauri.
 
 use crate::path_guard::is_sensitive_path;
-use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::time::Duration;
-use tauri::Manager;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
-const SIDECAR_TIMEOUT: Duration = Duration::from_secs(15);
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 const RESOLVE_PATH_LINK_LIMIT: usize = 200;
 
 // Directory names we skip in listings/search — these are typically build
@@ -86,6 +88,15 @@ pub struct PathLinkResult {
     pub line: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<u64>,
+}
+
+struct FsWatchEntry {
+    _watcher: RecommendedWatcher,
+}
+
+#[derive(Clone, Default)]
+pub struct FsWatcherState {
+    watchers: Arc<Mutex<HashMap<String, FsWatchEntry>>>,
 }
 
 #[tauri::command]
@@ -703,31 +714,6 @@ fn fs_resolve_path_links_impl(cwd: String, raw_paths: Vec<String>) -> Vec<PathLi
     results
 }
 
-fn call_sidecar_fs(
-    app: &AppHandle,
-    state: &SidecarState,
-    method: &str,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    let cfg = resolve_spawn_config(app)?;
-    let sink = app_handle_emit_sink(app.clone());
-    state.call_with_emit(&cfg, Some(sink), method, params, SIDECAR_TIMEOUT)
-}
-
-async fn call_sidecar_fs_blocking(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    method: &'static str,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || call_sidecar_fs(&app, &state, method, params))
-        .await
-        .map_err(|err| BridgeError {
-            message: format!("{method} worker failed: {err}"),
-        })?
-}
-
 #[tauri::command]
 pub async fn fs_resolve_path_links(cwd: String, raw_paths: Vec<String>) -> Vec<PathLinkResult> {
     tauri::async_runtime::spawn_blocking(move || fs_resolve_path_links_impl(cwd, raw_paths))
@@ -735,22 +721,86 @@ pub async fn fs_resolve_path_links(cwd: String, raw_paths: Vec<String>) -> Vec<P
         .unwrap_or_default()
 }
 
-#[tauri::command]
-pub async fn fs_watch(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    dir_path: String,
-) -> Result<Value, BridgeError> {
-    call_sidecar_fs_blocking(app, state, "fs.watch", json!({ "dirPath": dir_path })).await
+fn remove_watcher(state: &FsWatcherState, dir_path: &str) -> bool {
+    let Ok(mut guard) = state.watchers.lock() else {
+        return false;
+    };
+    guard.remove(dir_path);
+    true
 }
 
 #[tauri::command]
-pub async fn fs_unwatch(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    dir_path: String,
-) -> Result<Value, BridgeError> {
-    call_sidecar_fs_blocking(app, state, "fs.unwatch", json!({ "dirPath": dir_path })).await
+pub fn fs_watch(app: AppHandle, state: State<'_, FsWatcherState>, dir_path: String) -> bool {
+    if dir_path.trim().is_empty() {
+        return false;
+    }
+    if state
+        .watchers
+        .lock()
+        .map(|guard| guard.contains_key(&dir_path))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let abs = match std::path::absolute(&dir_path) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let abs_string = abs.to_string_lossy().to_string();
+    if is_sensitive_path(&abs_string) {
+        return false;
+    }
+    let key = dir_path.clone();
+    let watchers = state.watchers.clone();
+    let debounce = Arc::new(AtomicU64::new(0));
+    let debounce_for_event = debounce.clone();
+    let app_for_event = app.clone();
+    let abs_for_event = abs_string.clone();
+    let key_for_error = key.clone();
+    let mut watcher = match RecommendedWatcher::new(
+        move |event| match event {
+            Ok(_) => {
+                let ticket = debounce_for_event.fetch_add(1, Ordering::SeqCst) + 1;
+                let debounce_check = debounce_for_event.clone();
+                let app_emit = app_for_event.clone();
+                let changed_path = abs_for_event.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(WATCH_DEBOUNCE);
+                    if debounce_check.load(Ordering::SeqCst) == ticket {
+                        let _ = app_emit.emit("fs:changed", changed_path);
+                    }
+                });
+            }
+            Err(_) => {
+                if let Ok(mut guard) = watchers.lock() {
+                    guard.remove(&key_for_error);
+                }
+            }
+        },
+        Config::default(),
+    ) {
+        Ok(watcher) => watcher,
+        Err(_) => return false,
+    };
+    if watcher.watch(&abs, RecursiveMode::Recursive).is_err() {
+        return false;
+    }
+    let entry = FsWatchEntry { _watcher: watcher };
+    if let Ok(mut guard) = state.watchers.lock() {
+        if guard.contains_key(&key) {
+            true
+        } else {
+            guard.insert(key, entry);
+            true
+        }
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+pub fn fs_unwatch(state: State<'_, FsWatcherState>, dir_path: String) -> bool {
+    remove_watcher(&state, &dir_path)
 }
 
 #[cfg(test)]
