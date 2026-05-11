@@ -763,13 +763,19 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
                   <span className={`worker-status-dot worker-status-${proc.status}`} />
                   <span
                     className="worker-process-name"
-                    style={{ color: proc.color, cursor: 'pointer' }}
-                    onClick={() => toggleSpotlight(proc.name)}
-                    title={spotlightService === proc.name ? 'Exit spotlight' : `Spotlight: ${proc.name}`}
+                    style={{ color: proc.color }}
+                    title={proc.name}
                   >
                     {proc.name}
                   </span>
                   <div className="worker-process-actions">
+                    <button
+                      className={`worker-btn worker-btn-focus ${spotlightService === proc.name ? 'active' : ''}`}
+                      onClick={() => toggleSpotlight(proc.name)}
+                      title={spotlightService === proc.name ? 'Show all logs' : `Focus log: ${proc.name}`}
+                    >
+                      {spotlightService === proc.name ? '◉' : '◎'}
+                    </button>
                     <button
                       className={`worker-btn worker-btn-log ${isVisible ? 'active' : ''}`}
                       onClick={() => toggleLogVisible(proc.name)}
