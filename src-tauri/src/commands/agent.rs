@@ -1,35 +1,34 @@
-// agent.* — single read-only method (listPresets) forwarded to the sidecar.
-//
-// Returns an empty list until presets are wired in the sidecar.
+// agent.* — read-only host capability metadata.
 
-use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
-use serde_json::Value;
-use std::time::Duration;
-use tauri::{AppHandle, State};
+use serde_json::{json, Value};
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
-
-fn call(app: &AppHandle, state: &SidecarState) -> Result<Value, BridgeError> {
-    let cfg = resolve_spawn_config(app)?;
-    let sink = app_handle_emit_sink(app.clone());
-    state.call_with_emit(
-        &cfg,
-        Some(sink),
-        "agent.listPresets",
-        Value::Null,
-        DEFAULT_TIMEOUT,
-    )
-}
+const AGENT_PRESET_IDS: &[&str] = &[
+    "claude-code",
+    "claude-code-v2",
+    "claude-code-worktree",
+    "claude-cli",
+    "claude-cli-worktree",
+    "codex-agent",
+    "codex-agent-worktree",
+    "codex-cli",
+    "none",
+];
 
 #[tauri::command]
-pub async fn agent_list_presets(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || call(&app, &state))
-        .await
-        .map_err(|err| BridgeError {
-            message: format!("agent.listPresets worker failed: {err}"),
-        })?
+pub async fn agent_list_presets() -> Value {
+    json!(AGENT_PRESET_IDS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_list_matches_supported_runtime_ids() {
+        assert!(AGENT_PRESET_IDS.contains(&"claude-code"));
+        assert!(AGENT_PRESET_IDS.contains(&"claude-code-v2"));
+        assert!(AGENT_PRESET_IDS.contains(&"codex-agent"));
+        assert!(AGENT_PRESET_IDS.contains(&"codex-agent-worktree"));
+        assert!(!AGENT_PRESET_IDS.contains(&"openai-agent"));
+    }
 }

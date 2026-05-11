@@ -129,6 +129,7 @@
 - 2026-05-11：對齊 sidecar profile bridge 的 active profile semantics。`profile.load` / `profile.activate` 不再把 `activeProfileIds` 替換成單一 profile，而是 append 並去重，讓 remote server 透過 sidecar 查 profile list/active ids 時維持多 profile restore parity。
 - 2026-05-11：接上 Tauri agent completion notifications。`claude.startSession/resumeSession` 會登記 session 的 cwd/window/profile/agentKind；Rust event hub 收到 `claude:turn-end completed` 時會寫入既有 `notification:update` store，讓 Claude/Codex 完成通知不再只是空 API。
 - 2026-05-11：把 Tauri `openai.getApiKeyStatus/setApiKey/clearApiKey` 從 Node sidecar 搬到 Rust native。OpenAI Direct runtime 仍維持 retired；這三個 command 只作為 Codex auth fallback，優先 OS keyring，並保留 legacy `openai-api-key.bin`、Codex OAuth token、`OPENAI_API_KEY` status fallback；Rust Codex app-server spawn 也會把 configured key 注入 `OPENAI_API_KEY`。
+- 2026-05-11：把 Tauri `agent.listPresets` 搬成 Rust native fixed capability list。New terminal preset picker 不再為了讀固定 preset id 啟動 Node sidecar，且清單明確排除 retired `openai-agent`。
 
 ## 目前判斷
 
