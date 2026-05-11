@@ -40,6 +40,10 @@ export function targetOpenAICodexPackage(platform, arch) {
   return `codex-${normalizePlatform(platform)}-${normalizeArch(arch)}`
 }
 
+function isOpenAICodexPlatformPackage(name) {
+  return /^codex-(darwin|linux|win32)-/.test(name)
+}
+
 async function pruneScopedFamily(scopeRoot, shouldRemove) {
   let entries
   try {
@@ -74,7 +78,7 @@ export async function pruneNodeSidecarModules({
   )))
 
   removed.push(...await pruneScopedFamily(join(root, '@openai'), (name) => (
-    name.startsWith('codex-') && name !== openaiTarget
+    isOpenAICodexPlatformPackage(name) && name !== openaiTarget
   )))
 
   return removed

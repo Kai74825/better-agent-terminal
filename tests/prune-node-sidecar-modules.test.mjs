@@ -26,6 +26,8 @@ try {
   await makeDir(join(root, '@anthropic-ai', 'claude-agent-sdk-darwin-arm64'))
   await makeDir(join(root, '@anthropic-ai', 'claude-agent-sdk-darwin-x64'))
   await makeDir(join(root, '@anthropic-ai', 'claude-agent-sdk-win32-x64'))
+  await makeDir(join(root, '@openai', 'codex'))
+  await makeDir(join(root, '@openai', 'codex-sdk'))
   await makeDir(join(root, '@openai', 'codex-darwin-arm64'))
   await makeDir(join(root, '@openai', 'codex-darwin-x64'))
   await makeDir(join(root, '@openai', 'codex-win32-x64'))
@@ -48,7 +50,11 @@ try {
     'claude-agent-sdk-darwin-arm64',
     'sdk',
   ])
-  assert.deepEqual(await list(join(root, '@openai')), ['codex-darwin-arm64'])
+  assert.deepEqual(await list(join(root, '@openai')), [
+    'codex',
+    'codex-darwin-arm64',
+    'codex-sdk',
+  ])
 
   console.log('prune-node-sidecar-modules: passed')
 } finally {
