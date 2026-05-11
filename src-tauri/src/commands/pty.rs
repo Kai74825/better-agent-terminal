@@ -19,10 +19,11 @@ use crate::commands::settings::resolve_shell_path;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -143,7 +144,113 @@ const TARGET_OS: &str = "unix";
 #[cfg(target_os = "windows")]
 const TARGET_OS: &str = "windows";
 
-fn build_command(opts: &CreatePtyOptions) -> CommandBuilder {
+fn hash_history_key(id: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:012x}")
+}
+
+fn sanitize_history_key(raw: &str) -> String {
+    let safe = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .chars()
+        .take(80)
+        .collect::<String>();
+    if safe.is_empty() {
+        "terminal".into()
+    } else {
+        safe
+    }
+}
+
+fn history_file_name(opts: &CreatePtyOptions) -> String {
+    let key = opts
+        .history_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+        .map(sanitize_history_key)
+        .unwrap_or_else(|| hash_history_key(&opts.id));
+    format!("{key}_history")
+}
+
+fn is_zsh_shell(shell: &str) -> bool {
+    Path::new(shell)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(shell)
+        .contains("zsh")
+}
+
+fn source_zsh_file(file: &str) -> String {
+    format!("[ -f \"${{_BAT_ZDOTDIR:-$HOME}}/{file}\" ] && source \"${{_BAT_ZDOTDIR:-$HOME}}/{file}\"\n")
+}
+
+fn ensure_zsh_wrapper(wrapper_dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(wrapper_dir)?;
+    fs::write(wrapper_dir.join(".zshenv"), source_zsh_file(".zshenv"))?;
+    fs::write(wrapper_dir.join(".zprofile"), source_zsh_file(".zprofile"))?;
+    fs::write(
+        wrapper_dir.join(".zshrc"),
+        [
+            source_zsh_file(".zshrc").trim_end().to_string(),
+            "export HISTFILE=\"$_BAT_HISTFILE\"".into(),
+            "setopt INC_APPEND_HISTORY".into(),
+            "ZDOTDIR=\"${_BAT_ZDOTDIR:-$HOME}\"".into(),
+            String::new(),
+        ]
+        .join("\n"),
+    )?;
+    fs::write(wrapper_dir.join(".zlogin"), source_zsh_file(".zlogin"))?;
+    Ok(())
+}
+
+fn configure_per_terminal_history(
+    cmd: &mut CommandBuilder,
+    shell: &str,
+    opts: &CreatePtyOptions,
+    app_data_dir: Option<&Path>,
+) {
+    if opts.per_terminal_history != Some(true) {
+        return;
+    }
+    let Some(app_data_dir) = app_data_dir else {
+        return;
+    };
+    let history_dir = app_data_dir.join("terminal-history");
+    if fs::create_dir_all(&history_dir).is_err() {
+        return;
+    }
+    let hist_file = history_dir.join(history_file_name(opts));
+    let hist_file_text = hist_file.to_string_lossy().to_string();
+    cmd.env("HISTFILE", &hist_file_text);
+
+    if is_zsh_shell(shell) {
+        let wrapper_dir = history_dir.join(".zsh-wrapper");
+        if ensure_zsh_wrapper(&wrapper_dir).is_ok() {
+            let original_zdotdir = std::env::var("ZDOTDIR")
+                .ok()
+                .or_else(|| std::env::var("HOME").ok())
+                .unwrap_or_default();
+            cmd.env("ZDOTDIR", wrapper_dir.to_string_lossy().as_ref());
+            cmd.env("_BAT_ZDOTDIR", original_zdotdir);
+            cmd.env("_BAT_HISTFILE", hist_file_text);
+        }
+    }
+}
+
+fn build_command(opts: &CreatePtyOptions, app_data_dir: Option<&Path>) -> CommandBuilder {
     let exists = |s: &str| Path::new(s).exists();
     let shell = select_shell(opts.shell.as_deref(), TARGET_OS, &exists);
     let mut cmd = CommandBuilder::new(&shell);
@@ -158,6 +265,7 @@ fn build_command(opts: &CreatePtyOptions) -> CommandBuilder {
             cmd.env(k, v);
         }
     }
+    configure_per_terminal_history(&mut cmd, &shell, opts, app_data_dir);
     cmd
 }
 
@@ -192,7 +300,8 @@ fn start_pty_session(
         .map_err(|e| CommandError {
             message: e.to_string(),
         })?;
-    let cmd = build_command(&options);
+    let app_data_dir = app.path().app_data_dir().ok();
+    let cmd = build_command(&options, app_data_dir.as_deref());
     let child = pair.slave.spawn_command(cmd).map_err(|e| CommandError {
         message: e.to_string(),
     })?;
@@ -451,5 +560,55 @@ mod tests {
         // powershell.exe (matches settings::resolve_shell_path).
         let win = select_shell(None, "windows", &none);
         assert_eq!(win, "powershell.exe");
+    }
+
+    #[test]
+    fn history_file_name_prefers_sanitized_history_key() {
+        let opts = CreatePtyOptions {
+            id: "term-1".into(),
+            cwd: ".".into(),
+            r#type: "terminal".into(),
+            shell: None,
+            agent_preset: None,
+            custom_env: None,
+            per_terminal_history: Some(true),
+            history_key: Some("workspace:one/term".into()),
+        };
+        assert_eq!(history_file_name(&opts), "workspace_one_term_history");
+    }
+
+    #[test]
+    fn history_file_name_hashes_id_without_key() {
+        let opts = CreatePtyOptions {
+            id: "term-1".into(),
+            cwd: ".".into(),
+            r#type: "terminal".into(),
+            shell: None,
+            agent_preset: None,
+            custom_env: None,
+            per_terminal_history: Some(true),
+            history_key: None,
+        };
+        assert!(history_file_name(&opts).ends_with("_history"));
+        assert_ne!(history_file_name(&opts), "term-1_history");
+    }
+
+    #[test]
+    fn zsh_wrapper_files_match_electron_shape() {
+        let root = std::env::temp_dir().join(format!(
+            "bat-zsh-wrapper-test-{}-{}",
+            std::process::id(),
+            hash_history_key("wrapper")
+        ));
+        let _ = fs::remove_dir_all(&root);
+        ensure_zsh_wrapper(&root).unwrap();
+        let zshrc = fs::read_to_string(root.join(".zshrc")).unwrap();
+        assert!(zshrc.contains("source \"${_BAT_ZDOTDIR:-$HOME}/.zshrc\""));
+        assert!(zshrc.contains("export HISTFILE=\"$_BAT_HISTFILE\""));
+        assert!(zshrc.contains("setopt INC_APPEND_HISTORY"));
+        assert!(root.join(".zshenv").exists());
+        assert!(root.join(".zprofile").exists());
+        assert!(root.join(".zlogin").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }
