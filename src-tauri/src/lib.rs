@@ -44,6 +44,13 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 app_cmd::attach_window_lifecycle(&window);
             }
+            if let Ok(token) = std::env::var("BAT_TAURI_DYNAMIC_WINDOW_SMOKE_TOKEN") {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                    app_cmd::app_smoke_open_new_window(handle, token);
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

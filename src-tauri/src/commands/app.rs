@@ -107,6 +107,21 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     .map_err(|err| err.to_string())
 }
 
+pub fn app_smoke_open_new_window(app: AppHandle, token: String) {
+    let entry = window_registry::create_empty_entry_for_profile(&app, "default");
+    let id = entry.id;
+    log_tauri(
+        &app,
+        &format!("[window-smoke:{token}] requested label={id}"),
+    );
+    if let Err(error) = build_window(&app, &id) {
+        log_tauri(
+            &app,
+            &format!("[window-smoke:{token}] queue-failed label={id} error={error}"),
+        );
+    }
+}
+
 fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
