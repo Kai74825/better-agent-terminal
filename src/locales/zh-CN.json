@@ -124,6 +124,8 @@
     "statuslineToggleSeparator": "切换此项目后方的分隔符",
     "statuslineCustomColor": "自定义颜色",
     "statuslineCurrentTemplate": "当前的模板字符串",
+    "diagnostics": "诊断",
+    "openLogsFolder": "打开 Logs 文件夹",
     "environmentVariables": "环境变量",
     "globalEnvVarsHint": "应用至所有工作区的全局环境变量。工作区专属的环境变量（⚙ 按钮）会覆盖这些设置。",
     "remoteAccess": "远程访问",

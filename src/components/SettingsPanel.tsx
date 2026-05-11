@@ -115,6 +115,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const openExternal = useCallback((url: string) => {
     Promise.resolve(host.shell.openExternal(url)).catch(() => window.open(url))
   }, [])
+  const handleOpenLogsFolder = useCallback(() => {
+    Promise.resolve(host.debug.openLogsFolder()).catch(error => {
+      host.debug.log?.('[SettingsPanel] Failed to open logs folder:', String(error))
+    })
+  }, [])
 
   useEffect(() => {
     return settingsStore.subscribe(() => {
@@ -1196,6 +1201,13 @@ Reference: https://github.com/ind-igo/cx`
                     </>
                   )}
                 </div>
+              </div>
+
+              <div className="settings-section">
+                <h3>{t('settings.diagnostics')}</h3>
+                <button className="statusline-template-btn" style={{ fontSize: '12px' }} onClick={handleOpenLogsFolder}>
+                  {t('settings.openLogsFolder')}
+                </button>
               </div>
 
               <div className="settings-section">

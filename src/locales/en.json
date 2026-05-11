@@ -129,6 +129,8 @@
     "statuslineToggleSeparator": "Toggle separator after this item",
     "statuslineCustomColor": "Custom color",
     "statuslineCurrentTemplate": "Current template string",
+    "diagnostics": "Diagnostics",
+    "openLogsFolder": "Open Logs Folder",
     "environmentVariables": "Environment Variables",
     "globalEnvVarsHint": "Global environment variables applied to ALL workspaces. Workspace-specific variables (\u2699 button) will override these.",
     "remoteAccess": "Remote Access",

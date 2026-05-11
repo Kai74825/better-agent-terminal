@@ -129,6 +129,8 @@
     "statuslineToggleSeparator": "切換此項目後方的分隔符號",
     "statuslineCustomColor": "自訂顏色",
     "statuslineCurrentTemplate": "目前的範本字串",
+    "diagnostics": "診斷",
+    "openLogsFolder": "開啟 Logs 資料夾",
     "environmentVariables": "環境變數",
     "globalEnvVarsHint": "套用至所有工作區的全域環境變數。工作區專屬的環境變數（⚙ 按鈕）會覆蓋這些設定。",
     "remoteAccess": "遠端存取",
