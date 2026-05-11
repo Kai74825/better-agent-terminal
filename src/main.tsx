@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import './i18n'
 import App from './App'
-import { host, installTauriShim } from './host-api'
+import { getHostKind, host, installTauriShim } from './host-api'
 
 // Under Tauri the Electron preload doesn't run, so window.batAppAPI is
 // missing. The shim installs a permissive stub keyed off the host adapter
@@ -26,6 +26,7 @@ import './styles/skills-panel.css'
 const dlog = (...args: unknown[]) => host.debug.log(...args)
 const t0 = (window as unknown as { __t0?: number }).__t0 || Date.now()
 dlog(`[startup] ── renderer ──────────────────────────────`)
+dlog(`[startup] host kind: ${getHostKind()}`)
 dlog(`[startup] main.tsx top-level: +${Date.now() - t0}ms from HTML <script>`)
 
 // Surface unhandled rejections with their actual contents. Tauri invoke
