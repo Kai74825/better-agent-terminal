@@ -86,6 +86,7 @@ const batAppAPI = {
     getWindowIndex: () => ipcRenderer.invoke('app:get-window-index') as Promise<number>,
     newWindow: () => ipcRenderer.invoke('app:new-window') as Promise<string>,
     focusNextWindow: () => ipcRenderer.invoke('app:focus-next-window') as Promise<boolean>,
+    restoreActiveProfiles: (_currentProfileId?: string | null) => Promise.resolve([] as string[]),
     setDockBadge: (count: number) => ipcRenderer.invoke('app:set-dock-badge', count),
   },
   update: {

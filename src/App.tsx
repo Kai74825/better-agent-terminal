@@ -488,6 +488,15 @@ export default function App() {
         const winId = await host.app.getWindowId()
         if (winId) workspaceStore.setWindowId(winId)
 
+        if (isTauri() && !launchProfileId) {
+          const currentProfileId = (await host.app.getWindowProfile()) || active?.id || profileId || null
+          const tRestore = performance.now()
+          const restored = await host.app.restoreActiveProfiles(currentProfileId)
+          if (restored.length > 0) {
+            dlog(`[init] app.restoreActiveProfiles: ${(performance.now() - tRestore).toFixed(0)}ms (${restored.length} windows)`)
+          }
+        }
+
         const tLoad = performance.now()
         // Load settings first (lightweight, no re-render), then workspaces (triggers heavy re-render)
         await settingsStore.load()

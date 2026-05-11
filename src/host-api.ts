@@ -515,6 +515,8 @@ function createTauriHost(): BatAppAPI {
           'app_open_new_instance',
           { profileId },
         ),
+      restoreActiveProfiles: (currentProfileId?: string | null) =>
+        getInvoke()<string[]>('app_restore_active_profiles', { currentProfileId }),
       setDockBadge: (count: number) => getInvoke()<void>('app_set_dock_badge', { count }),
     },
     github: {

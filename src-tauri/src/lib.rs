@@ -98,6 +98,7 @@ pub fn run() {
             app_cmd::app_new_window,
             app_cmd::app_focus_next_window,
             app_cmd::app_open_new_instance,
+            app_cmd::app_restore_active_profiles,
             app_cmd::app_set_dock_badge,
             notification_cmd::notification_list,
             notification_cmd::notification_mark_read,

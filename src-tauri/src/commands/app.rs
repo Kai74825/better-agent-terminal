@@ -8,6 +8,7 @@
 use super::profile as profile_cmd;
 use crate::window_registry;
 use serde::Serialize;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -18,6 +19,31 @@ pub struct OpenNewInstanceResult {
     pub window_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+static ACTIVE_PROFILE_RESTORE_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
+
+fn active_profile_restore_done() -> &'static Mutex<bool> {
+    ACTIVE_PROFILE_RESTORE_DONE.get_or_init(|| Mutex::new(false))
+}
+
+fn active_profiles_to_restore(
+    active_profile_ids: &[String],
+    current_profile_id: Option<&str>,
+) -> Vec<String> {
+    let mut seen = Vec::<String>::new();
+    for profile_id in active_profile_ids {
+        if profile_id.trim().is_empty() {
+            continue;
+        }
+        if current_profile_id == Some(profile_id.as_str()) {
+            continue;
+        }
+        if !seen.iter().any(|seen_id| seen_id == profile_id) {
+            seen.push(profile_id.clone());
+        }
+    }
+    seen
 }
 
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
@@ -184,6 +210,29 @@ pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInsta
     }
 }
 
+#[tauri::command]
+pub fn app_restore_active_profiles(
+    app: AppHandle,
+    current_profile_id: Option<String>,
+) -> Vec<String> {
+    {
+        let mut done = active_profile_restore_done().lock().unwrap();
+        if *done {
+            return Vec::new();
+        }
+        *done = true;
+    }
+
+    let active_ids = profile_cmd::profile_get_active_ids(app.clone());
+    let targets = active_profiles_to_restore(&active_ids, current_profile_id.as_deref());
+    let mut restored = Vec::new();
+    for profile_id in targets {
+        let result = app_open_new_instance(app.clone(), profile_id);
+        restored.extend(result.window_ids);
+    }
+    restored
+}
+
 fn badge_count_value(count: i64) -> Option<i64> {
     if count > 0 {
         Some(count)
@@ -235,5 +284,24 @@ mod tests {
             Some("local-2".into())
         );
         assert_eq!(parse_launch_profile_args(["bat", "--profile="]), None);
+    }
+
+    #[test]
+    fn active_profiles_restore_skips_current_and_duplicates() {
+        let ids = vec![
+            "default".to_string(),
+            "work".to_string(),
+            "work".to_string(),
+            "".to_string(),
+            "remote".to_string(),
+        ];
+        assert_eq!(
+            active_profiles_to_restore(&ids, Some("default")),
+            vec!["work".to_string(), "remote".to_string()]
+        );
+        assert_eq!(
+            active_profiles_to_restore(&ids, Some("work")),
+            vec!["default".to_string(), "remote".to_string()]
+        );
     }
 }
