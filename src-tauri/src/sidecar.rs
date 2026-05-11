@@ -12,10 +12,9 @@
 // invoking the bridge run on the async runtime's worker pool, so blocking
 // for a few hundred ms is fine.
 //
-// The bridge is intentionally "no auto-restart" for MVP. If the sidecar
-// dies, the next call returns an error and a follow-up call respawns. We
-// can add a richer supervisor (backoff, health probes) once we move actual
-// agent SDK calls into the sidecar.
+// If the sidecar dies, the next call detects the exit and respawns it.
+// Repeated fast exits are rate-limited with a short backoff so a broken
+// packaged sidecar cannot create an unbounded spawn loop.
 
 use crate::event_hub::publish_runtime_event;
 use serde::{Deserialize, Serialize};
@@ -34,6 +33,9 @@ use tauri::AppHandle;
 // Node startup error trace (import failure, syntax error, etc.) while
 // keeping memory bounded if something starts spamming stderr.
 const STDERR_TAIL_LIMIT: usize = 100;
+const RESTART_BACKOFF_WINDOW: Duration = Duration::from_secs(30);
+const RESTART_BACKOFF_LIMIT: usize = 3;
+const RESTART_BACKOFF_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Serialize)]
 pub struct BridgeError {
@@ -106,9 +108,55 @@ impl SidecarHandle {
     }
 }
 
+#[derive(Default)]
+struct RestartBackoff {
+    failures: VecDeque<Instant>,
+    blocked_until: Option<Instant>,
+}
+
+impl RestartBackoff {
+    fn prune(&mut self, now: Instant) {
+        while self
+            .failures
+            .front()
+            .map(|t| now.duration_since(*t) > RESTART_BACKOFF_WINDOW)
+            .unwrap_or(false)
+        {
+            self.failures.pop_front();
+        }
+    }
+
+    fn remaining_block(&mut self, now: Instant) -> Option<Duration> {
+        match self.blocked_until {
+            Some(until) if until > now => Some(until.duration_since(now)),
+            Some(_) => {
+                self.blocked_until = None;
+                None
+            }
+            None => None,
+        }
+    }
+
+    fn record_failure(&mut self, now: Instant) {
+        self.prune(now);
+        self.failures.push_back(now);
+        if self.failures.len() >= RESTART_BACKOFF_LIMIT {
+            self.failures.clear();
+            self.blocked_until = Some(now + RESTART_BACKOFF_DURATION);
+        }
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.failures.clear();
+        self.blocked_until = None;
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct SidecarState {
     inner: Arc<Mutex<Option<Arc<SidecarHandle>>>>,
+    restart_backoff: Arc<Mutex<RestartBackoff>>,
 }
 
 // Public spawn config. Passed in from the Tauri-side resolver so tests can
@@ -147,6 +195,7 @@ impl SidecarState {
                     // Exited. Fall through to respawn.
                     drop(child_guard);
                     *guard = None;
+                    self.record_restart_failure();
                 }
                 Ok(None) => {
                     // Still alive — return existing handle.
@@ -156,13 +205,42 @@ impl SidecarState {
                 Err(_) => {
                     drop(child_guard);
                     *guard = None;
+                    self.record_restart_failure();
                 }
             }
         }
-        let handle = spawn_sidecar(cfg, emit)?;
+        if let Some(remaining) = self.restart_backoff_remaining() {
+            return Err(BridgeError {
+                message: format!(
+                    "sidecar: restart backoff active for {}ms after repeated exits",
+                    remaining.as_millis()
+                ),
+            });
+        }
+        let handle = match spawn_sidecar(cfg, emit) {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.record_restart_failure();
+                return Err(err);
+            }
+        };
         let arc = Arc::new(handle);
         *guard = Some(Arc::clone(&arc));
         Ok(arc)
+    }
+
+    fn restart_backoff_remaining(&self) -> Option<Duration> {
+        self.restart_backoff
+            .lock()
+            .expect("restart backoff lock")
+            .remaining_block(Instant::now())
+    }
+
+    fn record_restart_failure(&self) {
+        self.restart_backoff
+            .lock()
+            .expect("restart backoff lock")
+            .record_failure(Instant::now());
     }
 
     pub fn call(
@@ -269,6 +347,10 @@ impl SidecarState {
                 let _ = tx.send(Err("sidecar: state reset".to_string()));
             }
         }
+        self.restart_backoff
+            .lock()
+            .expect("restart backoff lock")
+            .clear();
     }
 }
 
@@ -629,6 +711,28 @@ mod tests {
 
     fn require_node() -> Option<PathBuf> {
         which_node()
+    }
+
+    #[test]
+    fn restart_backoff_blocks_after_repeated_failures() {
+        let now = Instant::now();
+        let mut backoff = RestartBackoff::default();
+        backoff.record_failure(now);
+        backoff.record_failure(now + Duration::from_secs(1));
+        assert!(backoff
+            .remaining_block(now + Duration::from_secs(2))
+            .is_none());
+
+        backoff.record_failure(now + Duration::from_secs(2));
+        let remaining = backoff
+            .remaining_block(now + Duration::from_secs(3))
+            .expect("expected active backoff");
+        assert!(remaining <= RESTART_BACKOFF_DURATION);
+        assert!(remaining > Duration::from_secs(0));
+
+        assert!(backoff
+            .remaining_block(now + Duration::from_secs(8))
+            .is_none());
     }
 
     #[test]
