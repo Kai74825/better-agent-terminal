@@ -367,8 +367,8 @@ function createTauriHost(): BatAppAPI {
       check: () => getInvoke()<unknown>('update_check'),
     },
     debug: {
-      // Renderer logs forward to the Rust side, which currently writes to
-      // stderr. A future commit can route this into <app-data>/logs/.
+      // Renderer logs forward to Rust and are persisted under
+      // <app-data>/logs/debug.log, matching Electron's debuggability.
       log: (...args: unknown[]) => getInvoke()<void>('debug_log', { args }),
       // The renderer reads this synchronously during render.
       isDebugMode: false,

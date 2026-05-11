@@ -131,6 +131,7 @@
 - 2026-05-11：接上 Tauri agent completion notifications。`claude.startSession/resumeSession` 會登記 session 的 cwd/window/profile/agentKind；Rust event hub 收到 `claude:turn-end completed` 時會寫入既有 `notification:update` store，讓 Claude/Codex 完成通知不再只是空 API。
 - 2026-05-11：把 Tauri `openai.getApiKeyStatus/setApiKey/clearApiKey` 從 Node sidecar 搬到 Rust native。OpenAI Direct runtime 仍維持 retired；這三個 command 只作為 Codex auth fallback，優先 OS keyring，並保留 legacy `openai-api-key.bin`、Codex OAuth token、`OPENAI_API_KEY` status fallback；Rust Codex app-server spawn 也會把 configured key 注入 `OPENAI_API_KEY`。
 - 2026-05-11：把 Tauri `agent.listPresets` 搬成 Rust native fixed capability list。New terminal preset picker 不再為了讀固定 preset id 啟動 Node sidecar，且清單明確排除 retired `openai-agent`。
+- 2026-05-11：補 Tauri renderer debug log 持久化。`host.debug.log(...)` 會由 Rust 追加寫入 `<app-data>/logs/debug.log` 並保留 stderr 輸出，讓 packaged Tauri 的 Codex/Claude timing、sidecar metric 與 renderer debug 訊息可被 bug report 回收。
 
 ## 目前判斷
 
