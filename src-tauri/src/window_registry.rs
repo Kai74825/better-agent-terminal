@@ -379,6 +379,31 @@ pub fn get_entry(app: &AppHandle, window_id: &str) -> WindowEntry {
     ensure_entry(app, window_id)
 }
 
+pub fn mark_window_active(app: &AppHandle, window_id: &str) {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    if let Some(entry) = entries.iter_mut().find(|entry| entry.id == window_id) {
+        entry.last_active_at = now_millis();
+    } else {
+        entries.push(WindowEntry {
+            id: window_id.to_string(),
+            profile_id: DEFAULT_PROFILE_ID.into(),
+            snapshot: if window_id == "main" {
+                read_global_workspace_snapshot(app)
+            } else {
+                empty_snapshot()
+            },
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
+            last_active_at: now_millis(),
+        });
+    }
+    persist_entries(app, &entries);
+}
+
 pub fn window_index(app: &AppHandle, window_id: &str) -> u32 {
     let entry = ensure_entry(app, window_id);
     let state = app.state::<WindowRegistryState>();

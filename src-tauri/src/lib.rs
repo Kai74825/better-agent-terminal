@@ -21,6 +21,7 @@ use commands::{
     snippet as snippet_cmd, tunnel as tunnel_cmd, update as update_cmd,
     worker_buffer as worker_buffer_cmd, workspace as workspace_cmd, worktree as worktree_cmd,
 };
+use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
@@ -35,6 +36,12 @@ pub fn run() {
         .manage(codex_app_server::CodexAppServerState::default())
         .manage(window_registry::WindowRegistryState::default())
         .manage(sidecar::SidecarState::new())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                app_cmd::attach_window_lifecycle(&window);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             settings::settings_load,
             settings::settings_save,

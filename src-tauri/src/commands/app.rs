@@ -7,7 +7,7 @@
 
 use crate::window_registry;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct OpenNewInstanceResult {
@@ -21,16 +21,28 @@ pub struct OpenNewInstanceResult {
 
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
+        window_registry::mark_window_active(app, window_id);
         let _ = win.set_focus();
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, window_id, WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, window_id, WebviewUrl::App("index.html".into()))
         .title("Better Agent Terminal")
         .inner_size(1280.0, 800.0)
         .min_inner_size(800.0, 600.0)
         .build()
-        .map(|_| ())
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    attach_window_lifecycle(&window);
+    Ok(())
+}
+
+pub fn attach_window_lifecycle(window: &WebviewWindow) {
+    let app = window.app_handle().clone();
+    let window_id = window.label().to_string();
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Focused(true)) {
+            window_registry::mark_window_active(&app, &window_id);
+        }
+    });
 }
 
 fn parse_launch_profile_args<I, S>(args: I) -> Option<String>
