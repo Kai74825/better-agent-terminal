@@ -503,7 +503,7 @@ function createTauriHost(): BatAppAPI {
       },
     },
     app: {
-      // Single-window MVP: see src-tauri/src/commands/app.rs.
+      // Tauri window/profile shell: see src-tauri/src/commands/app.rs.
       getWindowId: () => getInvoke()<string | null>('app_get_window_id'),
       getWindowIndex: () => getInvoke()<number>('app_get_window_index'),
       getLaunchProfile: () => getInvoke()<string | null>('app_get_launch_profile'),

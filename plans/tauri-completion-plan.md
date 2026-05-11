@@ -113,6 +113,7 @@
 - 2026-05-11：補 Tauri Rust workspace detach/reattach。`workspace.detach` 會建立 transient detached webview window 並用 `?detached=<workspaceId>` 沿用既有 App detached mode；transient entry 不寫入 windows/profile snapshot，關窗或 `workspace.reattach` 會 emit 既有 `workspace:reattached`，主視窗隱藏/恢復 workspace 的 renderer 行為不需改 UI。
 - 2026-05-11：補 Tauri notification 多視窗 parity。`notification.markWindowRead` 改為只標記目前 Tauri window 的 unread entries；`focusLatestUnread/focusEntry` 會聚焦目標 webview window 並 mark read，對齊 Electron notification center 行為。
 - 2026-05-11：補 Tauri `system.onResume` best-effort adapter。Tauri 無 Electron `powerMonitor`，host-api 會用 visibility/focus/online 事件推估 resume，讓 App 的 remote/account refresh hook 不再完全 no-op。
+- 2026-05-11：補 Tauri dock/app badge route。`app.setDockBadge` 不再是 Rust no-op，會對目前 live webview windows 呼叫 Tauri `set_badge_count`；非正數會清除 badge，不支援平台的錯誤維持 best-effort 忽略。
 
 ## 目前判斷
 

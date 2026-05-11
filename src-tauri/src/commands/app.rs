@@ -121,9 +121,20 @@ pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInsta
     }
 }
 
+fn badge_count_value(count: i64) -> Option<i64> {
+    if count > 0 {
+        Some(count)
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
-pub fn app_set_dock_badge(_count: i64) {
-    // Tauri tray badge needs a tray + per-platform icon work.
+pub fn app_set_dock_badge(app: AppHandle, count: i64) {
+    let badge = badge_count_value(count);
+    for window in app.webview_windows().values() {
+        let _ = window.set_badge_count(badge);
+    }
 }
 
 #[cfg(test)]
@@ -144,9 +155,9 @@ mod tests {
     }
 
     #[test]
-    fn set_dock_badge_is_a_noop() {
-        app_set_dock_badge(0);
-        app_set_dock_badge(42);
-        app_set_dock_badge(-1);
+    fn badge_count_value_clears_non_positive_counts() {
+        assert_eq!(badge_count_value(0), None);
+        assert_eq!(badge_count_value(-1), None);
+        assert_eq!(badge_count_value(42), Some(42));
     }
 }
