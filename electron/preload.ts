@@ -465,6 +465,21 @@ const batAppAPI = {
     append: (panelId: string, lines: string) => ipcRenderer.invoke('worker-buffer:append', panelId, lines),
     readAll: (panelId: string) => ipcRenderer.invoke('worker-buffer:readAll', panelId) as Promise<string>,
     clear: (panelId: string) => ipcRenderer.invoke('worker-buffer:clear', panelId),
+    loadProcfile: async (filePath: string) => {
+      const result = await ipcRenderer.invoke('fs:readFile', filePath) as { content?: string; error?: string }
+      const content = result.content || ''
+      const entries: { name: string; command: string }[] = []
+      for (const raw of content.split('\n')) {
+        const line = raw.trim()
+        if (!line || line.startsWith('#')) continue
+        const colonIdx = line.indexOf(':')
+        if (colonIdx <= 0) continue
+        const name = line.slice(0, colonIdx).trim()
+        const command = line.slice(colonIdx + 1).trim()
+        if (name && command) entries.push({ name, command })
+      }
+      return entries
+    },
   },
 }
 

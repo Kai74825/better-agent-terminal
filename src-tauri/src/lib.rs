@@ -216,6 +216,7 @@ pub fn run() {
             worker_buffer_cmd::worker_buffer_append,
             worker_buffer_cmd::worker_buffer_read_all,
             worker_buffer_cmd::worker_buffer_clear,
+            worker_buffer_cmd::worker_procfile_load,
             remote_cmd::remote_start_server,
             remote_cmd::remote_stop_server,
             remote_cmd::remote_server_status,

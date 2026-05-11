@@ -5,7 +5,6 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { settingsStore } from '../stores/settings-store'
-import { parseProcfile } from '../utils/procfile-parser'
 import '@xterm/xterm/css/xterm.css'
 
 const dlog = (...args: unknown[]) => host.debug.log(...args)
@@ -383,9 +382,10 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
 
   // Re-read Procfile and sync process list (add new, remove deleted, update commands)
   const reloadProcfile = useCallback(async () => {
-    const result = await host.fs.readFile(procfilePath)
-    if (result.error || !result.content) return
-    const entries = parseProcfile(result.content)
+    const entries = await host.workerBuffer.loadProcfile(procfilePath).catch(error => {
+      dlog(`[worker] failed to load Procfile ${procfilePath}:`, String(error))
+      return []
+    })
     if (entries.length === 0) return
 
     const autoStartPrefs = loadAutoStartPrefs(procfilePath)
@@ -670,14 +670,11 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       }
 
       // Read Procfile
-      const result = await host.fs.readFile(procfilePath)
+      const entries = await host.workerBuffer.loadProcfile(procfilePath).catch(error => {
+        setError(error instanceof Error ? error.message : String(error))
+        return []
+      })
       if (disposed) return
-      if (result.error || !result.content) {
-        setError(result.error || 'Empty Procfile')
-        return
-      }
-
-      const entries = parseProcfile(result.content)
       if (entries.length === 0) {
         setError('No valid entries found in Procfile')
         return

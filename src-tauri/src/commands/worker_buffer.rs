@@ -7,8 +7,9 @@
 // rough order of magnitude as the Electron implementation but keeps memory
 // from blowing up if a runaway producer never calls clear().
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::sync::{Arc, Mutex};
 use tauri::State;
 
@@ -44,6 +45,38 @@ impl<E: std::fmt::Display> From<E> for CommandError {
             message: e.to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcfileEntry {
+    name: String,
+    command: String,
+}
+
+pub fn parse_procfile_content(content: &str) -> Vec<ProcfileEntry> {
+    let mut entries = Vec::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some(colon_idx) = line.find(':') else {
+            continue;
+        };
+        if colon_idx == 0 {
+            continue;
+        }
+        let name = line[..colon_idx].trim();
+        let command = line[colon_idx + 1..].trim();
+        if !name.is_empty() && !command.is_empty() {
+            entries.push(ProcfileEntry {
+                name: name.to_string(),
+                command: command.to_string(),
+            });
+        }
+    }
+    entries
 }
 
 fn append_lines_to_map(map: &mut HashMap<String, String>, panel_id: &str, lines: &str) {
@@ -132,6 +165,18 @@ pub fn worker_buffer_clear(
     Ok(true)
 }
 
+#[tauri::command]
+pub async fn worker_procfile_load(file_path: String) -> Result<Vec<ProcfileEntry>, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let content = fs::read_to_string(file_path)?;
+        Ok(parse_procfile_content(&content))
+    })
+    .await
+    .map_err(|err| CommandError {
+        message: format!("worker.procfileLoad worker failed: {err}"),
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +195,33 @@ mod tests {
         map.get_mut("p").unwrap().push_str("hello\n");
         map.get_mut("p").unwrap().push_str("world\n");
         assert_eq!(map.get("p").unwrap(), "hello\nworld\n");
+    }
+
+    #[test]
+    fn parse_procfile_content_matches_renderer_rules() {
+        let entries = parse_procfile_content(
+            r#"
+              # comment
+              web: pnpm dev
+              worker: node worker.js:with-arg
+              bad-line
+              empty:
+              : missing-name
+            "#,
+        );
+        assert_eq!(
+            entries,
+            vec![
+                ProcfileEntry {
+                    name: "web".to_string(),
+                    command: "pnpm dev".to_string(),
+                },
+                ProcfileEntry {
+                    name: "worker".to_string(),
+                    command: "node worker.js:with-arg".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]
