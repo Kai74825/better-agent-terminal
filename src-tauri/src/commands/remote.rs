@@ -1,7 +1,6 @@
 // remote.* — cross-machine server / client. Forwards to the Node sidecar.
-//
-// All 8 methods stubbed in the sidecar today; real implementations land
-// in Phase 3 alongside the mDNS + TLS pin work.
+// The sidecar owns the TLS/WebSocket server/client lifecycle so the
+// renderer-facing Tauri commands stay thin and nonblocking.
 
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde_json::{json, Value};

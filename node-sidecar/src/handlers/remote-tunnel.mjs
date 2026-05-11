@@ -3,9 +3,8 @@
 // startServer / stopServer / serverStatus boot the WebSocketServer port
 // from `lib/remote-server-impl.mjs`. connect / disconnect / clientStatus
 // / testConnection / listProfiles drive the singleton RemoteClient from
-// `lib/remote-client-impl.mjs`. listProfiles still depends on the
-// server-side invoke handler bridge (separate slice) — until that lands
-// it surfaces the server's "not yet bridged" error verbatim.
+// `lib/remote-client-impl.mjs`. listProfiles invokes the server-side
+// profile.list bridge and returns the remote's visible profile entries.
 //
 // `tunnel.getConnection` returns the live address list once the server
 // is running, otherwise the same {error, addresses} shape from #45 so
@@ -150,9 +149,7 @@ registerHandler('remote.testConnection', async (params) => {
 })
 
 // remote.listProfiles — connect, invoke 'profile:list', map to the
-// renderer-friendly subset, disconnect. Server-side `profile:list`
-// landing is gated on the invoke handler bridge slice; until then this
-// will surface the bridge's "not yet bridged" error verbatim.
+// renderer-friendly subset, disconnect.
 registerHandler('remote.listProfiles', async (params) => {
   const opts = params && typeof params === 'object' ? params : {}
   const host = typeof opts.host === 'string' ? opts.host : ''

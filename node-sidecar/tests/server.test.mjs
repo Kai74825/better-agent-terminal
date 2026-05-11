@@ -5214,20 +5214,17 @@ async function inProcess() {
         assert.equal(wrongTokenReply.result.ok, false)
       }
 
-      // (l) listProfiles through dispatch — there's no sidecar
-      // `profile.list` handler yet (profiles live in Tauri Rust + the
-      // Electron build's profile-manager), so the bridge dispatches
-      // and surfaces JSON-RPC -32601 method-not-found in the {error}
-      // field. SettingsPanel branches on `'error' in result` so the
-      // shape contract holds; once a sidecar profile.list lands the
-      // assertion below should be flipped to expect {profiles, ...}.
+      // (l) listProfiles through dispatch — remote server invokes
+      // sidecar profile.list and returns renderer-friendly profile rows.
       {
         const lpReply = await dispatch({
           jsonrpc: '2.0', id: 9120, method: 'remote.listProfiles',
           params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: started.fingerprint },
         })
-        assert.equal(typeof lpReply.result.error, 'string')
-        assert.match(lpReply.result.error, /method not found|not exposed/i)
+        assert.deepEqual(lpReply.result, {
+          profiles: [{ id: 'default', name: 'Default', type: 'local' }],
+          activeProfileIds: ['default'],
+        })
       }
     } finally {
       restoreLogger()

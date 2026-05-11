@@ -103,6 +103,7 @@
 - 2026-05-11：強化 Rust Codex resume history transcript lookup。`~/.codex/sessions/**/*.jsonl` 搜尋現在優先比對 `session_meta.payload.id`，只有沒有 session_meta id 的舊格式才用 path contains fallback，避免路徑誤命中 stale transcript；Rust test 已覆蓋 meta 優先行為。
 - 2026-05-11：補 Tauri native drop DOM duplicate guard。Sidebar / Claude / Codex 的 DOM drop handler 在 Tauri + OS file drop 時會讓 native drop listener 負責處理，避免同一次 drop 被 DOM fallback 再處理一次並誤報「host needs to expose paths」。
 - 2026-05-11：補 `worktree.merge` 實作。Electron WorktreeManager 與 Tauri sidecar handler 現在都支援保守的 merge / cherry-pick：先要求 host repo clean、切回 source branch，再合併 worktree branch；sidecar test 覆蓋實際 ephemeral git repo merge。
+- 2026-05-11：補 remote profile listing 的 sidecar handler。sidecar 新增 minimal `profile.list/getActiveIds/load/loadSnapshot/activate/deactivate` default-profile surface，讓 remote server 內部 `profile:list` bridge 不再回 method-not-found；`remote.listProfiles` sidecar test 改為期待 default profile。
 
 ## 目前判斷
 
