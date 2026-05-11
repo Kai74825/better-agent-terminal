@@ -133,6 +133,11 @@ function scheduleAgentMetadataRefresh(callback: () => void): () => void {
   return () => window.clearTimeout(timer)
 }
 
+function waitForTauriAgentListeners(): Promise<void> {
+  if (!isTauri()) return Promise.resolve()
+  return new Promise(resolve => window.setTimeout(resolve, 75))
+}
+
 export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose, showUserMsg = true, showAssistantMsg = true, showToolMsg = true, showThinkingMsg = true, isRemoteConnected = false, targetAgent }: Readonly<ClaudeAgentPanelProps>) {
   const { t } = useTranslation()
   // Determine backend/session flavor from agentPreset
@@ -1101,46 +1106,52 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   useEffect(() => {
     const stag = `[Claude:${sessionId.slice(0, 8)}]`
     const dlog = (...args: unknown[]) => host.debug.log(...args)
+    let cancelled = false
     dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
       startedSessions.add(sessionId)
 
-      const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
-      const savedSdkSessionId = terminal?.sdkSessionId
-      const savedModel = normalizeClaudeModelSelection(terminal?.model)
-      const apiVersion = terminal?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
-      const useWorktree = terminal?.agentPreset === 'claude-code-worktree' || !!terminal?.worktreePath
-      const globalSettings = settingsStore.getSettings()
-      dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}" apiVersion=${apiVersion}`)
+      ;(async () => {
+        await waitForTauriAgentListeners()
+        if (cancelled) return
+        const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+        const savedSdkSessionId = terminal?.sdkSessionId
+        const savedModel = normalizeClaudeModelSelection(terminal?.model)
+        const apiVersion = terminal?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
+        const useWorktree = terminal?.agentPreset === 'claude-code-worktree' || !!terminal?.worktreePath
+        const globalSettings = settingsStore.getSettings()
+        dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}" apiVersion=${apiVersion}`)
 
-      // Restore saved model to UI, or use global default
-      const effectiveModel = normalizeClaudeModelSelection(savedModel || globalSettings.defaultClaudeModel)
-      if (effectiveModel) setCurrentModel(effectiveModel)
+        // Restore saved model to UI, or use global default
+        const effectiveModel = normalizeClaudeModelSelection(savedModel || globalSettings.defaultClaudeModel)
+        if (effectiveModel) setCurrentModel(effectiveModel)
 
-      // Use global default effort
-      const effectiveEffort = globalSettings.defaultEffort || 'high'
-      setEffortLevel(effectiveEffort)
+        // Use global default effort
+        const effectiveEffort = globalSettings.defaultEffort || 'high'
+        setEffortLevel(effectiveEffort)
 
-      if (savedSdkSessionId) {
-        dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
-        historyLoadedRef.current = true
-        host.claude.resumeSession(sessionId, savedSdkSessionId, cwd, effectiveModel || savedModel, apiVersion,
-          useWorktree ? true : undefined, terminal?.worktreePath, terminal?.worktreeBranch, terminal?.agentPreset,
-          undefined, undefined, permissionMode, effectiveEffort as EffortLevel)
-      } else {
-        dlog(`${stag} FRESH startSession`)
-        host.claude.startSession(sessionId, {
-          cwd, permissionMode, model: effectiveModel,
-          effort: effectiveEffort as EffortLevel, apiVersion,
-          agentPreset: terminal?.agentPreset,
-          ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
-          ...(useWorktree ? { useWorktree: true, worktreePath: terminal?.worktreePath, worktreeBranch: terminal?.worktreeBranch } : {}),
-          ...(getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow) ? { autoCompactWindow: getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow)! } : {}),
-        })
-      }
+        if (savedSdkSessionId) {
+          dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
+          historyLoadedRef.current = true
+          host.claude.resumeSession(sessionId, savedSdkSessionId, cwd, effectiveModel || savedModel, apiVersion,
+            useWorktree ? true : undefined, terminal?.worktreePath, terminal?.worktreeBranch, terminal?.agentPreset,
+            undefined, undefined, permissionMode, effectiveEffort as EffortLevel)
+        } else {
+          dlog(`${stag} FRESH startSession`)
+          host.claude.startSession(sessionId, {
+            cwd, permissionMode, model: effectiveModel,
+            effort: effectiveEffort as EffortLevel, apiVersion,
+            agentPreset: terminal?.agentPreset,
+            ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
+            ...(useWorktree ? { useWorktree: true, worktreePath: terminal?.worktreePath, worktreeBranch: terminal?.worktreeBranch } : {}),
+            ...(getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow) ? { autoCompactWindow: getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow)! } : {}),
+          })
+        }
+      })()
     }
     return () => {
+      cancelled = true
       // Don't remove from startedSessions on unmount — StrictMode will remount
     }
   }, [sessionId, cwd, isCodexSession, codexSandboxMode, codexApprovalPolicy])

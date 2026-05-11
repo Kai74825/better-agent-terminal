@@ -35,6 +35,11 @@ function scheduleAgentMetadataRefresh(callback: () => void): () => void {
   return () => window.clearTimeout(timer)
 }
 
+function waitForTauriAgentListeners(): Promise<void> {
+  if (!isTauri()) return Promise.resolve()
+  return new Promise(resolve => window.setTimeout(resolve, 75))
+}
+
 function displayNameForPanelModel(model?: string): string {
   const codexModel = CODEX_MODELS.find(m => m.value === model)
   return codexModel?.displayName || displayNameForClaudeSelection(model)
@@ -1105,6 +1110,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       startedSessions.add(sessionId)
 
       ;(async () => {
+        await waitForTauriAgentListeners()
+        if (cancelled) return
         const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
         const savedSdkSessionId = terminal?.sdkSessionId
         const savedModel = terminal?.model
