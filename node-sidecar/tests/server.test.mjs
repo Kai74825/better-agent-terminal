@@ -53,6 +53,53 @@ async function inProcess() {
     else process.env.BAT_SIDECAR_DATA_DIR = savedDataDir
   }
 
+  // profile.* sidecar handlers read the same on-disk profile index/snapshot
+  // shape as Electron/Tauri profile managers. Remote server profile invokes
+  // depend on this; they must not collapse to default/null when data exists.
+  {
+    const saved = process.env.BAT_SIDECAR_DATA_DIR
+    const fakeData = mkdtempSync(join(tmpdir(), 'sidecar-profile-'))
+    process.env.BAT_SIDECAR_DATA_DIR = fakeData
+    try {
+      const profilesDir = join(fakeData, 'profiles')
+      mkdirSync(profilesDir, { recursive: true })
+      writeFileSync(join(profilesDir, 'index.json'), JSON.stringify({
+        profiles: [
+          { id: 'default', name: 'Default', type: 'local', createdAt: 0, updatedAt: 0 },
+          { id: 'dev', name: 'Dev', type: 'local', createdAt: 1, updatedAt: 2 },
+        ],
+        activeProfileIds: ['default'],
+      }))
+      writeFileSync(join(profilesDir, 'dev.json'), JSON.stringify({
+        id: 'dev',
+        name: 'Dev',
+        version: 2,
+        windows: [{
+          workspaces: [{ id: 'w1' }],
+          activeWorkspaceId: 'w1',
+          activeGroup: null,
+          terminals: [],
+          activeTerminalId: null,
+        }],
+      }))
+
+      const listed = await dispatch({ jsonrpc: '2.0', id: 31, method: 'profile.list' })
+      assert.equal(listed.result.profiles.length, 2)
+      assert.equal(listed.result.profiles[1].id, 'dev')
+      const snapshot = await dispatch({ jsonrpc: '2.0', id: 32, method: 'profile.loadSnapshot', params: 'dev' })
+      assert.equal(snapshot.result.version, 2)
+      assert.equal(snapshot.result.windows[0].activeWorkspaceId, 'w1')
+      const loaded = await dispatch({ jsonrpc: '2.0', id: 33, method: 'profile.load', params: 'dev' })
+      assert.equal(loaded.result.id, 'dev')
+      const active = await dispatch({ jsonrpc: '2.0', id: 34, method: 'profile.getActiveIds' })
+      assert.deepEqual(active.result, ['dev'])
+    } finally {
+      if (saved === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
+      else process.env.BAT_SIDECAR_DATA_DIR = saved
+      rmSync(fakeData, { recursive: true, force: true })
+    }
+  }
+
   // Unknown methods produce a -32601 error and preserve the request id.
   const unknown = await dispatch({ jsonrpc: '2.0', id: 7, method: 'no.such.method' })
   assert.equal(unknown.error.code, -32601)
@@ -4952,6 +4999,8 @@ async function inProcess() {
     const tmpRoot = mkdtempSync(join(tmpdir(), 'bat-remote-client-'))
     const dir = join(tmpRoot, 'cfg')
     const server = new RemoteServer(dir)
+    const savedProfileDataDir = process.env.BAT_SIDECAR_DATA_DIR
+    process.env.BAT_SIDECAR_DATA_DIR = tmpRoot
     let started
     try {
       started = await server.start({ port: 0, bindInterface: 'localhost' })
@@ -5228,6 +5277,8 @@ async function inProcess() {
       }
     } finally {
       restoreLogger()
+      if (savedProfileDataDir === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
+      else process.env.BAT_SIDECAR_DATA_DIR = savedProfileDataDir
       if (server.isRunning) await server.stop()
       rmSync(tmpRoot, { recursive: true, force: true })
     }
