@@ -30,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(pty_cmd::PtyState::default())
         .manage(notification_cmd::NotificationState::default())
+        .manage(notification_cmd::AgentNotificationState::default())
         .manage(snippet_cmd::SnippetState::default())
         .manage(worker_buffer_cmd::WorkerBufferState::default())
         .manage(event_hub::RuntimeEventHubState::default())

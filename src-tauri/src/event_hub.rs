@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::commands::notification;
+
 #[derive(Clone, Default)]
 pub struct RuntimeEventHubState {
     next_seq: Arc<AtomicU64>,
@@ -19,7 +21,8 @@ impl RuntimeEventHubState {
         // Keep a monotonic sequence internally so future buffering/replay can
         // be added without changing renderer event payloads.
         let _seq = self.next_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = app.emit(topic, payload);
+        let _ = app.emit(topic, payload.clone());
+        notification::add_agent_completion_from_event(app, topic, &payload);
     }
 }
 

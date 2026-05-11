@@ -127,12 +127,13 @@
 - 2026-05-11：把 Tauri `claude.archiveMessages/loadArchived/clearArchive` 搬到 Rust native filesystem 實作。行為保留 Electron tail paging、sessionId sanitization 與 clear idempotency，Claude/Codex 兩種 panel 的長對話 archive 不再需要 sidecar bridge。
 - 2026-05-11：補 Tauri active profile restore。新增 Rust `app.restoreActiveProfiles` process-once command，啟動時會把 `activeProfileIds` 中除目前視窗 profile 外的 profile 開回來，並透過既有 `app.openNewInstance` focus/create 流程避免重複視窗。
 - 2026-05-11：對齊 sidecar profile bridge 的 active profile semantics。`profile.load` / `profile.activate` 不再把 `activeProfileIds` 替換成單一 profile，而是 append 並去重，讓 remote server 透過 sidecar 查 profile list/active ids 時維持多 profile restore parity。
+- 2026-05-11：接上 Tauri agent completion notifications。`claude.startSession/resumeSession` 會登記 session 的 cwd/window/profile/agentKind；Rust event hub 收到 `claude:turn-end completed` 時會寫入既有 `notification:update` store，讓 Claude/Codex 完成通知不再只是空 API。
 
 ## 目前判斷
 
 Tauri 版已經超過 spike 階段，基礎 host runtime 大多有可用實作：
 
-- Rust native commands 已涵蓋 settings、dialog、fs、PTY、workspace、git/github、snippet、notification、workerBuffer、profile MVP。
+- Rust native commands 已涵蓋 settings、dialog、fs、PTY、workspace、git/github、snippet、notification、workerBuffer、profile / multi-window restore MVP。
 - Node sidecar 已經承接 Claude session/send/history/permission、fs sidecar handlers、remote/tunnel handlers、OpenAI/Worktree 部分能力。
 - Claude `sendMessage` 已走 LiveQuery 類型的 long-lived stream，metadata 也已有 process cache，已經不是每次 UI mount 都重打多個 cold SDK query 的早期狀態。
 

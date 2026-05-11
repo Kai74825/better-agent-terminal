@@ -17,6 +17,7 @@
 
 use crate::account_store;
 use crate::codex_app_server::{should_handle_codex, CodexAppServerState};
+use crate::commands::notification as notification_cmd;
 use crate::event_hub::publish_runtime_event;
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use serde_json::{json, Value};
@@ -24,7 +25,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 // Long-running calls (startSession can boot the agent SDK, sendMessage may
@@ -308,11 +309,18 @@ pub async fn claude_account_list(
 #[tauri::command]
 pub async fn claude_start_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
+    notification_cmd::register_agent_session_from_options(
+        &app,
+        window.label(),
+        &session_id,
+        options.as_ref(),
+    );
     if should_handle_codex(&options) {
         rehydrate_codex_worktree_if_needed(&app, (*state).clone(), &session_id, &options).await;
         let codex = (*codex_state).clone();
@@ -416,6 +424,7 @@ pub async fn claude_stop_session(
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    notification_cmd::unregister_agent_session(&app, &session_id);
     if codex_state.is_owned(&session_id) {
         return Ok(codex_state.stop_session(session_id));
     }
@@ -1185,12 +1194,19 @@ pub async fn claude_rewind_to_prompt(
 #[tauri::command]
 pub async fn claude_resume_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     sdk_session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
+    notification_cmd::register_agent_session_from_options(
+        &app,
+        window.label(),
+        &session_id,
+        options.as_ref(),
+    );
     let should_use_codex = should_handle_codex(&options);
     if should_use_codex || codex_state.is_owned(&session_id) {
         rehydrate_codex_worktree_if_needed(&app, (*state).clone(), &session_id, &options).await;

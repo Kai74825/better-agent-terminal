@@ -1,25 +1,27 @@
 // notification:* — in-memory notification center.
 //
 // The Electron host pumps notifications in from the agent managers
-// (claude/codex/openai). The Tauri MVP doesn't have those wired up
-// yet, so the store starts empty and stays that way until the agent
-// sidecar lands. We still surface the full read API (list,
-// markRead, markAllRead, clear, focusEntry, focusLatestUnread,
-// onUpdate) so the renderer's notification-store.ts can subscribe
-// without crashing during startup.
+// (claude/codex/openai). Tauri keeps the same renderer-facing API and
+// records agent sessions at the command boundary; when the Rust event
+// hub sees a completed `claude:turn-end`, it inserts an entry here.
 //
 // State is process-local on purpose: the Electron impl
 // (electron/notification-center.ts) does the same thing — entries
-// are not persisted across launches. Once agents land we'll have a
-// `notification_add` command (or an internal helper) that the
-// agent sidecar calls.
+// are not persisted across launches.
 
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+use crate::window_registry;
+
 const MAX_ENTRIES: usize = 50;
+static NEXT_NOTIFICATION_ID: AtomicU64 = AtomicU64::new(0);
 
 // Mirror src/stores/notification-store.ts NotificationEntry. The
 // renderer-side interface is the source of truth — bumping fields
@@ -52,12 +54,31 @@ pub struct NotificationState {
     inner: Mutex<Vec<NotificationEntry>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNotificationSession {
+    pub window_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub cwd: String,
+    pub agent_kind: Option<String>,
+}
+
+#[derive(Default)]
+pub struct AgentNotificationState {
+    inner: Mutex<HashMap<String, AgentNotificationSession>>,
+}
+
 impl NotificationState {
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<NotificationEntry>> {
         // Mutex poisoning here would mean a previous handler panicked
         // mid-update; we recover by treating that as "empty store"
         // rather than propagating the poison into every subsequent
         // call. The renderer can re-fetch via list() to resync.
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl AgentNotificationState {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, AgentNotificationSession>> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -192,6 +213,84 @@ pub fn notification_focus_entry(
     Some(FocusResult { id, window_id })
 }
 
+pub fn register_agent_session_from_options(
+    app: &AppHandle,
+    window_id: &str,
+    session_id: &str,
+    options: Option<&Value>,
+) {
+    if session_id.trim().is_empty() {
+        return;
+    }
+    let cwd = effective_notification_cwd(options).unwrap_or_default();
+    if cwd.is_empty() {
+        return;
+    }
+    let profile_id = Some(window_registry::get_entry(app, window_id).profile_id);
+    let agent_kind = options.and_then(agent_kind_from_options);
+    let state = app.state::<AgentNotificationState>();
+    state.lock().insert(
+        session_id.to_string(),
+        AgentNotificationSession {
+            window_id: Some(window_id.to_string()),
+            profile_id,
+            cwd,
+            agent_kind,
+        },
+    );
+}
+
+pub fn unregister_agent_session(app: &AppHandle, session_id: &str) {
+    if let Some(state) = app.try_state::<AgentNotificationState>() {
+        state.lock().remove(session_id);
+    }
+}
+
+pub fn add_agent_completion_from_event(app: &AppHandle, topic: &str, payload: &Value) {
+    if topic != "claude:turn-end" {
+        return;
+    }
+    let Some(session_id) = payload.get("sessionId").and_then(Value::as_str) else {
+        return;
+    };
+    let event_payload = payload.get("payload").unwrap_or(payload);
+    if event_payload.get("reason").and_then(Value::as_str) != Some("completed") {
+        return;
+    }
+    let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
+        return;
+    };
+    let Some(session) = agent_state.lock().get(session_id).cloned() else {
+        return;
+    };
+    let Some(notification_state) = app.try_state::<NotificationState>() else {
+        return;
+    };
+    let result = event_payload
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    add_entry(
+        app,
+        &notification_state,
+        NotificationEntry {
+            id: next_notification_id(),
+            session_id: session_id.to_string(),
+            window_id: session.window_id,
+            profile_id: session.profile_id,
+            workspace_name: workspace_name(&session.cwd),
+            cwd: session.cwd,
+            reason: "completed".into(),
+            result,
+            error: None,
+            timestamp: now_ms(),
+            read: false,
+            agent_kind: session.agent_kind,
+        },
+    );
+}
+
 fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {
     let win = app.get_webview_window(window_id)?;
     let _ = win.show();
@@ -246,6 +345,52 @@ pub fn add_entry(app: &AppHandle, state: &NotificationState, entry: Notification
     let _ = app.emit("notification:update", snapshot);
 }
 
+fn next_notification_id() -> String {
+    let seq = NEXT_NOTIFICATION_ID.fetch_add(1, Ordering::SeqCst) + 1;
+    format!("notif-{}-{seq}", now_ms())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn workspace_name(cwd: &str) -> String {
+    Path::new(cwd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| cwd.to_string())
+}
+
+fn effective_notification_cwd(options: Option<&Value>) -> Option<String> {
+    let options = options?;
+    let cwd = options.get("cwd").and_then(Value::as_str)?;
+    if options.get("useWorktree").and_then(Value::as_bool) == Some(true) {
+        if let Some(worktree_path) = options
+            .get("worktreePath")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+        {
+            return Some(worktree_path.to_string());
+        }
+    }
+    Some(cwd.to_string())
+}
+
+fn agent_kind_from_options(options: &Value) -> Option<String> {
+    match options.get("agentPreset").and_then(Value::as_str) {
+        Some("codex-agent" | "codex-agent-worktree" | "openai-agent") => Some("codex".into()),
+        Some("claude-code" | "claude-code-v2" | "claude-code-worktree") | None => {
+            Some("claude".into())
+        }
+        Some(_) => None,
+    }
+}
+
 pub fn normalize_workspace_key(cwd: &str) -> String {
     let normalized = cwd
         .trim()
@@ -280,6 +425,48 @@ mod tests {
             read,
             agent_kind: None,
         }
+    }
+
+    #[test]
+    fn effective_notification_cwd_prefers_worktree_path() {
+        let options = serde_json::json!({
+            "cwd": "/repo",
+            "useWorktree": true,
+            "worktreePath": "/repo/.bat-worktrees/s-1"
+        });
+        assert_eq!(
+            effective_notification_cwd(Some(&options)).as_deref(),
+            Some("/repo/.bat-worktrees/s-1")
+        );
+        let no_worktree = serde_json::json!({ "cwd": "/repo" });
+        assert_eq!(
+            effective_notification_cwd(Some(&no_worktree)).as_deref(),
+            Some("/repo")
+        );
+    }
+
+    #[test]
+    fn agent_kind_maps_codex_and_claude_presets() {
+        assert_eq!(
+            agent_kind_from_options(&serde_json::json!({ "agentPreset": "codex-agent" }))
+                .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            agent_kind_from_options(&serde_json::json!({ "agentPreset": "claude-code-v2" }))
+                .as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            agent_kind_from_options(&serde_json::json!({ "agentPreset": "unknown" })),
+            None
+        );
+    }
+
+    #[test]
+    fn workspace_name_uses_last_path_component() {
+        assert_eq!(workspace_name("C:/work/repo"), "repo");
+        assert_eq!(workspace_name("/"), "/");
     }
 
     #[test]
