@@ -136,6 +136,7 @@
 - 2026-05-11：補 Tauri `clipboard.onCopyShortcut` renderer adapter。Tauri 以 capture-phase `keydown` 模擬 Electron `app:copy-shortcut`，保留 Ctrl/Cmd+C、排除 Shift 與尊重 `defaultPrevented`，讓 WorkerPanel 等 listener-style copy shortcut 不再是 no-op。
 - 2026-05-11：補 Tauri sidecar crash-loop backoff。Rust sidecar bridge 仍會在 child exit 後自動 respawn，但 30 秒內連續 3 次 spawn/exit failure 會短暫 backoff 5 秒，避免 packaged app 在壞 Node/script 狀態下每次 UI 輪詢都反覆重啟 sidecar。
 - 2026-05-11：補 Tauri sidecar stderr log 持久化。Rust sidecar bridge 的 stderr reader 會把 Node sidecar stderr 追加寫入 `<app-data>/logs/sidecar.log`，同時保留既有 `sidecar:stderr` event 與 stderr tail error message，讓 packaged bug report 可同時取得 renderer debug 與 sidecar log。
+- 2026-05-11：補 Tauri persisted log rotation。`debug.log` 與 `sidecar.log` 透過共用 Rust append helper 寫入，超過 5 MiB 時會輪替成 `debug.prev.log` / `sidecar.prev.log` 後再寫新內容，避免 preview 長跑或 sidecar crash spam 讓 bug-report log 無限制成長。
 
 ## 目前判斷
 

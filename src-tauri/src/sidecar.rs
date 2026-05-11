@@ -17,10 +17,10 @@
 // packaged sidecar cannot create an unbounded spawn loop.
 
 use crate::event_hub::publish_runtime_event;
+use crate::log_file::append_line;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
-use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -111,14 +111,6 @@ fn timestamp_millis() -> u128 {
 
 fn format_sidecar_log_line(line: &str) -> String {
     format!("{} [stderr] {}\n", timestamp_millis(), line)
-}
-
-fn append_sidecar_log_line(path: &Path, line: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())
 }
 
 impl SidecarHandle {
@@ -474,7 +466,7 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
                 sink("sidecar:stderr", &Value::String(line.clone()));
             }
             if let Some(path) = stderr_log_path.as_ref() {
-                let _ = append_sidecar_log_line(path, &format_sidecar_log_line(&line));
+                let _ = append_line(path, &format_sidecar_log_line(&line));
             }
         }
     });
@@ -760,23 +752,6 @@ mod tests {
         assert!(backoff
             .remaining_block(now + Duration::from_secs(8))
             .is_none());
-    }
-
-    #[test]
-    fn appends_sidecar_stderr_log_line_to_file() {
-        let path = std::env::temp_dir().join(format!(
-            "bat-sidecar-log-{}-{}.log",
-            std::process::id(),
-            "append"
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        append_sidecar_log_line(&path, "1 [stderr] first\n").unwrap();
-        append_sidecar_log_line(&path, "2 [stderr] second\n").unwrap();
-
-        let raw = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(raw, "1 [stderr] first\n2 [stderr] second\n");
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]

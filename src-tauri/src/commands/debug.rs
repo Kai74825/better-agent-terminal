@@ -9,10 +9,8 @@
 // command — the adapter reads BAT_DEBUG out of process.env at startup.
 // This file only handles the runtime log call.
 
+use crate::log_file::append_line;
 use serde_json::Value;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
@@ -27,7 +25,7 @@ pub async fn debug_log(app: tauri::AppHandle, args: Vec<Value>) {
         .map(|dir| dir.join("logs").join("debug.log"));
     if let Some(path) = path {
         let line = debug_log_line(&message);
-        let _ = tauri::async_runtime::spawn_blocking(move || append_log_line(&path, &line)).await;
+        let _ = tauri::async_runtime::spawn_blocking(move || append_line(&path, &line)).await;
     }
 }
 
@@ -50,19 +48,10 @@ fn debug_log_line(message: &str) -> String {
     format!("{millis} [renderer] {message}\n")
 }
 
-fn append_log_line(path: &Path, line: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    file.write_all(line.as_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::path::PathBuf;
 
     #[test]
     fn strings_pass_through_untouched() {
@@ -80,23 +69,6 @@ mod tests {
         );
         assert_eq!(format_args(vec![json!([1, 2, 3])]), "[1,2,3]");
         assert_eq!(format_args(vec![json!(null), json!(true)]), "null true");
-    }
-
-    #[test]
-    fn appends_renderer_log_line_to_file() {
-        let path: PathBuf = std::env::temp_dir().join(format!(
-            "bat-debug-log-{}-{}.log",
-            std::process::id(),
-            "append"
-        ));
-        let _ = fs::remove_file(&path);
-
-        append_log_line(&path, "1 [renderer] hello\n").unwrap();
-        append_log_line(&path, "2 [renderer] world\n").unwrap();
-
-        let raw = fs::read_to_string(&path).unwrap();
-        assert_eq!(raw, "1 [renderer] hello\n2 [renderer] world\n");
-        let _ = fs::remove_file(path);
     }
 
     #[test]

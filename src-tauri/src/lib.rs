@@ -9,6 +9,7 @@ mod account_store;
 mod codex_app_server;
 mod commands;
 mod event_hub;
+mod log_file;
 mod path_guard;
 mod sidecar;
 mod window_registry;
