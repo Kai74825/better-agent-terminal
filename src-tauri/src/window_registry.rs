@@ -436,6 +436,49 @@ pub fn save_workspace_json(app: &AppHandle, window_id: &str, data: &str) -> bool
     true
 }
 
+pub fn load_profile_workspace_into_window(
+    app: &AppHandle,
+    window_id: &str,
+    profile_id: &str,
+    workspace: Value,
+) -> bool {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    let mut entry = entries
+        .iter()
+        .find(|entry| entry.id == window_id)
+        .cloned()
+        .unwrap_or_else(|| WindowEntry {
+            id: window_id.to_string(),
+            profile_id: profile_id.to_string(),
+            snapshot: empty_snapshot(),
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
+            last_active_at: now_millis(),
+        });
+    entry.profile_id = profile_id.to_string();
+    entry.snapshot = snapshot_from_workspace_value(workspace);
+    entry.detached_workspace_id = None;
+    entry.detached_parent_window_id = None;
+    entry.last_active_at = now_millis();
+    if let Some(slot) = entries
+        .iter_mut()
+        .find(|candidate| candidate.id == window_id)
+    {
+        *slot = entry.clone();
+    } else {
+        entries.push(entry.clone());
+    }
+    persist_entries(app, &entries);
+    if window_id == "main" {
+        write_global_workspace(app, &entry.snapshot);
+    }
+    true
+}
+
 pub fn move_workspace(
     app: &AppHandle,
     source_window_id: &str,
