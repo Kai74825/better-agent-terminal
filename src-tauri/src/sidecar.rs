@@ -20,13 +20,14 @@ use crate::event_hub::publish_runtime_event;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
 // Cap stderr tail buffer at this many lines. Enough to capture a typical
@@ -99,6 +100,25 @@ fn snapshot_stderr_tail(tail: &Arc<Mutex<VecDeque<String>>>) -> String {
     }
     let joined: Vec<String> = guard.iter().cloned().collect();
     joined.join("\n")
+}
+
+fn timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn format_sidecar_log_line(line: &str) -> String {
+    format!("{} [stderr] {}\n", timestamp_millis(), line)
+}
+
+fn append_sidecar_log_line(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(line.as_bytes())
 }
 
 impl SidecarHandle {
@@ -428,6 +448,10 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
     let stderr_tail_for_stdout_reader = Arc::clone(&stderr_tail);
     let stderr_tail_for_stderr_reader = Arc::clone(&stderr_tail);
     let emit_for_stderr = emit.clone();
+    let stderr_log_path = cfg
+        .data_dir
+        .as_ref()
+        .map(|dir| dir.join("logs").join("sidecar.log"));
 
     // Stderr reader: append to the tail buffer (capped) and fan out as
     // a `sidecar:stderr` event so the renderer / DevTools can show
@@ -447,7 +471,10 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
                 guard.push_back(line.clone());
             }
             if let Some(sink) = emit_for_stderr.as_ref() {
-                sink("sidecar:stderr", &Value::String(line));
+                sink("sidecar:stderr", &Value::String(line.clone()));
+            }
+            if let Some(path) = stderr_log_path.as_ref() {
+                let _ = append_sidecar_log_line(path, &format_sidecar_log_line(&line));
             }
         }
     });
@@ -733,6 +760,29 @@ mod tests {
         assert!(backoff
             .remaining_block(now + Duration::from_secs(8))
             .is_none());
+    }
+
+    #[test]
+    fn appends_sidecar_stderr_log_line_to_file() {
+        let path = std::env::temp_dir().join(format!(
+            "bat-sidecar-log-{}-{}.log",
+            std::process::id(),
+            "append"
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        append_sidecar_log_line(&path, "1 [stderr] first\n").unwrap();
+        append_sidecar_log_line(&path, "2 [stderr] second\n").unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw, "1 [stderr] first\n2 [stderr] second\n");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sidecar_log_line_has_stderr_prefix() {
+        let line = format_sidecar_log_line("boom");
+        assert!(line.contains(" [stderr] boom\n"));
     }
 
     #[test]
