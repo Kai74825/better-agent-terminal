@@ -527,6 +527,22 @@ async function run() {
       assert.equal(typeof unsub, 'function', `${name} should return an unsubscriber`)
       ;(unsub as () => void)()
     }
+    assert.deepEqual(
+      mod.resolveClaudeEventSecondArg('onHistory', { sessionId: 's-1', items: ['claude'] }),
+      ['claude'],
+    )
+    assert.deepEqual(
+      mod.resolveClaudeEventSecondArg('onHistory', { sessionId: 's-1', payload: ['codex'] }),
+      ['codex'],
+    )
+    assert.equal(
+      mod.resolveClaudeEventSecondArg('onResumeLoading', { sessionId: 's-1', payload: true }),
+      true,
+    )
+    assert.equal(
+      mod.resolveClaudeEventSecondArg('onSessionReset', { sessionId: 's-1', payload: 'ignored' }),
+      undefined,
+    )
     // Account / auth ops.
     assert.deepEqual(await mod.host.claude.authLogin(), { success: false, error: 'stub' })
     assert.deepEqual(await mod.host.claude.authLogout(), { success: true })

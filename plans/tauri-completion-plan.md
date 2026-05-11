@@ -147,6 +147,7 @@
 - 2026-05-11：補 renderer-used Claude host coverage guard。新增 `pnpm run test:host-claude-coverage`，掃描 UI/store 實際呼叫的 `host.claude.*`，要求 Tauri `host-api` 有明確 route，避免新增功能時落回 permissive no-op。
 - 2026-05-11：補 Tauri PTY per-terminal history parity。Rust `pty.create` 現在會消費 `perTerminalHistory/historyKey`，建立 `<app-data>/terminal-history/*_history` 並設定 `HISTFILE`；zsh 會建立 `.zsh-wrapper` 並套用 `_BAT_HISTFILE`，對齊 Electron 的 terminal history 隔離行為。
 - 2026-05-11：補 Tauri PTY output batching parity。Rust PTY reader 不再每個 read chunk 都直接 emit `pty:output`，改成與 Electron 一樣先即時送第一包、後續 8ms 內合併，降低大量 terminal 輸出時 renderer IPC/event churn 對 UI 的壓力。
+- 2026-05-11：補 Tauri Claude/Codex event payload shape parity。`host.claude.onHistory/onResumeLoading` 現在同時接受 Claude sidecar 的 `{items/loading}` 與 Codex app-server/sidecar 的 `{payload}` shape，避免 Codex resume history 進 UI 時變成 `undefined`。
 
 ## 目前判斷
 

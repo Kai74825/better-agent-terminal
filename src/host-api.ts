@@ -263,6 +263,48 @@ function listenAdapter<T>(
   }
 }
 
+const CLAUDE_EVENT_PAYLOAD_KEYS: Record<string, string> = {
+  onMessage: 'message',
+  onToolUse: 'toolCall',
+  onToolResult: 'result',
+  onResult: 'result',
+  onTurnEnd: 'payload',
+  onError: 'error',
+  onStream: 'data',
+  onStatus: 'meta',
+  onModeChange: 'mode',
+  onPermissionRequest: 'data',
+  onAskUser: 'data',
+  onPermissionResolved: 'toolUseId',
+  onAskUserResolved: 'toolUseId',
+  onHistory: 'items',
+  onResumeLoading: 'loading',
+  onSessionReset: '__none__',
+  onRateLimit: 'info',
+  onWorktreeInfo: 'payload',
+  onPromptSuggestion: 'suggestion',
+}
+
+const CLAUDE_EVENT_PAYLOAD_FALLBACKS = new Set(['onHistory', 'onResumeLoading'])
+
+export function resolveClaudeEventSecondArg(
+  listenerKey: string,
+  payload: Record<string, unknown>,
+): unknown {
+  const payloadKey = CLAUDE_EVENT_PAYLOAD_KEYS[listenerKey] || 'payload'
+  if (payloadKey === '__none__') return undefined
+  if (Object.prototype.hasOwnProperty.call(payload, payloadKey)) {
+    return payload[payloadKey]
+  }
+  if (
+    CLAUDE_EVENT_PAYLOAD_FALLBACKS.has(listenerKey)
+    && Object.prototype.hasOwnProperty.call(payload, 'payload')
+  ) {
+    return payload.payload
+  }
+  return payload[payloadKey]
+}
+
 type PtyOutputPayload = { id: string; data: string }
 type PtyExitPayload = { id: string; exitCode: number }
 type SidecarMetricPayload = {
@@ -903,33 +945,9 @@ function createTauriHost(): BatAppAPI {
               // Sidecar payloads encode sessionId in the wrapper object;
               // the second arg is whatever sub-key the event uses
               // (message / toolCall / result / payload / data / error).
-              const payloadKey = key === 'onMessage' ? 'message'
-                : key === 'onToolUse' ? 'toolCall'
-                : key === 'onToolResult' ? 'result'
-                : key === 'onResult' ? 'result'
-                : key === 'onTurnEnd' ? 'payload'
-                : key === 'onError' ? 'error'
-                : key === 'onStream' ? 'data'
-                : key === 'onStatus' ? 'meta'
-                : key === 'onModeChange' ? 'mode'
-                : key === 'onPermissionRequest' ? 'data'
-                : key === 'onAskUser' ? 'data'
-                : key === 'onPermissionResolved' ? 'toolUseId'
-                : key === 'onAskUserResolved' ? 'toolUseId'
-                : key === 'onHistory' ? 'items'
-                : key === 'onResumeLoading' ? 'loading'
-                : key === 'onSessionReset' ? '__none__'
-                : key === 'onRateLimit' ? 'info'
-                : key === 'onWorktreeInfo' ? 'payload'
-                : key === 'onPromptSuggestion' ? 'suggestion'
-                : 'payload'
-              // onSessionReset's Electron contract is `(sessionId)` only —
-              // the second arg is undefined. Sentinel '__none__' bypasses
-              // the lookup so we don't accidentally surface a key.
-              const second = payloadKey === '__none__'
-                ? undefined
-                : (p as Record<string, unknown>)[payloadKey]
-              cb(p.sessionId, second)
+              // Codex history/resume-loading producers use `{ payload }`;
+              // Claude uses `{ items }` / `{ loading }`. Normalize both.
+              cb(p.sessionId, resolveClaudeEventSecondArg(key, p))
             })
         }
         // Unported claude.* methods get a permissive default rather than
