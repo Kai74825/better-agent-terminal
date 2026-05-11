@@ -114,6 +114,7 @@
 - 2026-05-11：補 Tauri notification 多視窗 parity。`notification.markWindowRead` 改為只標記目前 Tauri window 的 unread entries；`focusLatestUnread/focusEntry` 會聚焦目標 webview window 並 mark read，對齊 Electron notification center 行為。
 - 2026-05-11：補 Tauri `system.onResume` best-effort adapter。Tauri 無 Electron `powerMonitor`，host-api 會用 visibility/focus/online 事件推估 resume，讓 App 的 remote/account refresh hook 不再完全 no-op。
 - 2026-05-11：補 Tauri dock/app badge route。`app.setDockBadge` 不再是 Rust no-op，會對目前 live webview windows 呼叫 Tauri `set_badge_count`；非正數會清除 badge，不支援平台的錯誤維持 best-effort 忽略。
+- 2026-05-11：補 Tauri remote profile token safe storage。profile `remoteToken` 新寫入會優先存 OS keyring，舊 `remote-tokens.enc.json` `{enc:false}` 只保留為 migration/fallback；`index.json` 仍不寫入 token。
 
 ## 目前判斷
 

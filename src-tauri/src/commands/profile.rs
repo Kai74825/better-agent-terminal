@@ -1,17 +1,21 @@
 // profile:* — Tauri profile index persistence.
 //
 // Electron stores profile metadata in <userData>/profiles/index.json and keeps
-// remote tokens in a separate safeStorage envelope. Tauri does not currently
-// have an OS-keychain wrapper in this app, so this port uses the same envelope
-// shape as the sidecar remote secrets module: {enc:false,data:<json>} with
-// owner-only file permissions where the platform supports them. Keeping tokens
-// out of index.json preserves the migration path for a later encrypted store.
+// remote tokens in a separate safeStorage envelope. Tauri stores new remote
+// tokens in the OS keyring when available, while retaining the old envelope as
+// a migration/fallback path. Keeping tokens out of index.json preserves the
+// renderer-facing profile shape without exposing secrets in profile metadata.
 
+#[cfg(not(test))]
+use keyring::use_native_store;
+use keyring_core::Entry as KeyringEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -19,6 +23,7 @@ const DEFAULT_PROFILE_ID: &str = "default";
 const DEFAULT_PROFILE_NAME: &str = "Default";
 const INDEX_FILE: &str = "index.json";
 const TOKEN_FILE: &str = "remote-tokens.enc.json";
+const REMOTE_TOKEN_KEYRING_SERVICE: &str = "better-agent-terminal:remote-profile-token";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +203,51 @@ fn read_token_store(dir: &Path) -> RemoteTokenStore {
     serde_json::from_value::<RemoteTokenStore>(value).unwrap_or_default()
 }
 
+#[cfg(not(test))]
+static PROFILE_SAFE_STORE_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[cfg(not(test))]
+fn ensure_profile_safe_store() -> Result<(), String> {
+    PROFILE_SAFE_STORE_INIT
+        .get_or_init(|| use_native_store(false).map_err(|err| format!("{err:?}")))
+        .clone()
+}
+
+#[cfg(test)]
+fn ensure_profile_safe_store() -> Result<(), String> {
+    Err("profile safe store disabled in unit tests".into())
+}
+
+fn remote_token_entry(profile_id: &str) -> Result<KeyringEntry, String> {
+    ensure_profile_safe_store()?;
+    KeyringEntry::new(REMOTE_TOKEN_KEYRING_SERVICE, profile_id)
+        .map_err(|err| format!("could not create keyring entry: {err:?}"))
+}
+
+fn load_remote_token_from_safe_store(profile_id: &str) -> Option<String> {
+    remote_token_entry(profile_id)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|token| !token.is_empty())
+}
+
+fn save_remote_token_to_safe_store(profile_id: &str, token: &str) -> bool {
+    remote_token_entry(profile_id)
+        .and_then(|entry| {
+            entry
+                .set_password(token)
+                .map_err(|err| format!("could not save keyring entry: {err:?}"))
+        })
+        .is_ok()
+}
+
+fn delete_remote_token_from_safe_store(profile_id: &str) {
+    if let Ok(entry) = remote_token_entry(profile_id) {
+        let _ = entry.delete_credential();
+    }
+}
+
 fn write_owner_only(path: &Path, content: String) -> std::io::Result<()> {
     fs::write(path, content)?;
     #[cfg(unix)]
@@ -224,7 +274,8 @@ fn hydrate_remote_tokens(dir: &Path, mut index: ProfileIndex) -> ProfileIndex {
     let store = read_token_store(dir);
     for profile in &mut index.profiles {
         if profile.kind == "remote" && profile.remote_token.is_none() {
-            profile.remote_token = store.tokens.get(&profile.id).cloned();
+            profile.remote_token = load_remote_token_from_safe_store(&profile.id)
+                .or_else(|| store.tokens.get(&profile.id).cloned());
         }
     }
     index
@@ -243,11 +294,16 @@ fn strip_and_persist_remote_tokens(
     for profile in &mut index.profiles {
         if profile.kind == "remote" {
             if let Some(token) = profile.remote_token.take() {
-                store.tokens.insert(profile.id.clone(), token);
+                if save_remote_token_to_safe_store(&profile.id, &token) {
+                    store.tokens.remove(&profile.id);
+                } else {
+                    store.tokens.insert(profile.id.clone(), token);
+                }
             }
         } else {
             profile.remote_token = None;
             store.tokens.remove(&profile.id);
+            delete_remote_token_from_safe_store(&profile.id);
         }
     }
     store.tokens.retain(|id, _| ids.contains(id));
