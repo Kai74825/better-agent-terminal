@@ -9,7 +9,7 @@
 // MVP commands:
 //   claude_ping            — round-trip probe used by tests.
 //   claude_auth_status     — returns null until accounts are wired through.
-//   claude_account_list    — returns [].
+//   claude_account_list    — reads Rust account_store index.
 //
 // Each one resolves the SpawnConfig from the AppHandle so the bridge can
 // find both `node` on PATH and the bundled sidecar script. Failures bubble
@@ -301,9 +301,11 @@ pub async fn claude_auth_status(
 #[tauri::command]
 pub async fn claude_account_list(
     app: AppHandle,
-    state: State<'_, SidecarState>,
+    _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "claude.accountList", Value::Null).await
+    let app_data_dir = app_data_dir(&app)?;
+    let index = account_store::read_index(&app_data_dir);
+    Ok(serde_json::to_value(index).unwrap_or(Value::Null))
 }
 
 #[tauri::command]
