@@ -128,13 +128,15 @@ class WorkspaceStore {
 
   reorderWorkspaces(workspaceIds: string[]): void {
     const workspaceMap = new Map(this.state.workspaces.map(w => [w.id, w]))
+    const orderedIdSet = new Set(workspaceIds)
     const reordered = workspaceIds
       .map(id => workspaceMap.get(id))
       .filter((w): w is Workspace => w !== undefined)
+    const remaining = this.state.workspaces.filter(w => !orderedIdSet.has(w.id))
 
     this.state = {
       ...this.state,
-      workspaces: reordered
+      workspaces: [...reordered, ...remaining]
     }
 
     this.notify()

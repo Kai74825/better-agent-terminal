@@ -121,8 +121,29 @@ interface AttachedFile {
 
 type MessageItem = ClaudeMessage | ClaudeToolCall
 
-// Track sessions that have been started to prevent duplicate calls across StrictMode remounts
+// Track sessions that have been started to prevent duplicate calls across
+// StrictMode remounts. Real window/profile remounts must be allowed to resume
+// again, so unmounts schedule a delayed cleanup that StrictMode's immediate
+// remount can cancel.
 const startedSessions = new Set<string>()
+const startedSessionCleanupTimers = new Map<string, number>()
+
+function cancelStartedSessionCleanup(sessionId: string): void {
+  const timer = startedSessionCleanupTimers.get(sessionId)
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    startedSessionCleanupTimers.delete(sessionId)
+  }
+}
+
+function scheduleStartedSessionCleanup(sessionId: string): void {
+  cancelStartedSessionCleanup(sessionId)
+  const timer = window.setTimeout(() => {
+    startedSessions.delete(sessionId)
+    startedSessionCleanupTimers.delete(sessionId)
+  }, 1000)
+  startedSessionCleanupTimers.set(sessionId, timer)
+}
 
 function scheduleAgentMetadataRefresh(callback: () => void): () => void {
   if (!isTauri()) {
@@ -1107,6 +1128,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     const stag = `[Claude:${sessionId.slice(0, 8)}]`
     const dlog = (...args: unknown[]) => host.debug.log(...args)
     let cancelled = false
+    cancelStartedSessionCleanup(sessionId)
     dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
@@ -1131,6 +1153,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         const effectiveEffort = globalSettings.defaultEffort || 'high'
         setEffortLevel(effectiveEffort)
 
+        const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
+        if (cancelled) return
+        if (existingState) {
+          historyLoadedRef.current = true
+          setMessages((existingState.messages || []) as MessageItem[])
+          setIsStreaming(!!existingState.isStreaming)
+          setStreamingText(existingState.streamingText || '')
+          setStreamingThinking(existingState.streamingThinking || '')
+          const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
+          if (!cancelled && meta) setSessionMeta(meta as unknown as SessionMeta)
+          return
+        }
+
         if (savedSdkSessionId) {
           dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
           historyLoadedRef.current = true
@@ -1152,7 +1187,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     }
     return () => {
       cancelled = true
-      // Don't remove from startedSessions on unmount — StrictMode will remount
+      scheduleStartedSessionCleanup(sessionId)
     }
   }, [sessionId, cwd, isCodexSession, codexSandboxMode, codexApprovalPolicy])
 

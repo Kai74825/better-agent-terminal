@@ -23,8 +23,29 @@ import { firstMeaningfulLine, formatContentSize, formatElapsed, formatFullTimest
 import type { AttachedFile, AttachedImage, CodexAgentPanelProps, MessageItem, ModelInfo, PendingAskUser, PendingPermission, SessionMeta, SessionSummary, SlashCommandInfo } from './CodexAgentPanel.types'
 import { CodexTodoChecklist } from './CodexTodoChecklist'
 
-// Track sessions that have been started to prevent duplicate calls across StrictMode remounts
+// Track sessions that have been started to prevent duplicate calls across
+// StrictMode remounts. Real window/profile remounts must be allowed to resume
+// again, so unmounts schedule a delayed cleanup that StrictMode's immediate
+// remount can cancel.
 const startedSessions = new Set<string>()
+const startedSessionCleanupTimers = new Map<string, number>()
+
+function cancelStartedSessionCleanup(sessionId: string): void {
+  const timer = startedSessionCleanupTimers.get(sessionId)
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    startedSessionCleanupTimers.delete(sessionId)
+  }
+}
+
+function scheduleStartedSessionCleanup(sessionId: string): void {
+  cancelStartedSessionCleanup(sessionId)
+  const timer = window.setTimeout(() => {
+    startedSessions.delete(sessionId)
+    startedSessionCleanupTimers.delete(sessionId)
+  }, 1000)
+  startedSessionCleanupTimers.set(sessionId, timer)
+}
 
 function scheduleAgentMetadataRefresh(callback: () => void): () => void {
   if (!isTauri()) {
@@ -1104,6 +1125,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const stag = `[Codex:${sessionId.slice(0, 8)}]`
     const dlog = (...args: unknown[]) => host.debug.log(...args)
     let cancelled = false
+    cancelStartedSessionCleanup(sessionId)
     dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
     if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
       sessionStartedRef.current = true
@@ -1168,6 +1190,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     }
     return () => {
       cancelled = true
+      scheduleStartedSessionCleanup(sessionId)
     }
   }, [sessionId, cwd, isCodexSession, codexSandboxMode, codexApprovalPolicy])
 

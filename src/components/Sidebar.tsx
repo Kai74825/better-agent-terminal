@@ -8,6 +8,66 @@ import { ActivityIndicator } from './ActivityIndicator'
 import { NotificationBell } from './NotificationBell'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
 
+const WORKSPACE_MOVE_MIME = 'application/x-bat-workspace-move'
+const WORKSPACE_MOVE_STORAGE_KEY = 'bat-workspace-move-drag'
+const WORKSPACE_MOVE_TTL_MS = 30_000
+
+interface WorkspaceMovePayload {
+  workspaceId: string
+  sourceWindowId: string
+  timestamp?: number
+}
+
+function parseWorkspaceMovePayload(raw: string | null): WorkspaceMovePayload | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<WorkspaceMovePayload>
+    if (typeof parsed.workspaceId !== 'string' || !parsed.workspaceId) return null
+    if (typeof parsed.sourceWindowId !== 'string' || !parsed.sourceWindowId) return null
+    if (typeof parsed.timestamp === 'number' && Date.now() - parsed.timestamp > WORKSPACE_MOVE_TTL_MS) return null
+    return {
+      workspaceId: parsed.workspaceId,
+      sourceWindowId: parsed.sourceWindowId,
+      timestamp: parsed.timestamp,
+    }
+  } catch {
+    return null
+  }
+}
+
+function readStoredWorkspaceMove(): WorkspaceMovePayload | null {
+  try {
+    return parseWorkspaceMovePayload(localStorage.getItem(WORKSPACE_MOVE_STORAGE_KEY))
+  } catch {
+    return null
+  }
+}
+
+function writeStoredWorkspaceMove(payload: WorkspaceMovePayload): void {
+  try {
+    localStorage.setItem(WORKSPACE_MOVE_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // ignore unavailable storage
+  }
+}
+
+function clearStoredWorkspaceMove(payload?: WorkspaceMovePayload): void {
+  try {
+    if (payload) {
+      const current = readStoredWorkspaceMove()
+      if (
+        current
+        && (current.workspaceId !== payload.workspaceId || current.sourceWindowId !== payload.sourceWindowId)
+      ) {
+        return
+      }
+    }
+    localStorage.removeItem(WORKSPACE_MOVE_STORAGE_KEY)
+  } catch {
+    // ignore unavailable storage
+  }
+}
+
 interface SidebarProps {
   width: number
   workspaces: Workspace[]
@@ -129,7 +189,7 @@ export function Sidebar({
 
   const moveWorkspaceToWindow = useCallback(async (sourceWindowId: string, targetWindowId: string, workspaceId: string, insertIndex: number) => {
     const ok = await host.workspace.moveToWindow(sourceWindowId, targetWindowId, workspaceId, insertIndex)
-    if (!ok) window.alert('Workspace moves only work between host windows, or between remote windows on the same remote.')
+    if (!ok) window.alert('Workspace move failed. Try saving both windows, then drag again.')
   }, [])
 
   useEffect(() => {
@@ -214,12 +274,9 @@ export function Sidebar({
   // Parse cross-window workspace move data from a DragEvent
   const parseCrossWindowDrop = useCallback((dataTransfer: DataTransfer): { workspaceId: string; sourceWindowId: string } | null => {
     if (!windowId) return null
-    const raw = dataTransfer.getData('application/x-bat-workspace-move')
-    if (!raw) return null
-    try {
-      const parsed = JSON.parse(raw)
-      if (parsed.sourceWindowId && parsed.sourceWindowId !== windowId) return parsed
-    } catch { /* ignore */ }
+    const parsed = parseWorkspaceMovePayload(dataTransfer.getData(WORKSPACE_MOVE_MIME))
+      || readStoredWorkspaceMove()
+    if (parsed?.sourceWindowId && parsed.sourceWindowId !== windowId) return parsed
     return null
   }, [windowId])
 
@@ -230,10 +287,13 @@ export function Sidebar({
     e.dataTransfer.setData('text/plain', workspaceId)
     // Custom MIME for cross-window workspace moves
     if (windowId) {
-      e.dataTransfer.setData('application/x-bat-workspace-move', JSON.stringify({
+      const payload = {
         workspaceId,
         sourceWindowId: windowId,
-      }))
+        timestamp: Date.now(),
+      }
+      e.dataTransfer.setData(WORKSPACE_MOVE_MIME, JSON.stringify(payload))
+      writeStoredWorkspaceMove(payload)
     }
     requestAnimationFrame(() => {
       const target = e.target as HTMLElement
@@ -244,10 +304,14 @@ export function Sidebar({
   const handleDragEnd = useCallback((e: React.DragEvent) => {
     const target = e.target as HTMLElement
     target.classList.remove('dragging')
+    const payload = windowId && draggedId
+      ? { workspaceId: draggedId, sourceWindowId: windowId }
+      : undefined
+    window.setTimeout(() => clearStoredWorkspaceMove(payload), 1000)
     setDraggedId(null)
     setDragOverId(null)
     setDragPosition(null)
-  }, [])
+  }, [draggedId, windowId])
 
   const handleDragOver = useCallback((e: React.DragEvent, workspaceId: string) => {
     e.preventDefault()
@@ -255,7 +319,7 @@ export function Sidebar({
 
     if (draggedId === workspaceId) return
     // For cross-window drags (no local draggedId), check MIME type
-    if (!draggedId && !e.dataTransfer.types.includes('application/x-bat-workspace-move')) return
+    if (!draggedId && !e.dataTransfer.types.includes(WORKSPACE_MOVE_MIME) && !readStoredWorkspaceMove()) return
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const midY = rect.top + rect.height / 2
@@ -366,7 +430,7 @@ export function Sidebar({
         onDragOver={(e) => {
           // Only react to external file drops or cross-window workspace drags (not internal workspace reorder)
           if (draggedId) return
-          if (e.dataTransfer.types.includes('application/x-bat-workspace-move')) {
+          if (e.dataTransfer.types.includes(WORKSPACE_MOVE_MIME) || readStoredWorkspaceMove()) {
             e.preventDefault()
             e.dataTransfer.dropEffect = 'move'
             return

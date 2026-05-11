@@ -704,9 +704,8 @@ pub fn move_workspace(
     let mut source = entries[source_index].clone();
     let mut target = entries[target_index].clone();
 
-    if source.profile_id != target.profile_id {
-        return None;
-    }
+    let source_profile_id = source.profile_id.clone();
+    let target_profile_id = target.profile_id.clone();
     if !move_workspace_between_entries(&mut source, &mut target, workspace_id, insert_index) {
         return None;
     }
@@ -723,8 +722,12 @@ pub fn move_workspace(
     if target_window_id == "main" {
         write_global_workspace(app, &target.snapshot);
     }
-    let windows = profile_windows(&entries, &source.profile_id);
-    write_profile_snapshot(app, &source.profile_id, &windows);
+    let source_windows = profile_windows(&entries, &source_profile_id);
+    write_profile_snapshot(app, &source_profile_id, &source_windows);
+    if target_profile_id != source_profile_id {
+        let target_windows = profile_windows(&entries, &target_profile_id);
+        write_profile_snapshot(app, &target_profile_id, &target_windows);
+    }
 
     let source_json =
         serde_json::to_string_pretty(&workspace_value_from_snapshot(&source.snapshot))
