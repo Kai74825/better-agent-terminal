@@ -99,12 +99,20 @@ function runBuild() {
   });
 }
 
+function shouldSkipBuild() {
+  return process.env.BAT_SKIP_BUILD === '1' || process.argv.includes('--skip-build');
+}
+
 function main() {
   const version = getVersion();
   console.log(`\nBuilding version: ${version}\n`);
 
   updateProjectVersion(version);
-  runBuild();
+  if (shouldSkipBuild()) {
+    console.log('Skipping compile/build because --skip-build or BAT_SKIP_BUILD=1 was set.');
+  } else {
+    runBuild();
+  }
 
   console.log(`\nBuild completed: v${version}`);
 }
@@ -119,5 +127,6 @@ module.exports = {
   updateTauriVersion,
   updateProjectVersion,
   runBuild,
+  shouldSkipBuild,
   main,
 };

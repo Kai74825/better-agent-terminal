@@ -80,13 +80,13 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Update version and compile
+      - name: Update version metadata
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: node scripts/build-version.js
+        run: pnpm run update:release-version
 
       - name: Run Tauri preflight gates
-        run: pnpm run verify:tauri-pre-ci
+        run: pnpm run verify:tauri-release-ci
 
       - name: Verify macOS signing secrets
         if: matrix.platform == 'mac'
@@ -122,7 +122,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
-        run: pnpm run tauri:build:ci
+        run: pnpm run tauri:build:ci:prepared
 
       - name: Smoke test Windows release binary
         if: matrix.platform == 'win'
