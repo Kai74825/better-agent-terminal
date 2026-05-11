@@ -24,8 +24,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
@@ -38,6 +39,7 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(300);
 const SESSION_LIST_LIMIT: usize = 50;
 const PREVIEW_LINE_LIMIT: usize = 20;
 const PREVIEW_CHARS: usize = 120;
+const AUTH_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn call(
     app: &AppHandle,
@@ -164,6 +166,48 @@ fn resolve_claude_cli_path(app: &AppHandle) -> String {
     )
     .map(|path| path.to_string_lossy().to_string())
     .unwrap_or_default()
+}
+
+fn parse_auth_status_stdout(stdout: &str) -> Value {
+    serde_json::from_str::<Value>(stdout).unwrap_or(Value::Null)
+}
+
+fn fetch_auth_status_native(app: &AppHandle) -> Value {
+    let cli_path = resolve_claude_cli_path(app);
+    if cli_path.trim().is_empty() {
+        return Value::Null;
+    }
+    let mut child = match Command::new(cli_path)
+        .args(["auth", "status"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Value::Null,
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return Value::Null;
+                }
+                let mut stdout = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                return parse_auth_status_stdout(&stdout);
+            }
+            Ok(None) if started.elapsed() >= AUTH_STATUS_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Value::Null;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => return Value::Null,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -864,9 +908,14 @@ pub fn claude_ping(
 #[tauri::command]
 pub async fn claude_auth_status(
     app: AppHandle,
-    state: State<'_, SidecarState>,
+    _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "claude.authStatus", Value::Null).await
+    let value = tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&app))
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("claude.authStatus worker failed: {err}"),
+        })?;
+    Ok(value)
 }
 
 #[tauri::command]
@@ -1093,10 +1142,16 @@ pub async fn claude_auth_logout(
 #[tauri::command]
 pub async fn claude_account_import_current(
     app: AppHandle,
-    state: State<'_, SidecarState>,
+    _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     let app_data_dir = app_data_dir(&app)?;
-    let status_value = call_blocking(app, state, "claude.authStatus", Value::Null).await?;
+    let status_app = app.clone();
+    let status_value =
+        tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&status_app))
+            .await
+            .map_err(|err| BridgeError {
+                message: format!("claude.accountImportCurrent authStatus worker failed: {err}"),
+            })?;
     let Some(status) = account_store::auth_status_from_value(&status_value) else {
         return Ok(Value::Null);
     };
@@ -1122,7 +1177,13 @@ pub async fn claude_account_login_new(
     if !login_success(&login_result) {
         return Ok(login_result);
     }
-    let status_value = call_blocking(app, state, "claude.authStatus", Value::Null).await?;
+    let status_app = app.clone();
+    let status_value =
+        tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&status_app))
+            .await
+            .map_err(|err| BridgeError {
+                message: format!("claude.accountLoginNew authStatus worker failed: {err}"),
+            })?;
     let Some(status) = account_store::auth_status_from_value(&status_value) else {
         if let Some(backup) = backup_credential {
             let _ = account_store::write_cli_credentials(&backup);
@@ -2011,6 +2072,15 @@ mod tests {
         );
 
         fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn auth_status_parser_returns_null_on_invalid_json() {
+        let parsed = parse_auth_status_stdout(r#"{"authenticated":true,"email":"u@example.com"}"#);
+        assert_eq!(parsed["authenticated"], true);
+        assert_eq!(parsed["email"], "u@example.com");
+
+        assert_eq!(parse_auth_status_stdout("not json"), Value::Null);
     }
 
     #[test]

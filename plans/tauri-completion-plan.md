@@ -153,6 +153,7 @@
 - 2026-05-11：把 Tauri `claude.scanSkills` 搬到 Rust native，並修正掃描範圍同時支援 Electron 的 `.claude/commands/*.md` 與 Tauri/新格式 `.claude/skills/**/SKILL.md` / top-level `.md`。project entries 優先於 global entries，Skills panel 不再為掃 skill/command 喚醒 sidecar。
 - 2026-05-11：把 Tauri project MCP approval helpers 搬到 Rust native。`claude.checkMcpJsonStatus` 會讀 `.mcp.json`、user/project/local settings approval；`claude.enableAllProjectMcp` 會保留既有 settings key 並寫入 `enableAllProjectMcpServers=true`，Claude panel 不再為純檔案 MCP 檢查喚醒 sidecar。
 - 2026-05-11：把 Tauri `claude.listSessions` 搬到 Rust native。Claude resume selector 直接讀 `~/.claude/projects/<encoded-cwd>/*.jsonl`，Codex resume selector 直接掃 `~/.codex/sessions/**/*.jsonl` 的 `session_meta` 與 prompt preview；打開歷史清單不再為純檔案掃描喚醒 Node sidecar。
+- 2026-05-11：把 Tauri `claude.authStatus` 搬到 Rust native。Rust 會用既有 Claude CLI resolver 直接執行 `claude auth status` 並解析 JSON，timeout/failure 回 `null`；啟動後 auth refresh 與 account import/login verification 不再為單純 auth status 查詢喚醒 Node sidecar。
 
 ## 目前判斷
 
