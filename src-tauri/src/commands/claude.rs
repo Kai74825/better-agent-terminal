@@ -660,6 +660,27 @@ fn session_meta_from_notification_snapshot(
     })
 }
 
+fn session_state_from_notification_snapshot(
+    session: &notification_cmd::AgentNotificationSession,
+) -> Value {
+    json!({
+        "active": true,
+        "permissionMode": session.permission_mode.as_deref().unwrap_or("default"),
+        "model": session.model.as_deref(),
+        "effort": session.effort.as_deref(),
+        "autoContinue": session.auto_continue.clone().unwrap_or_else(|| json!({
+            "enabled": false,
+            "max": 0,
+            "used": 0,
+            "prompt": "",
+        })),
+        "isResting": session.is_resting,
+        "autoCompactWindow": session.auto_compact_window,
+        "codexSandboxMode": session.codex_sandbox_mode.as_deref(),
+        "codexApprovalPolicy": session.codex_approval_policy.as_deref(),
+    })
+}
+
 fn worktree_git_root_from_path(worktree_path: &str) -> Option<PathBuf> {
     Path::new(worktree_path)
         .parent()
@@ -1394,6 +1415,7 @@ pub async fn claude_send_message(
     images: Option<Vec<String>>,
     auto_compact_window: Option<i64>,
 ) -> Result<Value, BridgeError> {
+    notification_cmd::set_agent_session_resting(&app, &session_id, false);
     if codex_state.is_owned(&session_id) {
         let codex = (*codex_state).clone();
         let codex_app = app.clone();
@@ -1764,6 +1786,9 @@ pub async fn claude_get_session_state(
 ) -> Result<Value, BridgeError> {
     if let Some(value) = codex_state.get_session_state(&session_id) {
         return Ok(value);
+    }
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+        return Ok(session_state_from_notification_snapshot(&session));
     }
     call_blocking(
         app,
@@ -2213,13 +2238,17 @@ pub async fn claude_rest_session(
     if let Some(value) = codex_state.rest_session(&app, &session_id) {
         return Ok(value);
     }
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.restSession",
-        json!({ "sessionId": session_id }),
+        json!({ "sessionId": session_id.clone() }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::set_agent_session_resting(&app, &session_id, true);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2232,13 +2261,17 @@ pub async fn claude_wake_session(
     if let Some(value) = codex_state.wake_session(&session_id) {
         return Ok(value);
     }
-    call_blocking(
-        app,
+    let result = call_blocking(
+        app.clone(),
         state,
         "claude.wakeSession",
-        json!({ "sessionId": session_id }),
+        json!({ "sessionId": session_id.clone() }),
     )
-    .await
+    .await?;
+    if result.as_bool().unwrap_or(false) {
+        notification_cmd::set_agent_session_resting(&app, &session_id, false);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2250,6 +2283,9 @@ pub async fn claude_is_resting(
 ) -> Result<Value, BridgeError> {
     if let Some(value) = codex_state.is_resting(&session_id) {
         return Ok(value);
+    }
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+        return Ok(json!(session.is_resting));
     }
     call_blocking(
         app,
@@ -2776,6 +2812,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             auto_continue: None,
+            is_resting: false,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
@@ -2789,6 +2826,48 @@ mod tests {
         assert_eq!(meta["inputTokens"], 0);
         assert_eq!(meta["outputTokens"], 0);
         assert_eq!(meta["numTurns"], 0);
+    }
+
+    #[test]
+    fn notification_session_state_matches_sidecar_shape_with_cached_flags() {
+        let session = notification_cmd::AgentNotificationSession {
+            window_id: Some("main".into()),
+            profile_id: Some("default".into()),
+            cwd: "C:/repo".into(),
+            agent_kind: Some("claude".into()),
+            model: Some("claude-sonnet-4-6".into()),
+            permission_mode: Some("plan".into()),
+            effort: Some("medium".into()),
+            auto_compact_window: Some(400_000),
+            sdk_session_id: Some("sdk-1".into()),
+            codex_sandbox_mode: Some("workspace-write".into()),
+            codex_approval_policy: Some("on-request".into()),
+            latest_meta: None,
+            original_cwd: None,
+            worktree_path: None,
+            worktree_branch: None,
+            auto_continue: Some(json!({
+                "enabled": true,
+                "max": 3,
+                "used": 1,
+                "prompt": "continue",
+            })),
+            is_resting: true,
+        };
+
+        let state = session_state_from_notification_snapshot(&session);
+        assert_eq!(state["active"], true);
+        assert_eq!(state["permissionMode"], "plan");
+        assert_eq!(state["model"], "claude-sonnet-4-6");
+        assert_eq!(state["effort"], "medium");
+        assert_eq!(state["autoContinue"]["enabled"], true);
+        assert_eq!(state["autoContinue"]["max"], 3);
+        assert_eq!(state["autoContinue"]["used"], 1);
+        assert_eq!(state["autoContinue"]["prompt"], "continue");
+        assert_eq!(state["isResting"], true);
+        assert_eq!(state["autoCompactWindow"], 400_000);
+        assert_eq!(state["codexSandboxMode"], "workspace-write");
+        assert_eq!(state["codexApprovalPolicy"], "on-request");
     }
 
     #[test]
@@ -2816,6 +2895,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             auto_continue: None,
+            is_resting: false,
         };
 
         let meta = session_meta_from_notification_snapshot(&session);
@@ -2843,6 +2923,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             auto_continue: None,
+            is_resting: false,
         };
 
         assert_eq!(worktree_status_from_notification_snapshot(&session), None);

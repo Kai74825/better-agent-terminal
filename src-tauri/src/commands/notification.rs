@@ -72,6 +72,7 @@ pub struct AgentNotificationSession {
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub auto_continue: Option<Value>,
+    pub is_resting: bool,
 }
 
 #[derive(Default)]
@@ -281,6 +282,7 @@ pub fn register_agent_session_from_options(
             worktree_path,
             worktree_branch,
             auto_continue: Some(default_auto_continue()),
+            is_resting: false,
         },
     );
 }
@@ -499,6 +501,16 @@ pub fn update_agent_session_model(
 
 pub fn update_agent_session_effort(app: &AppHandle, session_id: &str, effort: &str) {
     update_agent_session_meta_field(app, session_id, "effort", Value::String(effort.into()));
+}
+
+pub fn set_agent_session_resting(app: &AppHandle, session_id: &str, resting: bool) {
+    let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
+        return;
+    };
+    let mut sessions = agent_state.lock();
+    if let Some(session) = sessions.get_mut(session_id) {
+        session.is_resting = resting;
+    }
 }
 
 fn update_agent_session_meta_field(app: &AppHandle, session_id: &str, key: &str, value: Value) {
@@ -738,6 +750,7 @@ mod tests {
             worktree_path: None,
             worktree_branch: None,
             auto_continue: None,
+            is_resting: false,
         };
 
         apply_worktree_payload(
