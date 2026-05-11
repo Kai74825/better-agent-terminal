@@ -92,6 +92,12 @@ struct RemoteTokenStore {
     tokens: HashMap<String, String>,
 }
 
+#[derive(Debug, Default)]
+struct TokenStoreRead {
+    store: RemoteTokenStore,
+    encrypted_unreadable: bool,
+}
+
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -196,23 +202,36 @@ fn activate_profile_in_index(index: &mut ProfileIndex, profile_id: &str) -> bool
     true
 }
 
-fn read_token_store(dir: &Path) -> RemoteTokenStore {
+fn read_token_store_info(dir: &Path) -> TokenStoreRead {
     let path = dir.join(TOKEN_FILE);
     let Ok(raw) = fs::read_to_string(path) else {
-        return RemoteTokenStore::default();
+        return TokenStoreRead::default();
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return RemoteTokenStore::default();
+        return TokenStoreRead::default();
     };
     if value.get("enc").and_then(Value::as_bool) == Some(true) {
-        return RemoteTokenStore::default();
+        return TokenStoreRead {
+            store: RemoteTokenStore::default(),
+            encrypted_unreadable: true,
+        };
     }
     if value.get("enc").and_then(Value::as_bool) == Some(false) {
         if let Some(data) = value.get("data").and_then(Value::as_str) {
-            return serde_json::from_str::<RemoteTokenStore>(data).unwrap_or_default();
+            return TokenStoreRead {
+                store: serde_json::from_str::<RemoteTokenStore>(data).unwrap_or_default(),
+                encrypted_unreadable: false,
+            };
         }
     }
-    serde_json::from_value::<RemoteTokenStore>(value).unwrap_or_default()
+    TokenStoreRead {
+        store: serde_json::from_value::<RemoteTokenStore>(value).unwrap_or_default(),
+        encrypted_unreadable: false,
+    }
+}
+
+fn read_token_store(dir: &Path) -> RemoteTokenStore {
+    read_token_store_info(dir).store
 }
 
 #[cfg(not(test))]
@@ -297,7 +316,10 @@ fn strip_and_persist_remote_tokens(
     dir: &Path,
     mut index: ProfileIndex,
 ) -> std::io::Result<ProfileIndex> {
-    let mut store = read_token_store(dir);
+    let token_store = read_token_store_info(dir);
+    let preserve_unreadable_encrypted_store = token_store.encrypted_unreadable;
+    let mut store = token_store.store;
+    let mut store_changed = false;
     let ids = index
         .profiles
         .iter()
@@ -307,18 +329,24 @@ fn strip_and_persist_remote_tokens(
         if profile.kind == "remote" {
             if let Some(token) = profile.remote_token.take() {
                 if save_remote_token_to_safe_store(&profile.id, &token) {
-                    store.tokens.remove(&profile.id);
+                    store_changed |= store.tokens.remove(&profile.id).is_some();
                 } else {
                     store.tokens.insert(profile.id.clone(), token);
+                    store_changed = true;
                 }
             }
         } else {
             profile.remote_token = None;
-            store.tokens.remove(&profile.id);
+            store_changed |= store.tokens.remove(&profile.id).is_some();
             delete_remote_token_from_safe_store(&profile.id);
         }
     }
+    let before_retain = store.tokens.len();
     store.tokens.retain(|id, _| ids.contains(id));
+    store_changed |= store.tokens.len() != before_retain;
+    if preserve_unreadable_encrypted_store && !store_changed && store.tokens.is_empty() {
+        return Ok(index);
+    }
     write_token_store(dir, &store)?;
     Ok(index)
 }
@@ -932,6 +960,38 @@ mod tests {
         .unwrap();
         let store = read_token_store(&dir);
         assert!(!store.tokens.contains_key("remote-1"));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn unreadable_encrypted_remote_token_store_is_preserved_on_metadata_write() {
+        let dir = temp_profile_dir("encrypted-token-preserve");
+        let encrypted = r#"{"enc":true,"data":"djEwJGVuY3J5cHRlZA=="}"#;
+        fs::write(dir.join(TOKEN_FILE), encrypted).unwrap();
+        let remote = profile_from_options(
+            "remote-1".into(),
+            "Remote".into(),
+            Some(CreateProfileOptions {
+                kind: Some("remote".into()),
+                remote_host: Some("127.0.0.1".into()),
+                remote_port: Some(9876),
+                remote_token: None,
+                remote_fingerprint: Some("AA".into()),
+                remote_profile_id: Some("default".into()),
+            }),
+        );
+
+        write_index_at(
+            &dir,
+            ProfileIndex {
+                profiles: vec![default_entry(), remote],
+                active_profile_ids: vec![DEFAULT_PROFILE_ID.into(), "remote-1".into()],
+                active_profile_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(dir.join(TOKEN_FILE)).unwrap(), encrypted);
         fs::remove_dir_all(dir).ok();
     }
 

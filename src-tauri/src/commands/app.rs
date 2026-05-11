@@ -33,6 +33,7 @@ fn active_profile_restore_done() -> &'static Mutex<bool> {
 fn active_profiles_to_restore(
     active_profile_ids: &[String],
     current_profile_id: Option<&str>,
+    profiles: &[profile_cmd::ProfileEntry],
 ) -> Vec<String> {
     let mut seen = Vec::<String>::new();
     for profile_id in active_profile_ids {
@@ -42,11 +43,32 @@ fn active_profiles_to_restore(
         if current_profile_id == Some(profile_id.as_str()) {
             continue;
         }
+        let Some(profile) = profiles.iter().find(|profile| profile.id == *profile_id) else {
+            continue;
+        };
+        if !profile_can_auto_restore(profile) {
+            continue;
+        }
         if !seen.iter().any(|seen_id| seen_id == profile_id) {
             seen.push(profile_id.clone());
         }
     }
     seen
+}
+
+fn has_non_empty(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn profile_can_auto_restore(profile: &profile_cmd::ProfileEntry) -> bool {
+    if profile.kind != "remote" {
+        return true;
+    }
+    has_non_empty(&profile.remote_host)
+        && has_non_empty(&profile.remote_token)
+        && has_non_empty(&profile.remote_fingerprint)
 }
 
 pub(crate) fn renderer_url(path: &str) -> WebviewUrl {
@@ -329,8 +351,12 @@ pub fn app_restore_active_profiles(
         *done = true;
     }
 
-    let active_ids = profile_cmd::profile_get_active_ids(app.clone());
-    let targets = active_profiles_to_restore(&active_ids, current_profile_id.as_deref());
+    let response = profile_cmd::profile_list(app.clone());
+    let targets = active_profiles_to_restore(
+        &response.active_profile_ids,
+        current_profile_id.as_deref(),
+        &response.profiles,
+    );
     let mut restored = Vec::new();
     for profile_id in targets {
         let result = app_open_new_instance(app.clone(), profile_id);
@@ -401,14 +427,56 @@ mod tests {
             "".to_string(),
             "remote".to_string(),
         ];
+        let profiles = vec![
+            profile_entry("default", "local"),
+            profile_entry("work", "local"),
+            profile_entry("remote", "local"),
+        ];
         assert_eq!(
-            active_profiles_to_restore(&ids, Some("default")),
+            active_profiles_to_restore(&ids, Some("default"), &profiles),
             vec!["work".to_string(), "remote".to_string()]
         );
         assert_eq!(
-            active_profiles_to_restore(&ids, Some("work")),
+            active_profiles_to_restore(&ids, Some("work"), &profiles),
             vec!["default".to_string(), "remote".to_string()]
         );
+    }
+
+    #[test]
+    fn active_profiles_restore_skips_remote_profiles_without_connection_info() {
+        let ids = vec![
+            "bat".to_string(),
+            "remote-missing-token".to_string(),
+            "remote-ready".to_string(),
+        ];
+        let mut missing_token = profile_entry("remote-missing-token", "remote");
+        missing_token.remote_host = Some("192.168.1.2".into());
+        missing_token.remote_fingerprint = Some("AA:BB".into());
+        let mut ready = profile_entry("remote-ready", "remote");
+        ready.remote_host = Some("192.168.1.3".into());
+        ready.remote_token = Some("token".into());
+        ready.remote_fingerprint = Some("CC:DD".into());
+        let profiles = vec![profile_entry("bat", "local"), missing_token, ready];
+
+        assert_eq!(
+            active_profiles_to_restore(&ids, Some("bat"), &profiles),
+            vec!["remote-ready".to_string()]
+        );
+    }
+
+    fn profile_entry(id: &str, kind: &str) -> profile_cmd::ProfileEntry {
+        profile_cmd::ProfileEntry {
+            id: id.into(),
+            name: id.into(),
+            kind: kind.into(),
+            remote_host: None,
+            remote_port: None,
+            remote_token: None,
+            remote_fingerprint: None,
+            remote_profile_id: None,
+            created_at: 0,
+            updated_at: 0,
+        }
     }
 
     #[test]
