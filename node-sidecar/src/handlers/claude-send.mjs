@@ -21,7 +21,7 @@
 // resolving promise.
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
-import { sessions, ensureSession, buildSessionMeta } from '../lib/state.mjs'
+import { sessions, ensureSession, buildSessionMeta, saveSessionConfig } from '../lib/state.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { info as logInfo, warn as logWarn } from '../lib/logger.mjs'
 import { sdkModelForClaudeSelection } from '../lib/models.mjs'
@@ -29,7 +29,7 @@ import { loadInstalledPlugins, dataUrlToContentBlock } from '../lib/plugins.mjs'
 import { resolveClaudeCliBinary } from './claude-auth.mjs'
 import { buildCanUseTool } from './claude-permission.mjs'
 import { LiveQuery } from '../lib/live-query.mjs'
-import { isCodexSession, sendCodexMessage } from './codex.mjs'
+import { isCodexSession, sendCodexMessage, isCodexAgentPreset } from './codex.mjs'
 
 let userEchoSeq = 0
 
@@ -104,6 +104,9 @@ function processMessage(s, sessionId, msg) {
     if (typeof msg.session_id === 'string') s.sdkSessionId = msg.session_id
     if (typeof msg.model === 'string') s.model = msg.model
     if (typeof msg.permissionMode === 'string') s.permissionMode = msg.permissionMode
+    // Persist the freshly-issued sdkSessionId so ensureSession can rebuild
+    // a resumable session even after stopSession / resetSession.
+    saveSessionConfig(sessionId, s)
     const meta = buildSessionMeta(s)
     if (typeof msg.cwd === 'string' && meta) meta.cwd = msg.cwd
     sendEvent('claude:status', { sessionId, meta })
@@ -154,8 +157,22 @@ function processMessage(s, sessionId, msg) {
     return
   }
   if (t === 'assistant') {
-    sendEvent('claude:message', { sessionId, message: msg })
+    // Flatten SDK content blocks so the renderer's ClaudeMessage shape
+    // (flat `thinking` field) is populated even when streaming partials
+    // were not observed (e.g. SDK builds without includePartialMessages,
+    // models without adaptive thinking, history reload paths). Mirrors
+    // claude-history.mjs' textFromContent / thinking extraction.
     const blocks = msg.message?.content
+    let flatThinking = ''
+    if (Array.isArray(blocks)) {
+      flatThinking = blocks
+        .filter(b => b && b.type === 'thinking' && typeof b.thinking === 'string')
+        .map(b => b.thinking)
+        .join('\n')
+        .trim()
+    }
+    const outboundMessage = flatThinking ? { ...msg, thinking: flatThinking } : msg
+    sendEvent('claude:message', { sessionId, message: outboundMessage })
     if (Array.isArray(blocks)) {
       for (const block of blocks) {
         if (block && block.type === 'tool_use' && typeof block.id === 'string') {
@@ -185,7 +202,7 @@ function processMessage(s, sessionId, msg) {
             sessionId,
             result: {
               id: block.tool_use_id,
-              status: block.is_error ? 'error' : 'success',
+              status: block.is_error ? 'error' : 'completed',
               result: block.content,
             },
           })
@@ -226,7 +243,10 @@ function processMessage(s, sessionId, msg) {
 }
 
 async function buildQueryOptions(s, sessionId, prompt) {
-  const cwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string') ? s.options.cwd : process.cwd()
+  const cwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string') ? s.options.cwd : ''
+  if (!cwd) {
+    throw new Error(`claude.sendMessage(${shortSessionId(sessionId)}): session has no cwd; startSession must be called with options.cwd`)
+  }
   const sdkMode = s.permissionMode === 'bypassPlan' ? 'plan' : s.permissionMode
   const sdkModel = sdkModelForClaudeSelection(s.model)
   const claudeCodePath = resolveClaudeCliBinary()
@@ -239,6 +259,11 @@ async function buildQueryOptions(s, sessionId, prompt) {
     settingSources: ['user', 'project', 'local'],
     agentProgressSummaries: true,
     toolConfig: { askUserQuestion: { previewFormat: 'html' } },
+    // Adaptive thinking: let supported models surface reasoning blocks.
+    // SDK's default already enables this for Opus 4.6+, but stating it
+    // explicitly makes the contract clear and covers builds where the
+    // default is off.
+    thinking: { type: 'adaptive' },
   }
   if (sdkMode && sdkMode !== 'default') queryOptions.permissionMode = sdkMode
   if (s.permissionMode === 'bypassPermissions') queryOptions.allowDangerouslySkipPermissions = true
@@ -334,6 +359,9 @@ async function performSendMessage(params) {
   const prompt = typeof params?.prompt === 'string' ? params.prompt : ''
   const images = Array.isArray(params?.images) ? params.images : null
   const s = ensureSession(sessionId)
+  if (isCodexAgentPreset(s.agentPreset)) {
+    throw new Error(`claude.sendMessage(${shortSessionId(sessionId)}): codex session not initialized; restart the Codex agent`)
+  }
   const sid = shortSessionId(sessionId)
   if (s.isResting) s.isResting = false
 

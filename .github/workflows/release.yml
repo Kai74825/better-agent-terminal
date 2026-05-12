@@ -199,6 +199,9 @@ jobs:
           echo "Testing notarytool credentials..."
           xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" 2>&1 || true
 
+      - name: Prepare Tauri bundle resources
+        run: pnpm run prepare:tauri-bundle:ci
+
       - name: Build Tauri release bundle
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_P12 }}
@@ -233,7 +236,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: src-tauri/target/release/bundle/**/*.dmg
+          path: |
+            src-tauri/target/release/bundle/**/*.dmg
+            !src-tauri/target/release/bundle/**/rw.*.dmg
 
       - name: Upload Linux artifact
         if: matrix.platform == 'linux'

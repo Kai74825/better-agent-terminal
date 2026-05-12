@@ -33,6 +33,11 @@ function formatMb(bytes) {
   return `${(bytes / MB).toFixed(1)} MB`
 }
 
+function isIgnoredReleaseArtifact(filePath) {
+  const name = path.basename(filePath)
+  return /^rw\.\d+\..+\.dmg$/.test(name)
+}
+
 function listFiles(dir) {
   let entries
   try {
@@ -46,7 +51,7 @@ function listFiles(dir) {
     const fullPath = path.join(dir, entry.name)
     if (entry.isDirectory()) {
       files.push(...listFiles(fullPath))
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() && !isIgnoredReleaseArtifact(fullPath)) {
       files.push(fullPath)
     }
   }

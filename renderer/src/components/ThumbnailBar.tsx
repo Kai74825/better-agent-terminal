@@ -161,10 +161,11 @@ export function ThumbnailBar({
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
 
-    // Determine if dropping before or after based on mouse position
+    // Thumbnails are laid out horizontally — use the X axis so the
+    // before/after indicator (left/right border) matches what the user sees.
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    const midY = rect.top + rect.height / 2
-    const pos = e.clientY < midY ? 'before' : 'after'
+    const midX = rect.left + rect.width / 2
+    const pos = e.clientX < midX ? 'before' : 'after'
 
     setDropTargetId(id)
     setDropPosition(pos)

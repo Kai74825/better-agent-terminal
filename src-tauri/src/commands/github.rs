@@ -12,7 +12,7 @@
 // return `{success: true}` or `{error: msg}` matching the Electron
 // shape.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -30,10 +30,47 @@ pub struct CliStatus {
     pub authenticated: bool,
 }
 
+// Resolve an absolute `gh` binary path. macOS .app launched from Finder /
+// Dock inherits a minimal PATH that often excludes `/opt/homebrew/bin` and
+// `/usr/local/bin`, so `Command::new("gh")` fails even when the user has
+// gh installed. Mirror the node resolver in codex_app_server.rs: walk the
+// inherited PATH, then fall back to common install dirs.
+fn resolve_gh_binary() -> PathBuf {
+    let exe_names: &[&str] = if cfg!(windows) {
+        &["gh.exe", "gh.cmd", "gh"]
+    } else {
+        &["gh"]
+    };
+    if let Some(path_env) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            for name in exe_names {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let fallbacks: &[&str] = &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
+    #[cfg(target_os = "linux")]
+    let fallbacks: &[&str] = &["/usr/local/bin/gh", "/home/linuxbrew/.linuxbrew/bin/gh"];
+    #[cfg(windows)]
+    let fallbacks: &[&str] = &[];
+    for f in fallbacks {
+        let p = PathBuf::from(f);
+        if p.is_file() {
+            return p;
+        }
+    }
+    // Last resort: bare name so the error message stays meaningful.
+    PathBuf::from("gh")
+}
+
 // Run `gh` with the given args, optionally in a cwd. Returns
 // (stdout_string, success_flag).
 fn run_gh(cwd: Option<&str>, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut cmd = Command::new("gh");
+    let mut cmd = Command::new(resolve_gh_binary());
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -6,10 +6,8 @@
 // This module mirrors that split for Tauri: claude.* handlers delegate here
 // when agentPreset is codex-agent / codex-agent-worktree.
 
-import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { tmpdir, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -34,7 +32,6 @@ const CODEX_SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-ful
 const CODEX_APPROVAL_POLICIES = new Set(['untrusted', 'on-request', 'on-failure', 'never'])
 const sessions = new Map()
 const sdkThreadIds = new Map()
-let CodexClass = null
 
 export function isCodexAgentPreset(agentPreset) {
   return agentPreset === 'codex-agent' || agentPreset === 'codex-agent-worktree'
@@ -53,6 +50,7 @@ function makeMetadata(overrides = {}) {
     model: DEFAULT_CODEX_MODEL,
     sdkSessionId: null,
     cwd: null,
+    effort: null,
     totalCost: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -80,72 +78,6 @@ function normalizeSandbox(mode) {
 
 function normalizeApproval(policy) {
   return typeof policy === 'string' && CODEX_APPROVAL_POLICIES.has(policy) ? policy : 'on-request'
-}
-
-function getCodexInstallHint() {
-  if (process.platform === 'darwin') return 'brew install codex'
-  if (process.platform === 'win32') return 'winget install OpenAI.Codex (or npm i -g @openai/codex)'
-  return 'brew install codex (see https://github.com/openai/codex for other install options)'
-}
-
-function codexTargetTriple() {
-  const { platform, arch } = process
-  if (platform === 'linux' && arch === 'x64') return 'x86_64-unknown-linux-musl'
-  if (platform === 'linux' && arch === 'arm64') return 'aarch64-unknown-linux-musl'
-  if (platform === 'darwin' && arch === 'x64') return 'x86_64-apple-darwin'
-  if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin'
-  if (platform === 'win32' && arch === 'x64') return 'x86_64-pc-windows-msvc'
-  if (platform === 'win32' && arch === 'arm64') return 'aarch64-pc-windows-msvc'
-  return undefined
-}
-
-function findCodexOnPath() {
-  try {
-    const command = process.platform === 'win32'
-      ? 'where.exe codex'
-      : 'command -v codex || which codex'
-    const result = execSync(command, { encoding: 'utf-8', timeout: 3000 }).trim()
-    if (!result) return undefined
-    const candidates = result.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-    for (const candidate of candidates) {
-      if (/\.(cmd|bat|ps1)$/i.test(candidate)) continue
-      if (/[\\/]node_modules[\\/]\.bin[\\/]/i.test(candidate)) continue
-      if (process.platform === 'win32' && !/\.exe$/i.test(candidate)) continue
-      return candidate
-    }
-  } catch { /* ignore */ }
-  return undefined
-}
-
-function findBundledCodex() {
-  const exe = process.platform === 'win32' ? 'codex.exe' : 'codex'
-  const triple = codexTargetTriple()
-  if (!triple) return undefined
-  const platformPkg = `@openai/codex-${process.platform}-${process.arch}`
-  try {
-    const req = createRequire(import.meta.url)
-    let pkgJson = req.resolve(`${platformPkg}/package.json`)
-    if (pkgJson.includes('app.asar') && !pkgJson.includes('app.asar.unpacked')) {
-      pkgJson = pkgJson.replace('app.asar', 'app.asar.unpacked')
-    }
-    const candidate = join(dirname(pkgJson), 'vendor', triple, 'codex', exe)
-    if (existsSync(candidate)) return candidate
-  } catch { /* optional platform package missing */ }
-  return undefined
-}
-
-function findCodexBinary() {
-  const override = process.env.BAT_CODEX_BIN
-  if (override && existsSync(override)) return override
-  return findCodexOnPath() || findBundledCodex()
-}
-
-async function getCodexClass() {
-  if (!CodexClass) {
-    const sdk = await import('@openai/codex-sdk')
-    CodexClass = sdk.Codex || sdk.default
-  }
-  return CodexClass
 }
 
 function threadOptions(session) {
@@ -471,14 +403,7 @@ async function loadHistory(sessionId, threadId) {
 }
 
 async function createCodexInstance() {
-  const codexPath = findCodexBinary()
-  if (!codexPath) throw new Error(`Codex CLI not found. Install with: ${getCodexInstallHint()}`)
-  const Codex = await getCodexClass()
-  return new Codex({
-    codexPathOverride: codexPath,
-    env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => typeof v === 'string')),
-    config: { show_raw_agent_reasoning: true },
-  })
+  throw new Error('Codex sessions are handled by the Tauri Codex app-server runtime; the node-sidecar Codex SDK fallback has been removed.')
 }
 
 async function resolveEffectiveCwd(sessionId, options) {
@@ -515,7 +440,7 @@ export async function startCodexSession(params) {
     approvalPolicy: normalizeApproval(options.codexApprovalPolicy),
     model,
     effort: normalizeEffort(options.effort),
-    metadata: makeMetadata({ model, cwd }),
+    metadata: makeMetadata({ model, cwd, effort: normalizeEffort(options.effort) }),
     startTime: Date.now(),
     isRunning: false,
     messageQueue: [],
@@ -746,7 +671,7 @@ export function resetCodexSession(params) {
   session.abortController.abort()
   session.abortController = new AbortController()
   session.state = { sessionId, messages: [], isStreaming: false }
-  session.metadata = makeMetadata({ model: session.model, cwd: session.cwd })
+  session.metadata = makeMetadata({ model: session.model, cwd: session.cwd, effort: session.effort })
   session.threadId = undefined
   session.metadata.sdkSessionId = null
   sdkThreadIds.delete(sessionId)
@@ -758,7 +683,15 @@ export function resetCodexSession(params) {
 
 export function getCodexSessionState(params) {
   const sessionId = String(params?.sessionId ?? '')
-  return sessions.get(sessionId)?.state ?? null
+  const session = sessions.get(sessionId)
+  if (!session) return null
+  return {
+    ...session.state,
+    model: session.model ?? null,
+    effort: session.effort ?? null,
+    codexSandboxMode: session.sandboxMode ?? null,
+    codexApprovalPolicy: session.approvalPolicy ?? null,
+  }
 }
 
 export function getCodexSessionMeta(params) {
@@ -785,7 +718,9 @@ export function setCodexEffort(params) {
   const session = sessions.get(params?.sessionId)
   if (!session) return false
   session.effort = normalizeEffort(params?.effort)
+  session.metadata.effort = session.effort
   rebuildThread(session)
+  send('claude:status', params.sessionId, 'meta', { ...session.metadata })
   return true
 }
 

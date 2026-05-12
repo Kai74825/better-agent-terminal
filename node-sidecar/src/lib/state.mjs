@@ -5,6 +5,38 @@ import { expectedContextWindowForModel } from './models.mjs'
 
 export const sessions = new Map()
 
+// Persistent per-session config that survives sessions.delete() (stopSession,
+// resetSession). Captures the minimal state needed to rebuild a usable
+// session record on the next ensureSession call — cwd lives here so that
+// `sendMessage` after a stop/reset can keep talking to the same project
+// instead of falling back to process.cwd() or throwing "session has no cwd".
+export const sessionConfigs = new Map()
+
+const CONFIG_KEYS = [
+  'options',
+  'model',
+  'permissionMode',
+  'effort',
+  'autoCompactWindow',
+  'agentPreset',
+  'codexSandboxMode',
+  'codexApprovalPolicy',
+  'sdkSessionId',
+]
+
+export function saveSessionConfig(sessionId, session) {
+  if (!sessionId || !session) return
+  const snapshot = {}
+  for (const key of CONFIG_KEYS) {
+    if (session[key] !== undefined) snapshot[key] = session[key]
+  }
+  sessionConfigs.set(sessionId, snapshot)
+}
+
+export function clearSessionConfig(sessionId) {
+  sessionConfigs.delete(sessionId)
+}
+
 export function ensureSession(sessionId) {
   let s = sessions.get(sessionId)
   if (!s) {
@@ -53,6 +85,14 @@ export function ensureSession(sessionId) {
       isResting: false,
     }
     sessions.set(sessionId, s)
+    // Rehydrate from the persistent config so a subsequent sendMessage after
+    // stopSession/resetSession still knows the cwd, model, sdkSessionId, etc.
+    const saved = sessionConfigs.get(sessionId)
+    if (saved) {
+      for (const key of CONFIG_KEYS) {
+        if (saved[key] !== undefined) s[key] = saved[key]
+      }
+    }
   }
   return s
 }

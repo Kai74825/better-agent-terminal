@@ -50,6 +50,16 @@ fn suppress_subprocess_window(command: &mut Command) {
 #[cfg(not(windows))]
 fn suppress_subprocess_window(_command: &mut Command) {}
 
+// Avoid launching the sidecar with cwd `/` (the default when a macOS .app is
+// started from Finder). Falls back to None when no usable home dir is found,
+// in which case the spawn keeps the parent's cwd unchanged.
+fn safe_default_cwd() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
 #[derive(Debug, Serialize)]
 pub struct BridgeError {
     pub message: String,
@@ -419,6 +429,9 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(dir) = safe_default_cwd() {
+        command.current_dir(dir);
+    }
     suppress_subprocess_window(&mut command);
     if let Some(dir) = &cfg.data_dir {
         command.env("BAT_SIDECAR_DATA_DIR", dir);

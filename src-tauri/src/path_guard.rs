@@ -49,7 +49,27 @@ fn denied_paths() -> Vec<PathBuf> {
         join(&["Library", "Application Support", "BraveSoftware"]),
         join(&["Library", "Application Support", "Microsoft Edge"]),
         join(&["Library", "Application Support", "Firefox"]),
-        // BAT's own secrets
+        // BAT's own secrets — current Electron/Tauri build uses
+        // productName `BetterAgentTerminal`; the lowercase paths cover the
+        // legacy package-name folder users may still have on disk.
+        join(&[
+            "Library",
+            "Application Support",
+            "BetterAgentTerminal",
+            "server-cert.enc.json",
+        ]),
+        join(&[
+            "Library",
+            "Application Support",
+            "BetterAgentTerminal",
+            "server-token.enc.json",
+        ]),
+        join(&[
+            "Library",
+            "Application Support",
+            "BetterAgentTerminal",
+            "claude-account-creds.enc.json",
+        ]),
         join(&[
             "Library",
             "Application Support",
@@ -69,6 +89,8 @@ fn denied_paths() -> Vec<PathBuf> {
             "claude-account-creds.enc.json",
         ]),
         // Linux / XDG
+        join(&[".config", "BetterAgentTerminal", "server-cert.enc.json"]),
+        join(&[".config", "BetterAgentTerminal", "server-token.enc.json"]),
         join(&[".config", "better-agent-terminal", "server-cert.enc.json"]),
         join(&[".config", "better-agent-terminal", "server-token.enc.json"]),
         join(&[".mozilla"]),

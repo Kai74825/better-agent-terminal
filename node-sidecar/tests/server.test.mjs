@@ -3187,7 +3187,7 @@ async function inProcess() {
     assert.equal(typeof tu1.toolCall.timestamp, 'number')
     const tr1 = toolResultEvents[0].payload.result
     assert.equal(tr1.id, 'toolu_01')
-    assert.equal(tr1.status, 'success')
+    assert.equal(tr1.status, 'completed')
     assert.equal(tr1.result, 'file1\nfile2')
     const tr2 = toolResultEvents[1].payload.result
     assert.equal(tr2.id, 'toolu_02')

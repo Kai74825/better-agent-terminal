@@ -17,8 +17,8 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@openai/codex-sdk':
-        specifier: ^0.128.0
+      '@openai/codex':
+        specifier: 0.128.0
         version: 0.128.0
       '@vscode/ripgrep':
         specifier: ^1.17.1
@@ -860,10 +860,6 @@ packages:
   '@noble/hashes@1.4.0':
     resolution: {integrity: sha512-V1JJ1WTRUqHHrOSh597hURcMqVKVGL/ea3kv0gSnEdsEZ0/+VyPghM1lMNGc00z7CIQorSvbKpuJkxvuHbvdbg==}
     engines: {node: '>= 16'}
-
-  '@openai/codex-sdk@0.128.0':
-    resolution: {integrity: sha512-Eao0LLA5x90qwU6SXYd21h4KxdCef1WpCvHFgKdbqzWMJ79lUvguGDGvx1RheP+zTdKGxJfJ6dulI5wSXoUBhQ==}
-    engines: {node: '>=18'}
 
   '@openai/codex@0.128.0':
     resolution: {integrity: sha512-+xp6ODmFfBNnexIWRHApEaPXot2j6gyM8A5we/5IS/uY4eYHj4arETct4hQ5M4eO+MK7JY3ZU4xhuobhlysr0A==}
@@ -3127,10 +3123,6 @@ snapshots:
     optional: true
 
   '@noble/hashes@1.4.0': {}
-
-  '@openai/codex-sdk@0.128.0':
-    dependencies:
-      '@openai/codex': 0.128.0
 
   '@openai/codex@0.128.0':
     optionalDependencies:

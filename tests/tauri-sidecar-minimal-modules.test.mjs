@@ -17,10 +17,13 @@ assert.equal(
   'Tauri should not package the full sidecar node_modules tree',
 )
 
-const distModules = new URL('../node-sidecar/dist-node_modules/@anthropic-ai', import.meta.url)
-let packages = []
+const anthropicModules = new URL('../node-sidecar/dist-node_modules/@anthropic-ai', import.meta.url)
+const openaiModules = new URL('../node-sidecar/dist-node_modules/@openai', import.meta.url)
+let anthropicPackages = []
+let openaiPackages = []
 try {
-  packages = await readdir(distModules)
+  anthropicPackages = await readdir(anthropicModules)
+  openaiPackages = await readdir(openaiModules)
 } catch (err) {
   if (err?.code === 'ENOENT') {
     console.log('tauri-sidecar-minimal-modules: skipped (run prepare:tauri-bundle first)')
@@ -30,12 +33,20 @@ try {
 }
 
 assert.ok(
-  packages.some((name) => /^claude-agent-sdk-(win32|darwin|linux)-/.test(name)),
+  anthropicPackages.some((name) => /^claude-agent-sdk-(win32|darwin|linux)-/.test(name)),
   'minimal sidecar node_modules must retain the platform Claude native package',
 )
 assert.ok(
-  !packages.includes('claude-agent-sdk'),
+  !anthropicPackages.includes('claude-agent-sdk'),
   'minimal sidecar node_modules should not contain the JS Claude SDK package',
+)
+assert.ok(
+  openaiPackages.some((name) => /^codex-(win32|darwin|linux)-/.test(name)),
+  'minimal sidecar node_modules must retain the platform Codex native package',
+)
+assert.ok(
+  !openaiPackages.includes('codex') && !openaiPackages.includes('codex-sdk'),
+  'minimal sidecar node_modules should not contain Codex JS packages',
 )
 
 const server = join(root, 'node-sidecar', 'dist', 'server.mjs')

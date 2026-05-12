@@ -12,6 +12,7 @@ try {
   await mkdir(join(root, 'src-tauri'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'dist'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64'), { recursive: true })
+  await mkdir(join(root, 'node-sidecar', 'dist-node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'runtime', 'windows-x86_64'), { recursive: true })
 
   await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
@@ -27,6 +28,7 @@ try {
   await writeFile(join(root, 'node-sidecar', 'dist', 'server.mjs'), 'console.log("ok")')
   await writeFile(join(root, 'node-sidecar', 'package.json'), '{"type":"module"}')
   await writeFile(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64', 'claude.exe'), 'claude')
+  await writeFile(join(root, 'node-sidecar', 'dist-node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex', 'codex.exe'), 'codex')
   await writeFile(join(root, 'node-sidecar', 'runtime', 'windows-x86_64', 'node.exe'), 'node')
 
   const ready = await collectTauriPreviewReadiness({

@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs'
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
-import { sessions, ensureSession, buildSessionMeta } from '../lib/state.mjs'
+import { sessions, ensureSession, buildSessionMeta, saveSessionConfig } from '../lib/state.mjs'
 import { expectedContextWindowForModel } from '../lib/models.mjs'
 import { closeLiveQuery } from './claude-send.mjs'
 import { loadSessionHistory } from './claude-history.mjs'
@@ -66,9 +66,16 @@ registerHandler('claude.startSession', async (params) => {
     throw new Error('claude.startSession: missing sessionId')
   }
   if (isCodexAgentPreset(params?.options?.agentPreset)) {
+    const s = ensureSession(sessionId)
+    s.agentPreset = params.options.agentPreset
     return startCodexSession(params)
   }
+  const optionsCwd = params?.options?.cwd
+  if (typeof optionsCwd !== 'string' || !optionsCwd) {
+    throw new Error('claude.startSession: missing cwd')
+  }
   const s = ensureSession(sessionId)
+  s.agentPreset = params?.options?.agentPreset ?? null
   s.active = true
   s.options = params?.options ?? null
   // Some options carry per-session config the renderer expects to read
@@ -89,11 +96,9 @@ registerHandler('claude.startSession', async (params) => {
     applyWorktreeOptions(sessionId, s)
   }
   if (s.sdkSessionId) {
-    const historyCwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string')
-      ? s.options.cwd
-      : process.cwd()
-    await loadSessionHistory(sessionId, s.sdkSessionId, historyCwd)
+    await loadSessionHistory(sessionId, s.sdkSessionId, optionsCwd)
   }
+  saveSessionConfig(sessionId, s)
   return { ok: true, sessionId }
 })
 
@@ -114,6 +119,10 @@ registerHandler('claude.resumeSession', async (params) => {
     throw new Error('claude.resumeSession: missing sdkSessionId')
   }
   if (isCodexAgentPreset(params?.options?.agentPreset) || isCodexSession(sessionId)) {
+    const marker = ensureSession(sessionId)
+    if (isCodexAgentPreset(params?.options?.agentPreset)) {
+      marker.agentPreset = params.options.agentPreset
+    }
     return resumeCodexSession(params)
   }
   const existing = sessions.get(sessionId)
@@ -129,6 +138,7 @@ registerHandler('claude.resumeSession', async (params) => {
   const s = ensureSession(sessionId)
   s.active = true
   s.options = params?.options ?? null
+  s.agentPreset = params?.options?.agentPreset ?? null
   s.permissionMode = 'bypassPermissions'
   if (s.options && typeof s.options === 'object') {
     if (typeof s.options.cwd === 'string') {
@@ -151,6 +161,7 @@ registerHandler('claude.resumeSession', async (params) => {
     return { ok: true, sessionId, stale: true, requestedSdkSessionId: sdkSessionIdToResume }
   }
   s.sdkSessionId = sdkSessionIdToResume
+  saveSessionConfig(sessionId, s)
   return { ok: true, sessionId, sdkSessionId: sdkSessionIdToResume }
 })
 

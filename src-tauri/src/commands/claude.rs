@@ -1541,6 +1541,7 @@ pub async fn claude_start_session(
                 return Ok(value);
             }
             Err(err) => {
+                let message = err.message.clone();
                 emit_codex_route_metric(
                     &app,
                     "codexRuntime",
@@ -1548,11 +1549,12 @@ pub async fn claude_start_session(
                     &session_id,
                     started.elapsed(),
                     false,
-                    Some(format!("falling back to sidecar: {}", err.message)),
+                    Some(message),
                 );
+                let _ = (*codex_state).stop_session(session_id.clone());
+                return Err(err);
             }
         }
-        let _ = (*codex_state).stop_session(session_id.clone());
     }
     call_with_timeout_blocking(
         app,
@@ -2692,6 +2694,7 @@ pub async fn claude_resume_session(
                         return Ok(value);
                     }
                     Err(start_err) => {
+                        let message = start_err.message.clone();
                         emit_codex_route_metric(
                             &app,
                             "codexRuntime",
@@ -2701,14 +2704,16 @@ pub async fn claude_resume_session(
                             false,
                             Some(format!(
                                 "fresh start failed after stale sdkSessionId {}: {}",
-                                sdk_session_id, start_err.message
+                                sdk_session_id, message
                             )),
                         );
                         let _ = (*codex_state).stop_session(session_id.clone());
+                        return Err(start_err);
                     }
                 }
             }
             Err(err) => {
+                let message = err.message.clone();
                 emit_codex_route_metric(
                     &app,
                     "codexRuntime",
@@ -2716,9 +2721,10 @@ pub async fn claude_resume_session(
                     &session_id,
                     resume_started.elapsed(),
                     false,
-                    Some(err.message),
+                    Some(message),
                 );
                 let _ = (*codex_state).stop_session(session_id.clone());
+                return Err(err);
             }
         }
     }
