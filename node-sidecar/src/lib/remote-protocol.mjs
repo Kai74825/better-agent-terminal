@@ -10,6 +10,21 @@
 // Keep these lists in lockstep with electron/remote/protocol.ts. The
 // sidecar test asserts parity by reading the Electron source and diffing.
 
+export const REMOTE_PROTOCOL_LEGACY_V1 = 'bat-remote/legacy-v1'
+export const REMOTE_PROTOCOL_V2 = 'bat-remote/v2'
+export const SUPPORTED_REMOTE_PROTOCOLS = [REMOTE_PROTOCOL_V2, REMOTE_PROTOCOL_LEGACY_V1]
+
+export function negotiateRemoteProtocol(offered) {
+  const values = Array.isArray(offered)
+    ? offered.filter(value => typeof value === 'string')
+    : []
+  if (values.length === 0) return REMOTE_PROTOCOL_LEGACY_V1
+  for (const protocol of SUPPORTED_REMOTE_PROTOCOLS) {
+    if (values.includes(protocol)) return protocol
+  }
+  return null
+}
+
 export const PROXIED_CHANNELS = new Set([
   // PTY
   'pty:create', 'pty:write', 'pty:resize', 'pty:kill', 'pty:restart', 'pty:get-cwd',

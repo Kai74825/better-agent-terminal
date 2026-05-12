@@ -1,8 +1,11 @@
-// remote.* — cross-machine server / client. Forwards to the Node sidecar.
-// The sidecar owns the TLS/WebSocket server/client lifecycle so the
-// renderer-facing Tauri commands stay thin and nonblocking.
+// remote.* — cross-machine server / client.
+//
+// The Rust host now owns server start/stop/status so remote IPC can move
+// toward the same dispatcher as local Tauri commands. The outgoing client
+// path still delegates to the Node sidecar for this slice.
 
 use crate::log_file::append_line;
+use crate::remote_server::RustRemoteServerState;
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use crate::{app_data, sidecar};
 use serde::Deserialize;
@@ -76,8 +79,8 @@ fn maybe_auto_start_remote_server(app: AppHandle, state: SidecarState) -> Result
         return Ok(());
     }
 
-    let status =
-        call(&app, &state, "remote.serverStatus", Value::Null).map_err(|err| err.message)?;
+    let remote_state = app.state::<RustRemoteServerState>();
+    let status = remote_state.status();
     if status
         .get("running")
         .and_then(|value| value.as_bool())
@@ -88,13 +91,11 @@ fn maybe_auto_start_remote_server(app: AppHandle, state: SidecarState) -> Result
 
     let port = settings.port.unwrap_or(9876);
     let bind_interface = normalize_bind_interface(settings.bind_interface.as_deref());
-    let result = call(
-        &app,
-        &state,
-        "remote.startServer",
-        json!({ "options": { "port": port, "bindInterface": bind_interface } }),
-    )
-    .map_err(|err| err.message)?;
+    let result = remote_state.start(
+        app.clone(),
+        state,
+        Some(json!({ "port": port, "bindInterface": bind_interface })),
+    )?;
 
     if let Some(error) = result.get("error").and_then(|value| value.as_str()) {
         return Err(error.to_string());
@@ -147,31 +148,28 @@ async fn call_blocking(
 pub async fn remote_start_server(
     app: AppHandle,
     state: State<'_, SidecarState>,
+    remote_state: State<'_, RustRemoteServerState>,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
-        state,
-        "remote.startServer",
-        json!({ "options": options.unwrap_or(Value::Null) }),
-    )
-    .await
+    let sidecar_state = (*state).clone();
+    let options = options.unwrap_or(Value::Null);
+    remote_state
+        .start(app, sidecar_state, Some(options))
+        .map_err(BridgeError::from)
 }
 
 #[tauri::command]
 pub async fn remote_stop_server(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    remote_state: State<'_, RustRemoteServerState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "remote.stopServer", Value::Null).await
+    Ok(Value::Bool(remote_state.stop()))
 }
 
 #[tauri::command]
 pub async fn remote_server_status(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    remote_state: State<'_, RustRemoteServerState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "remote.serverStatus", Value::Null).await
+    Ok(remote_state.status())
 }
 
 #[tauri::command]

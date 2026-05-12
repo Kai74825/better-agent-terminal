@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 // Cap stderr tail buffer at this many lines. Enough to capture a typical
 // Node startup error trace (import failure, syntax error, etc.) while
@@ -387,6 +387,8 @@ pub type EventSink = Arc<dyn Fn(&str, &Value) + Send + Sync + 'static>;
 pub fn app_handle_emit_sink(app: AppHandle) -> EventSink {
     Arc::new(move |name: &str, params: &Value| {
         publish_runtime_event(&app, name, params.clone(), "node-sidecar");
+        app.state::<crate::remote_server::RustRemoteServerState>()
+            .broadcast_event(name, params);
     })
 }
 

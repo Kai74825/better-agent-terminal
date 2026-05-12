@@ -24,7 +24,14 @@ import { networkInterfaces } from 'node:os'
 import { WebSocketServer, WebSocket } from 'ws'
 
 import { broadcastHub } from './remote-broadcast.mjs'
-import { PROXIED_CHANNELS, PROXIED_EVENTS, invokeRemoteHandler, hasRemoteHandler } from './remote-protocol.mjs'
+import {
+  PROXIED_CHANNELS,
+  PROXIED_EVENTS,
+  REMOTE_PROTOCOL_V2,
+  invokeRemoteHandler,
+  hasRemoteHandler,
+  negotiateRemoteProtocol,
+} from './remote-protocol.mjs'
 import { ensureCertificate } from './remote-certificate.mjs'
 import { readEncryptedString, writeEncryptedString } from './remote-secrets.mjs'
 
@@ -238,6 +245,16 @@ export class RemoteServer {
 
       if (frame.type === 'auth') {
         if (frame.token === this.token) {
+          const offeredProtocols = Array.isArray(frame.protocols)
+            ? frame.protocols
+            : (typeof frame.protocol === 'string' ? [frame.protocol] : [])
+          const protocol = negotiateRemoteProtocol(offeredProtocols)
+          if (!protocol) {
+            this.recordAuthFailure(ip)
+            this._send(ws, { type: 'auth-result', id: frame.id, error: 'Unsupported remote protocol' })
+            try { ws.close(1008, 'Unsupported remote protocol') } catch { /* ignore */ }
+            return
+          }
           const requested = frame.args?.[1]
           const requestedWindowId =
             requested && typeof requested === 'object' && typeof requested.windowId === 'string'
@@ -250,8 +267,9 @@ export class RemoteServer {
             label: frame.args?.[0] || 'Remote Client',
             windowId: requestedWindowId || this.defaultWindowId,
             connectedAt: Date.now(),
+            protocol,
           })
-          this._send(ws, { type: 'auth-result', id: frame.id, result: true })
+          this._send(ws, { type: 'auth-result', id: frame.id, result: true, protocol })
         } else {
           this.recordAuthFailure(ip)
           this._send(ws, { type: 'auth-result', id: frame.id, error: 'Invalid token' })
@@ -276,11 +294,13 @@ export class RemoteServer {
           if (!PROXIED_CHANNELS.has(frame.channel)) {
             throw new Error(`Channel is not exposed remotely: ${frame.channel}`)
           }
-          let args = frame.args || []
+          const client = this.clients.get(ws)
+          let args = (client?.protocol === REMOTE_PROTOCOL_V2 && Object.prototype.hasOwnProperty.call(frame, 'params'))
+            ? [frame.params ?? null]
+            : (frame.args || [])
           while (args.length > 0 && args[args.length - 1] == null) {
             args = args.slice(0, -1)
           }
-          const client = this.clients.get(ws)
           // Handler bridge: if a handler is registered via
           // registerRemoteHandler we use it; otherwise the channel is
           // listed as proxied but not yet bridged to the sidecar's

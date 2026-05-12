@@ -3196,6 +3196,17 @@ async function inProcess() {
     assert.match(lp.result.error, /fingerprint/i)
     const inv = await dispatch({ jsonrpc: '2.0', id: 9007, method: 'remote.invoke', params: { channel: 'claude:list-sessions', args: ['C:/repo'] } })
     assert.match(inv.error.message, /not connected/i)
+    const certDir = mkdtempSync(join(tmpdir(), 'sidecar-remote-cert-handler-'))
+    try {
+      const certReply = await dispatch({ jsonrpc: '2.0', id: 9008, method: 'remote.ensureCertificate', params: { configDir: certDir, force: true } })
+      assert.match(certReply.result.fingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/)
+      const stored = JSON.parse(readFileSync(join(certDir, 'server-cert.enc.json'), 'utf-8'))
+      assert.equal(stored.enc, false)
+      const certPayload = JSON.parse(stored.data)
+      assert.match(certPayload.privateKey, /BEGIN PRIVATE KEY/)
+    } finally {
+      rmSync(certDir, { recursive: true, force: true })
+    }
 
     // tunnel.getConnection — loopback `boundHost` short-circuits to a
     // single 127.0.0.1 entry. The handler still returns `{error, addresses}`
@@ -3295,6 +3306,12 @@ async function inProcess() {
     // Sanity: the sets are non-trivial.
     assert.ok(protocol.PROXIED_CHANNELS.size > 50, `expected >50 channels, got ${protocol.PROXIED_CHANNELS.size}`)
     assert.ok(protocol.PROXIED_EVENTS.size > 15, `expected >15 events, got ${protocol.PROXIED_EVENTS.size}`)
+    assert.equal(protocol.negotiateRemoteProtocol([]), protocol.REMOTE_PROTOCOL_LEGACY_V1)
+    assert.equal(
+      protocol.negotiateRemoteProtocol([protocol.REMOTE_PROTOCOL_LEGACY_V1, protocol.REMOTE_PROTOCOL_V2]),
+      protocol.REMOTE_PROTOCOL_V2,
+    )
+    assert.equal(protocol.negotiateRemoteProtocol(['unknown/spec']), null)
 
     // Handler-registry contract: register / has / invoke / reset.
     const { registerRemoteHandler, hasRemoteHandler, invokeRemoteHandler, __resetRemoteHandlersForTests, __remoteHandlerCountForTests } = protocol
@@ -3399,6 +3416,21 @@ async function inProcess() {
     // (Result is an array; we only assert shape.)
     const models = await invokeRemoteHandler('claude:get-supported-models', [{ cwd: tmpdir() }])
     assert.ok(Array.isArray(models), `expected array, got ${typeof models}`)
+
+    // (f) legacy-v1 Electron clients send positional IPC args. The bridge
+    // isolates that deprecated shape and converts it into sidecar named
+    // params so old clients can still talk to a Tauri/sidecar remote host.
+    assert.deepEqual(
+      bridge.legacyV1ArgsToParams('claude:start-session', ['legacy-s1', { cwd: '/repo' }]),
+      { sessionId: 'legacy-s1', options: { cwd: '/repo' } },
+    )
+    assert.deepEqual(
+      bridge.legacyV1ArgsToParams('claude:send-message', ['legacy-s1', 'hello', ['img'], 4000]),
+      { sessionId: 'legacy-s1', prompt: 'hello', images: ['img'], autoCompactWindow: 4000 },
+    )
+    const legacyStart = await invokeRemoteHandler('claude:start-session', ['legacy-start', { cwd: tmpdir() }])
+    assert.equal(legacyStart.ok, true)
+    assert.equal(legacyStart.sessionId, 'legacy-start')
   }
 
   // path-guard — port of electron/path-guard.ts and src-tauri/path_guard.rs.
@@ -4648,6 +4680,23 @@ async function inProcess() {
     broadcast.__resetBroadcastHubForTests()
     broadcast.broadcastHub.broadcast('claude:message', { ignored: true })
     assert.equal(seen.length, 2, 'post-reset broadcasts must not reach removed listeners')
+
+    // sendEvent mirrors host-originated proxied events to the remote hub
+    // using the deprecated legacy-v1 positional event shape expected by
+    // Electron RemoteClient. The stdout JSON-RPC payload remains named.
+    const protocolMod = await import('../src/lib/protocol.mjs')
+    const emitted = []
+    const forwarded = []
+    const restoreEmit = protocolMod.__setSendEventForTests((name, payload) => emitted.push({ name, payload }))
+    broadcast.__resetBroadcastHubForTests()
+    broadcast.broadcastHub.on('broadcast', (channel, ...args) => forwarded.push({ channel, args }))
+    protocolMod.sendEvent('claude:message', { sessionId: 's1', message: { role: 'assistant' } })
+    assert.deepEqual(emitted, [{ name: 'claude:message', payload: { sessionId: 's1', message: { role: 'assistant' } } }])
+    assert.deepEqual(forwarded, [{ channel: 'claude:message', args: ['s1', { role: 'assistant' }] }])
+    protocolMod.sendEvent('claude:message', { sessionId: 's2', message: { role: 'user' } }, { broadcast: false })
+    assert.equal(forwarded.length, 1, 'broadcast:false must not re-forward remote-client events')
+    restoreEmit()
+    broadcast.__resetBroadcastHubForTests()
   }
 
   // remote-fingerprint — pure crypto helpers ported ahead of the
@@ -4785,6 +4834,7 @@ async function inProcess() {
   // token / stop teardown.
   {
     const { RemoteServer } = await import('../src/lib/remote-server-impl.mjs')
+    const { REMOTE_PROTOCOL_LEGACY_V1, REMOTE_PROTOCOL_V2 } = await import('../src/lib/remote-protocol.mjs')
     const { mkdtempSync, rmSync, existsSync, readFileSync } = await import('node:fs')
     const { join } = await import('node:path')
     const { WebSocket } = await import('ws')
@@ -4853,6 +4903,30 @@ async function inProcess() {
       assert.equal(happy.seen[0].type, 'auth-result')
       assert.equal(happy.seen[0].result, true)
       assert.equal(happy.seen[0].id, 'auth-1')
+      assert.equal(happy.seen[0].protocol, REMOTE_PROTOCOL_LEGACY_V1)
+
+      const v2 = await (async () => {
+        const ws = new WebSocket(`wss://127.0.0.1:${startResult.port}`, { rejectUnauthorized: false })
+        await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject) })
+        const seen = []
+        ws.on('message', raw => seen.push(JSON.parse(raw.toString())))
+        ws.send(JSON.stringify({
+          type: 'auth',
+          id: 'auth-v2',
+          token: startResult.token,
+          protocols: [REMOTE_PROTOCOL_LEGACY_V1, REMOTE_PROTOCOL_V2],
+          args: ['v2-laptop'],
+        }))
+        const deadline = Date.now() + 2000
+        while (seen.length === 0 && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 20))
+        }
+        ws.close()
+        return seen[0]
+      })()
+      assert.equal(v2.type, 'auth-result')
+      assert.equal(v2.protocol, REMOTE_PROTOCOL_V2)
+      await new Promise(r => setTimeout(r, 50))
 
       // Connected client appears in status.
       const sWithClient = server.status()

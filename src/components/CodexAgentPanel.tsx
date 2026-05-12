@@ -4514,17 +4514,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         }
 
         const renderers: Record<string, () => React.ReactNode | null> = {
-          sessionId: () => isCodexSession ? (
-            <span
-              key="sessionId"
-              className="claude-statusline-item"
-              title={sessionMeta?.sdkSessionId
-                ? `Codex Session: ${sessionMeta.sdkSessionId}\nPanel: ${sessionId}`
-                : `Panel: ${sessionId}`}
-            >
-              {sessionMeta?.sdkSessionId ? sessionMeta.sdkSessionId.slice(0, 8) : sessionId.slice(0, 8)}
-            </span>
-          ) : (
+          sessionId: () => (
             <span key="sessionId" className="claude-statusline-item claude-statusline-clickable"
               onClick={async () => {
                 setResumeLoading(true); setShowResumeList(true)
@@ -4533,8 +4523,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
                 finally { setResumeLoading(false) }
               }}
               title={sessionMeta?.sdkSessionId
-                ? `SDK Session: ${sessionMeta.sdkSessionId}\nPanel: ${sessionId}\nClick to resume`
-                : `Panel: ${sessionId}\nClick to resume`}
+                ? `Codex Session: ${sessionMeta.sdkSessionId}\nPanel: ${sessionId}\nClick to restore`
+                : `Panel: ${sessionId}\nClick to restore`}
             >
               {sessionMeta?.sdkSessionId ? sessionMeta.sdkSessionId.slice(0, 8) : sessionId.slice(0, 8)}
             </span>

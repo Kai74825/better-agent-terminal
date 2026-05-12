@@ -60,6 +60,7 @@
     "prepare:tauri-bundle": "node scripts/fetch-node-runtime.mjs && pnpm --dir node-sidecar install && pnpm run prune:tauri-sidecar && pnpm run build:tauri-sidecar && pnpm run prepare:tauri-sidecar-node-modules",
     "prepare:tauri-bundle:ci": "node scripts/fetch-node-runtime.mjs && pnpm --dir node-sidecar install --frozen-lockfile && pnpm run prune:tauri-sidecar && pnpm run build:tauri-sidecar && pnpm run prepare:tauri-sidecar-node-modules",
     "tauri": "tauri",
+    "tauri:dev:local": "node scripts/run-tauri-dev-local.mjs",
     "tauri:dev": "tauri dev",
     "tauri:dev:latest": "pnpm run prepare:tauri-bundle && tauri dev",
     "tauri:build:ci": "pnpm run prepare:tauri-bundle:ci && tauri build",

@@ -50,7 +50,7 @@ async function generate() {
   return { cert: pems.cert, privateKey: pems.private, createdAt: Date.now() }
 }
 
-export async function ensureCertificate(configDir) {
+export async function ensureCertificate(configDir, options = {}) {
   if (typeof configDir !== 'string' || !configDir) {
     throw new Error('ensureCertificate: configDir must be a non-empty string')
   }
@@ -58,7 +58,7 @@ export async function ensureCertificate(configDir) {
     mkdirSync(configDir, { recursive: true, mode: 0o700 })
   }
   const certPath = join(configDir, CERT_FILE)
-  let stored = readEncryptedJson(certPath)
+  let stored = options && options.force === true ? null : readEncryptedJson(certPath)
   if (!stored || typeof stored !== 'object' || typeof stored.cert !== 'string' || typeof stored.privateKey !== 'string') {
     stored = await generate()
     try {

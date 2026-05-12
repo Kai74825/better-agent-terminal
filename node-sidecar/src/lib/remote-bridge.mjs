@@ -7,17 +7,19 @@
 // surfaces "Channel is allowed but not yet bridged to sidecar dispatch".
 // This module fills that registry with one auto-bridge per channel that
 // turns the kebab-style channel into the equivalent JSON-RPC method
-// (`claude:start-session` → `claude.startSession`) and forwards the
-// frame's first positional arg as the JSON-RPC `params` object.
+// (`claude:start-session` → `claude.startSession`) and forwards invoke
+// args as the JSON-RPC `params` object.
 //
-// **Wire format note**: remote frames send `args` as a positional list,
-// which is what Electron's IPC contract uses. The sidecar's JSON-RPC
-// handlers take a single named-params object. We unwrap `args[0]` and
-// pass it as `params`. Both ends in the Tauri build are produced by the
-// same renderer/host-api pair, so they agree on the {params} shape; an
-// Electron-built remote client sending positional args[N] would only see
-// args[0] honored. That's intentional — once the Electron build retires,
-// args[0] is the entire input.
+// Protocol compatibility:
+// - legacy-v1 Electron clients send IPC-shaped positional args
+//   (`claude:send-message`, sessionId, prompt, images, autoCompactWindow).
+// - current sidecar handlers take one named-params object
+//   (`{ sessionId, prompt, images, autoCompactWindow }`).
+//
+// Keep the legacy-v1 adapter isolated here so the next protocol spec can
+// move to explicit named params without carrying positional semantics into
+// every handler. Once legacy Electron remote clients are retired, delete
+// LEGACY_V1_PARAM_KEYS / LEGACY_V1_CUSTOM_PARAMS and pass args[0] through.
 //
 // Channels that have no sidecar handler (e.g. `pty:*`, `git:*`, `fs:*`
 // — those live in Tauri Rust commands and aren't reachable from the
@@ -28,6 +30,154 @@
 
 import { PROXIED_CHANNELS, registerRemoteHandler, hasRemoteHandler } from './remote-protocol.mjs'
 import { dispatch } from './protocol.mjs'
+
+const LEGACY_V1_PARAM_KEYS = new Map([
+  ['settings:save', ['data']],
+  ['settings:get-shell-path', ['shellType']],
+  ['image:read-as-data-url', ['filePath']],
+
+  ['claude:send-message', ['sessionId', 'prompt', 'images', 'autoCompactWindow']],
+  ['claude:stop-session', ['sessionId']],
+  ['claude:abort-session', ['sessionId']],
+  ['claude:set-auto-continue', ['sessionId', 'opts']],
+  ['claude:get-auto-continue', ['sessionId']],
+  ['claude:set-permission-mode', ['sessionId', 'mode']],
+  ['claude:set-codex-sandbox-mode', ['sessionId', 'mode']],
+  ['claude:set-codex-approval-policy', ['sessionId', 'policy']],
+  ['claude:set-model', ['sessionId', 'model', 'autoCompactWindow']],
+  ['claude:set-effort', ['sessionId', 'effort']],
+  ['claude:reset-session', ['sessionId']],
+  ['claude:get-supported-models', ['sessionId']],
+  ['claude:get-account-info', ['sessionId']],
+  ['claude:get-supported-commands', ['sessionId']],
+  ['claude:get-supported-agents', ['sessionId']],
+  ['claude:get-session-state', ['sessionId']],
+  ['claude:get-session-meta', ['sessionId']],
+  ['claude:get-worktree-status', ['sessionId']],
+  ['claude:cleanup-worktree', ['sessionId', 'deleteBranch']],
+  ['claude:scan-skills', ['cwd']],
+  ['claude:get-context-usage', ['sessionId']],
+  ['claude:resolve-permission', ['sessionId', 'toolUseId', 'result']],
+  ['claude:resolve-ask-user', ['sessionId', 'toolUseId', 'answers']],
+  ['claude:list-sessions', ['cwd', 'agentKind']],
+  ['claude:fork-session', ['sessionId']],
+  ['claude:rewind-to-prompt', ['sessionId', 'promptIndex']],
+  ['claude:stop-task', ['sessionId', 'taskId']],
+  ['claude:rest-session', ['sessionId']],
+  ['claude:wake-session', ['sessionId']],
+  ['claude:is-resting', ['sessionId']],
+  ['claude:archive-messages', ['sessionId', 'messages']],
+  ['claude:load-archived', ['sessionId', 'offset', 'limit']],
+  ['claude:clear-archive', ['sessionId']],
+  ['claude:fetch-subagent-messages', ['sessionId', 'agentToolUseId']],
+  ['claude:account-switch', ['accountId']],
+  ['claude:account-remove', ['accountId']],
+
+  ['worktree:create', ['sessionId', 'cwd']],
+  ['worktree:remove', ['sessionId', 'deleteBranch']],
+  ['worktree:status', ['sessionId']],
+  ['worktree:merge', ['sessionId', 'strategy']],
+  ['worktree:rehydrate', ['sessionId', 'cwd', 'worktreePath', 'branchName']],
+
+  ['git:get-github-url', ['folderPath']],
+  ['git:branch', ['cwd']],
+  ['git:log', ['cwd', 'count']],
+  ['git:diff', ['cwd', 'commitHash', 'filePath']],
+  ['git:diff-files', ['cwd', 'commitHash']],
+  ['git:status', ['cwd']],
+  ['git:getRoot', ['cwd']],
+
+  ['fs:readdir', ['dirPath']],
+  ['fs:readFile', ['filePath']],
+  ['fs:search', ['dirPath', 'query']],
+  ['fs:watch', ['dirPath']],
+  ['fs:unwatch', ['dirPath']],
+  ['fs:list-dirs', ['dirPath', 'includeHidden']],
+  ['fs:mkdir', ['parentPath', 'name']],
+  ['fs:delete-path', ['targetPath']],
+  ['fs:resolve-path-links', ['cwd', 'rawPaths']],
+
+  ['github:pr-list', ['cwd']],
+  ['github:issue-list', ['cwd']],
+  ['github:pr-view', ['cwd', 'number']],
+  ['github:issue-view', ['cwd', 'number']],
+  ['github:pr-comment', ['cwd', 'number', 'body']],
+  ['github:issue-comment', ['cwd', 'number', 'body']],
+
+  ['openai:list-sessions', ['cwd']],
+  ['openai:set-api-key', ['key']],
+  ['openai:compact-now', ['sessionId']],
+
+  ['profile:load', ['profileId']],
+  ['profile:load-snapshot', ['profileId']],
+  ['profile:activate', ['profileId']],
+  ['profile:deactivate', ['profileId']],
+
+  ['snippet:getById', ['id']],
+  ['snippet:create', ['input']],
+  ['snippet:update', ['id', 'updates']],
+  ['snippet:delete', ['id']],
+  ['snippet:toggleFavorite', ['id']],
+  ['snippet:search', ['query']],
+  ['snippet:getByWorkspace', ['workspaceId']],
+])
+
+const LEGACY_V1_CUSTOM_PARAMS = new Map([
+  ['claude:start-session', args => ({
+    sessionId: args[0],
+    options: args[1] ?? null,
+  })],
+  ['claude:resume-session', args => ({
+    sessionId: args[0],
+    sdkSessionId: args[1],
+    options: {
+      cwd: args[2],
+      model: args[3],
+      apiVersion: args[4],
+      useWorktree: args[5],
+      worktreePath: args[6],
+      worktreeBranch: args[7],
+      agentPreset: args[8],
+      codexSandboxMode: args[9],
+      codexApprovalPolicy: args[10],
+      permissionMode: args[11],
+      effort: args[12],
+    },
+  })],
+])
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stripUndefined(value) {
+  if (!isPlainObject(value)) return value
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined))
+}
+
+export function legacyV1ArgsToParams(channel, args) {
+  const values = Array.isArray(args) ? args : []
+  if (values.length === 0) return null
+  if (values.length === 1 && isPlainObject(values[0])) return values[0]
+
+  const custom = LEGACY_V1_CUSTOM_PARAMS.get(channel)
+  if (custom) {
+    const params = custom(values)
+    if (isPlainObject(params) && isPlainObject(params.options)) {
+      return { ...params, options: stripUndefined(params.options) }
+    }
+    return stripUndefined(params)
+  }
+
+  const keys = LEGACY_V1_PARAM_KEYS.get(channel)
+  if (!keys) return values[0]
+
+  const params = {}
+  keys.forEach((key, index) => {
+    if (values[index] !== undefined) params[key] = values[index]
+  })
+  return params
+}
 
 // kebab-style channel → camelCase JSON-RPC method.
 //   'claude:start-session'    → 'claude.startSession'
@@ -48,7 +198,7 @@ export function channelToMethod(channel) {
 function makeBridgeHandler(channel) {
   const method = channelToMethod(channel)
   return async function bridgeHandler(_ctx, ...args) {
-    const params = args.length > 0 ? args[0] : null
+    const params = legacyV1ArgsToParams(channel, args)
     const reply = await dispatch({ jsonrpc: '2.0', id: 'bridge', method, params })
     if (reply && reply.error) {
       const err = new Error(reply.error.message || `Bridge dispatch failed: ${method}`)

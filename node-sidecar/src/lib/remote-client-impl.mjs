@@ -14,7 +14,7 @@ import WebSocket from 'ws'
 import { randomBytes } from 'node:crypto'
 
 import { sendEvent } from './protocol.mjs'
-import { PROXIED_EVENTS } from './remote-protocol.mjs'
+import { PROXIED_EVENTS, REMOTE_PROTOCOL_LEGACY_V1 } from './remote-protocol.mjs'
 import { normalizeFingerprint } from './remote-fingerprint.mjs'
 
 const BACKOFF_BASE_MS = 3_000
@@ -25,7 +25,7 @@ const DEFAULT_INVOKE_TIMEOUT_MS = 30_000
 // Default emitter forwards server-pushed event frames out to the Tauri
 // renderer through the sidecar's JSON-RPC notification stream.
 let _emitToRenderer = (channel, args) => {
-  sendEvent(channel, normalizeRemoteEvent(channel, args))
+  sendEvent(channel, normalizeRemoteEvent(channel, args), { broadcast: false })
 }
 
 // Test seam — swap the emitter to capture event frames in-process.
@@ -95,6 +95,7 @@ export class RemoteClient {
     this.token = ''
     this.label = ''
     this.pinnedFingerprint = ''
+    this.protocol = REMOTE_PROTOCOL_LEGACY_V1
     this.shouldReconnect = false
     // Bumped by every connect() / disconnect() so a stale in-flight
     // reconnect can detect it was superseded and abandon itself.
@@ -185,6 +186,7 @@ export class RemoteClient {
           type: 'auth',
           id: this._nextId(),
           token: this.token,
+          protocols: [REMOTE_PROTOCOL_LEGACY_V1],
           args: [this.label],
         }
         try { ws.send(JSON.stringify(authFrame)) }
@@ -203,6 +205,7 @@ export class RemoteClient {
             finish(false)
           } else {
             this._connected = true
+            this.protocol = typeof frame.protocol === 'string' ? frame.protocol : REMOTE_PROTOCOL_LEGACY_V1
             this.reconnectAttempt = 0
             _logger.log(`Connected to ${this.host}:${this.port}`)
             finish(true)

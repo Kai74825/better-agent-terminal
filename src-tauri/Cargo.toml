@@ -24,15 +24,26 @@ serde_json = "1"
 thiserror = "1"
 base64 = "0.22"
 aes-gcm = "0.10"
+aes = "0.8"
+cbc = "0.1"
+pbkdf2 = "0.12"
+sha1 = "0.10"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 keyring = "4.0.0"
 keyring-core = "1.0.0"
 notify = "8"
+get_if_addrs = "0.5"
 # Cross-platform PTY (Unix pty + Windows ConPTY). Tauri itself doesn't ship
 # this; we keep the renderer-side shape identical to the Electron preload's
 # pty.* surface and let a reader thread emit pty:output / pty:exit events.
 portable-pty = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tungstenite = "0.29.0"
+rcgen = "0.14.8"
+rand = "0.10.1"
+sha2 = "0.10"
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1.14.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }

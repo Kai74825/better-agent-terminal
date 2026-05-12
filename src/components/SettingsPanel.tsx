@@ -54,7 +54,7 @@ interface CxDetectionStatus {
   error?: string
 }
 
-type SettingsTab = 'general' | 'agent' | 'remote' | 'advanced'
+type SettingsTab = 'general' | 'agent' | 'remote' | 'accounts' | 'advanced'
 const CUSTOM_MODEL_OPTION = '__custom_model__'
 
 export function SettingsPanel({ onClose }: SettingsPanelProps) {
@@ -177,7 +177,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setAccounts(result.accounts)
       setActiveAccountId(result.activeAccountId)
       setSwitchWarningShown(result.switchWarningShown)
-      const imported = await host.claude.accountImportCurrent()
+      // Importing touches the credential keychain. Do it only for first-time
+      // account setup; a plain settings open should stay metadata-only.
+      const imported = result.accounts.length === 0
+        ? await host.claude.accountImportCurrent()
+        : null
       if (imported) {
         result = await host.claude.accountList()
         setAccounts(result.accounts)
@@ -191,6 +195,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   }, [])
 
   useEffect(() => {
+    if (activeTab !== 'accounts') return
     if (settings.accountSwitching !== false) {
       loadAccounts()
     } else {
@@ -198,7 +203,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       setAccountStatusIsError(false)
       setAccountsLoading(false)
     }
-  }, [loadAccounts, settings.accountSwitching])
+  }, [activeTab, loadAccounts, settings.accountSwitching])
 
   const handleAccountSwitch = async (accountId: string) => {
     if (accountId === activeAccountId) return
@@ -427,6 +432,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     { id: 'general', label: t('settings.tabGeneral') },
     { id: 'agent', label: t('settings.tabAgent') },
     { id: 'remote', label: t('settings.tabRemote') },
+    { id: 'accounts', label: t('settings.tabAccounts', 'Accounts') },
     { id: 'advanced', label: t('settings.tabAdvanced') },
   ]
 
@@ -1105,6 +1111,71 @@ Reference: https://github.com/ind-igo/cx`
             </div>
           )}
 
+          {/* ── ACCOUNTS TAB ── */}
+          {activeTab === 'accounts' && (
+            <div className="settings-section">
+              <h3>{t('settings.accountSwitching')}</h3>
+              <p className="settings-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                {t('settings.accountSwitchingHint')}
+              </p>
+              <label className="settings-checkbox" style={{ marginBottom: '10px' }}>
+                <input type="checkbox" checked={settings.accountSwitching !== false} onChange={(e) => settingsStore.setAccountSwitching(e.target.checked)} />
+                {t('settings.accountSwitchingEnabled')}
+              </label>
+              {settings.accountSwitching !== false && (
+                <div style={{ marginTop: '8px' }}>
+                  {accountsLoading ? (
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{t('settings.accountSwitchingImporting')}</p>
+                  ) : accounts.length === 0 ? (
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{t('settings.accountSwitchingNoAccounts')}</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {accounts.map(account => (
+                        <div key={account.id} style={{
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          padding: '6px 10px', borderRadius: '4px',
+                          background: account.id === activeAccountId ? 'var(--bg-tertiary)' : 'transparent',
+                          border: account.id === activeAccountId ? '1px solid var(--border-color)' : '1px solid transparent',
+                        }}>
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: account.id === activeAccountId ? '#3fb950' : 'var(--text-secondary)', flexShrink: 0 }} />
+                          <span style={{ fontSize: '13px', flex: 1 }}>
+                            {account.email}
+                            {account.subscriptionType && <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: '6px' }}>({account.subscriptionType})</span>}
+                          </span>
+                          {account.id === activeAccountId ? (
+                            <span style={{ fontSize: '11px', color: '#3fb950', fontWeight: 500 }}>{t('settings.accountSwitchingActive')}</span>
+                          ) : (
+                            <>
+                              <button
+                                className="statusline-template-btn"
+                                style={{ fontSize: '11px' }}
+                                onClick={() => handleAccountSwitch(account.id)}
+                                disabled={accountSwitchingId !== null}
+                              >
+                                {accountSwitchingId === account.id ? t('settings.accountSwitchingSwitching') : t('settings.accountSwitchingSwitch')}
+                              </button>
+                              {!account.isDefault && (
+                                <button className="statusline-template-btn" style={{ fontSize: '11px', color: '#f85149' }} onClick={() => handleAccountRemove(account.id)}>{t('settings.accountSwitchingRemove')}</button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button className="statusline-template-btn" style={{ marginTop: '10px', fontSize: '12px' }} onClick={handleAccountLoginNew} disabled={accountLoginLoading}>
+                    {accountLoginLoading ? t('settings.accountSwitchingOpeningLoginShort') : t('settings.accountSwitchingAddAccount')}
+                  </button>
+                  {accountStatusMsg && (
+                    <p style={{ fontSize: '11px', color: accountStatusIsError ? '#f85149' : 'var(--text-secondary)', marginTop: '6px' }}>
+                      {accountStatusMsg}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── ADVANCED TAB ── */}
           {activeTab === 'advanced' && (
             <>
@@ -1251,68 +1322,6 @@ Reference: https://github.com/ind-igo/cx`
                 <button className="statusline-template-btn" style={{ fontSize: '12px' }} onClick={handleOpenLogsFolder}>
                   {t('settings.openLogsFolder')}
                 </button>
-              </div>
-
-              <div className="settings-section">
-                <h3>{t('settings.accountSwitching')}</h3>
-                <p className="settings-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  {t('settings.accountSwitchingHint')}
-                </p>
-                <label className="settings-checkbox" style={{ marginBottom: '10px' }}>
-                  <input type="checkbox" checked={settings.accountSwitching !== false} onChange={(e) => settingsStore.setAccountSwitching(e.target.checked)} />
-                  {t('settings.accountSwitchingEnabled')}
-                </label>
-                {settings.accountSwitching !== false && (
-                  <div style={{ marginTop: '8px' }}>
-                    {accountsLoading ? (
-                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{t('settings.accountSwitchingImporting')}</p>
-                    ) : accounts.length === 0 ? (
-                      <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{t('settings.accountSwitchingNoAccounts')}</p>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {accounts.map(account => (
-                          <div key={account.id} style={{
-                            display: 'flex', alignItems: 'center', gap: '8px',
-                            padding: '6px 10px', borderRadius: '4px',
-                            background: account.id === activeAccountId ? 'var(--bg-tertiary)' : 'transparent',
-                            border: account.id === activeAccountId ? '1px solid var(--border-color)' : '1px solid transparent',
-                          }}>
-                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: account.id === activeAccountId ? '#3fb950' : 'var(--text-secondary)', flexShrink: 0 }} />
-                            <span style={{ fontSize: '13px', flex: 1 }}>
-                              {account.email}
-                              {account.subscriptionType && <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: '6px' }}>({account.subscriptionType})</span>}
-                            </span>
-                            {account.id === activeAccountId ? (
-                              <span style={{ fontSize: '11px', color: '#3fb950', fontWeight: 500 }}>{t('settings.accountSwitchingActive')}</span>
-                            ) : (
-                              <>
-                                <button
-                                  className="statusline-template-btn"
-                                  style={{ fontSize: '11px' }}
-                                  onClick={() => handleAccountSwitch(account.id)}
-                                  disabled={accountSwitchingId !== null}
-                                >
-                                  {accountSwitchingId === account.id ? t('settings.accountSwitchingSwitching') : t('settings.accountSwitchingSwitch')}
-                                </button>
-                                {!account.isDefault && (
-                                  <button className="statusline-template-btn" style={{ fontSize: '11px', color: '#f85149' }} onClick={() => handleAccountRemove(account.id)}>{t('settings.accountSwitchingRemove')}</button>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <button className="statusline-template-btn" style={{ marginTop: '10px', fontSize: '12px' }} onClick={handleAccountLoginNew} disabled={accountLoginLoading}>
-                      {accountLoginLoading ? t('settings.accountSwitchingOpeningLoginShort') : t('settings.accountSwitchingAddAccount')}
-                    </button>
-                    {accountStatusMsg && (
-                      <p style={{ fontSize: '11px', color: accountStatusIsError ? '#f85149' : 'var(--text-secondary)', marginTop: '6px' }}>
-                        {accountStatusMsg}
-                      </p>
-                    )}
-                  </div>
-                )}
               </div>
 
               <div className="settings-section">

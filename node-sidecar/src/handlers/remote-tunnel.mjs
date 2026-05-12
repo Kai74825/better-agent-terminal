@@ -15,6 +15,7 @@ import { registerHandler } from '../lib/protocol.mjs'
 import { resolveDataDir } from '../lib/data-paths.mjs'
 import { RemoteServer } from '../lib/remote-server-impl.mjs'
 import { RemoteClient } from '../lib/remote-client-impl.mjs'
+import { ensureCertificate } from '../lib/remote-certificate.mjs'
 
 function getAllAddresses(boundHost) {
   if (boundHost === '127.0.0.1' || boundHost === '::1' || boundHost === 'localhost') {
@@ -89,6 +90,23 @@ registerHandler('remote.stopServer', async () => {
 })
 
 registerHandler('remote.serverStatus', async () => getServer().status())
+
+// Internal Tauri/Rust server helper. The Rust remote server owns the socket,
+// but asks the sidecar to materialize the same RSA certificate format that the
+// legacy Electron server used. That keeps older Electron clients compatible
+// while Rust handles the WebSocket lifecycle.
+registerHandler('remote.ensureCertificate', async (params) => {
+  const configDir = typeof params?.configDir === 'string' && params.configDir
+    ? params.configDir
+    : resolveDataDir()
+  const force = params?.force === true
+  try {
+    const cert = await ensureCertificate(configDir, { force })
+    return { fingerprint: cert.fingerprint256 }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+})
 
 // remote.connect — connect the singleton client. Returns
 // {connected:true, info} on success, {error} otherwise. The Electron

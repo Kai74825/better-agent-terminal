@@ -9,9 +9,13 @@ mod account_store;
 mod app_data;
 mod codex_app_server;
 mod commands;
+mod electron_safe_storage;
 mod event_hub;
 mod log_file;
+mod network_addresses;
 mod path_guard;
+pub mod remote_core;
+mod remote_server;
 mod sidecar;
 mod window_registry;
 
@@ -38,6 +42,7 @@ pub fn run() {
         .manage(worker_buffer_cmd::WorkerBufferState::default())
         .manage(worktree_cmd::WorktreeState::default())
         .manage(event_hub::RuntimeEventHubState::default())
+        .manage(remote_server::RustRemoteServerState::default())
         .manage(codex_app_server::CodexAppServerState::default())
         .manage(window_registry::WindowRegistryState::default())
         .manage(sidecar::SidecarState::new())
