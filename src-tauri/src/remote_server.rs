@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::{Role, WebSocket};
@@ -489,6 +489,9 @@ fn handle_client(
     peer: String,
 ) -> Result<(), String> {
     stream
+        .set_nonblocking(false)
+        .map_err(|err| format!("remote stream blocking mode failed: {err}"))?;
+    stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|err| format!("remote stream timeout failed: {err}"))?;
     let connection =
@@ -674,10 +677,22 @@ fn accept_websocket_tls(
 ) -> Result<WebSocket<StreamOwned<ServerConnection, TcpStream>>, String> {
     let mut request = Vec::with_capacity(1024);
     let mut buf = [0_u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(10);
     while request.len() < 16 * 1024 {
-        let n = tls
-            .read(&mut buf)
-            .map_err(|err| format!("websocket request read failed: {err}"))?;
+        let n = match tls.read(&mut buf) {
+            Ok(n) => n,
+            Err(err)
+                if err.kind() == io::ErrorKind::WouldBlock
+                    || err.kind() == io::ErrorKind::TimedOut =>
+            {
+                if Instant::now() >= deadline {
+                    return Err("websocket request read timed out".to_string());
+                }
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(err) => return Err(format!("websocket request read failed: {err}")),
+        };
         if n == 0 {
             return Err("websocket request closed before headers".to_string());
         }
