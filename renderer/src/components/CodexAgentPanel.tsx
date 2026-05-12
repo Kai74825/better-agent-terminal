@@ -19,7 +19,7 @@ import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-n
 import { displayNameForClaudeSelection } from '../utils/claude-model-presets'
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../utils/codex-models'
 import { normalizePendingAskUser } from './AskUserQuestion.helpers'
-import { firstMeaningfulLine, formatContentSize, formatElapsed, formatFullTimestamp, formatTimestamp, parseContentBlocks, shouldAutoContinueAfterTurnEnd, shouldShowTimeDivider, splitSystemReminders, toolDescription, toolInputContent, toolInputSummary, truncateMiddle } from './CodexAgentPanel.helpers'
+import { buildCollapsedOutputPreview, formatContentSize, formatElapsed, formatFullTimestamp, formatTimestamp, parseContentBlocks, shouldAutoContinueAfterTurnEnd, shouldShowTimeDivider, splitSystemReminders, toolDescription, toolInputContent, toolInputSummary, truncateMiddle } from './CodexAgentPanel.helpers'
 import type { AttachedFile, AttachedImage, CodexAgentPanelProps, MessageItem, ModelInfo, PendingAskUser, PendingPermission, SessionMeta, SessionSummary, SlashCommandInfo } from './CodexAgentPanel.types'
 import { CodexTodoChecklist } from './CodexTodoChecklist'
 
@@ -308,6 +308,11 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // True while an IME composition is active. Cleared in a microtask after
+  // compositionend so the trailing keydown that some IMEs (notably macOS
+  // Chinese input methods) fire with `isComposing: false, keyCode: 229`
+  // is still recognised as part of the composition and does not submit.
+  const isComposingRef = useRef(false)
   const permissionCardRef = useRef<HTMLDivElement>(null)
   const [userScrolledUp, setUserScrolledUp] = useState(false)
   const isNearBottomRef = useRef(true)
@@ -1941,7 +1946,9 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
-    host.claude.stopSession(sessionId)
+    // abortSession (not stopSession) so the session record + cwd survive —
+    // user can keep typing to continue this turn.
+    host.claude.abortSession(sessionId)
     setIsInterrupted(true)
     setStreamingText('')
     setStreamingThinking('')
@@ -2068,7 +2075,9 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         setSlashMenuIndex(prev => Math.max(prev - 1, 0))
         return
       }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      const enterDuringIME =
+        e.key === 'Enter' && (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229)
+      if (!enterDuringIME && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
         e.preventDefault()
         handleSlashSelect(filteredSlashCommands[slashMenuIndex])
         return
@@ -2145,7 +2154,13 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       if (container) container.scrollTop = container.scrollHeight
       return
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (
+      e.key === 'Enter' &&
+      !e.shiftKey &&
+      !e.nativeEvent.isComposing &&
+      !isComposingRef.current &&
+      e.keyCode !== 229
+    ) {
       e.preventDefault()
       handleSend()
     }
@@ -2468,8 +2483,19 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   }, [])
 
   const handlePaste = useCallback(async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items
-    if (!items) return
+    const clipboard = e.clipboardData
+    if (!clipboard) return
+    const files = Array.from(clipboard.files || [])
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        e.preventDefault()
+        const dataUrl = await readFileAsDataUrl(file)
+        addImageDataUrl(filenameForPastedImage(file), dataUrl)
+        return
+      }
+    }
+
+    const items = Array.from(clipboard.items || [])
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         e.preventDefault()
@@ -2488,6 +2514,22 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           window.alert('Remote sessions can only attach pasted images when the clipboard exposes image data.')
         }
         return
+      }
+    }
+
+    // Tauri/WebKit sometimes does not expose native clipboard images through
+    // the DOM paste event. If there is no text to paste, ask the host clipboard
+    // bridge to materialize the native image as a temp PNG and attach it.
+    if (!isRemoteConnected && !clipboard.getData('text/plain')) {
+      e.preventDefault()
+      try {
+        const filePath = await host.clipboard.saveImage()
+        if (filePath) await addImageByPath(filePath)
+      } catch (err) {
+        void host.debug.log(
+          '[clipboard] failed to attach native pasted image',
+          err instanceof Error ? err.message : String(err),
+        )
       }
     }
   }, [addImageByPath, addImageDataUrl, isRemoteConnected])
@@ -3120,7 +3162,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
                 const isLongOutput = outText.split(/\r?\n/).length > 8 || outText.length > 900
                 const shouldCollapse = isReadOnlyTool || item.toolName === 'Bash' || isLongOutput || settingsStore.getSettings().collapseToolOutputs
                 const isOutExpanded = expandedTools.has(outBlockId)
-                const outPreview = truncateMiddle(firstMeaningfulLine(outText), 180)
+                const outPreviewLines = buildCollapsedOutputPreview(outText)
                 return (
                   <>
                     {errors.length > 0 && errors.map((err, i) => (
@@ -3140,8 +3182,16 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
                             ? <LinkedText text={outText} />
                             : (
                               <span className="claude-tool-collapsed-hint">
-                                <span>{formatContentSize(outText)}</span>
-                                {outPreview && <span className="claude-tool-collapsed-preview">{outPreview}</span>}
+                                <span className="claude-tool-collapsed-meta">{formatContentSize(outText)}</span>
+                                {outPreviewLines.length > 0 && (
+                                  <span className="claude-tool-collapsed-preview-lines">
+                                    {outPreviewLines.map((line, i) => (
+                                      <span key={i} className="claude-tool-collapsed-preview">
+                                        <LinkedText text={line} />
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
                                 <button
                                   className="claude-tool-mini-action"
                                   onClick={(e) => {
@@ -3880,6 +3930,10 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           defaultValue=""
           onInput={handleInputChange}
           onKeyDown={handleKeyDown}
+          onCompositionStart={() => { isComposingRef.current = true }}
+          onCompositionEnd={() => {
+            setTimeout(() => { isComposingRef.current = false }, 0)
+          }}
           onPaste={handlePaste}
           placeholder={isInterrupted
             ? 'Type to continue, Esc to stop...'

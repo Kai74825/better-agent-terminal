@@ -1,5 +1,9 @@
 import * as assert from 'assert'
-import { shouldAutoContinueAfterTurnEnd } from '../renderer/src/components/CodexAgentPanel.helpers.ts'
+import {
+  buildCollapsedOutputPreview,
+  shouldAutoContinueAfterTurnEnd,
+  summarizeShellCommand,
+} from '../renderer/src/components/CodexAgentPanel.helpers.ts'
 
 assert.strictEqual(
   shouldAutoContinueAfterTurnEnd({ reason: 'completed' }),
@@ -29,6 +33,18 @@ assert.strictEqual(
   shouldAutoContinueAfterTurnEnd({ reason: 'aborted' }),
   false,
   'aborted turns should not auto-continue'
+)
+
+assert.strictEqual(
+  summarizeShellCommand('/bin/zsh -lc "sed -n \'1,80p\' renderer/src/components/WorkspaceView.tsx && sed -n \'700,820p\' renderer/src/components/WorkspaceView.tsx"'),
+  'read renderer/src/components/WorkspaceView.tsx:1-80 + read renderer/src/components/WorkspaceView.tsx:700-820',
+  'shell read commands should get a file-range summary'
+)
+
+assert.deepStrictEqual(
+  buildCollapsedOutputPreview('\n\nimport a\nconst b = 1\n\nfunction c() {}\nexport default c\nignored\n'),
+  ['import a', 'const b = 1', 'function c() {}', 'export default c'],
+  'collapsed output preview should show multiple meaningful lines'
 )
 
 console.log('Codex auto-continue timeout support: passed')

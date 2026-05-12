@@ -8,6 +8,7 @@
 use crate::commands::openai;
 use crate::event_hub::publish_runtime_event;
 use crate::sidecar::BridgeError;
+use base64::Engine as _;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -27,6 +28,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TURN_START_TIMEOUT: Duration = Duration::from_secs(60);
 const MSG_BUFFER_CAP: usize = 300;
 const DEFAULT_CODEX_CONTEXT_WINDOW: u64 = 1_000_000;
+const DEFAULT_CODEX_REASONING_SUMMARY: &str = "auto";
+static CODEX_TEMP_IMAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -154,6 +157,8 @@ struct CodexSession {
     last_turn_first_token_ms: Option<u64>,
     last_turn_duration_ms: Option<u64>,
     messages: Vec<Value>,
+    temporary_image_paths: Vec<PathBuf>,
+    command_outputs: HashMap<String, String>,
     is_running: bool,
     is_resting: bool,
 }
@@ -461,8 +466,89 @@ fn build_codex_command(app: &AppHandle) -> Command {
     if let Some(api_key) = openai::configured_openai_key_for_runtime(app) {
         command.env("OPENAI_API_KEY", api_key);
     }
+    // The `codex` CLI is a Node script (`#!/usr/bin/env node`) and codex
+    // itself shells out to `codex exec` subprocesses. When the .app is
+    // launched from Finder/Spotlight, the inherited PATH does not include
+    // common Node install locations like `/opt/homebrew/bin`, so `env` fails
+    // with exit 127. Augment PATH with the resolved node directory plus
+    // well-known fallbacks so both the immediate spawn and its descendants
+    // can find `node`.
+    if let Some(path) = augmented_path_with_node() {
+        command.env("PATH", path);
+    }
+    // Avoid launching codex app-server with cwd `/` (the default when a macOS
+    // .app is started from Finder). Per-turn requests still pass an explicit
+    // cwd; this only guards against fallbacks that read the process cwd.
+    if let Ok(home) = app.path().home_dir() {
+        if home.is_dir() {
+            command.current_dir(home);
+        }
+    }
     suppress_subprocess_window(&mut command);
     command
+}
+
+fn augmented_path_with_node() -> Option<std::ffi::OsString> {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    if let Some(node) = find_node_on_path(&existing) {
+        if let Some(parent) = node.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    let fallbacks: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+    #[cfg(target_os = "linux")]
+    let fallbacks: &[&str] = &["/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin"];
+    #[cfg(windows)]
+    let fallbacks: &[&str] = &[];
+
+    for f in fallbacks {
+        let p = PathBuf::from(f);
+        if p.is_dir() && !dirs.iter().any(|d| d == &p) {
+            dirs.push(p);
+        }
+    }
+
+    if dirs.is_empty() {
+        return None;
+    }
+
+    let mut combined: Vec<PathBuf> = dirs;
+    for entry in std::env::split_paths(&existing) {
+        if !combined.iter().any(|d| d == &entry) {
+            combined.push(entry);
+        }
+    }
+    std::env::join_paths(combined).ok()
+}
+
+fn find_node_on_path(path_env: &std::ffi::OsStr) -> Option<PathBuf> {
+    let exe_names: &[&str] = if cfg!(windows) {
+        &["node.exe", "node.cmd", "node"]
+    } else {
+        &["node"]
+    };
+    for dir in std::env::split_paths(path_env) {
+        for name in exe_names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for fallback in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+            let p = PathBuf::from(fallback);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 fn text_from_value(value: &Value) -> String {
@@ -487,6 +573,49 @@ fn text_from_value(value: &Value) -> String {
         }
         _ => String::new(),
     }
+}
+
+fn sanitize_terminal_output(value: &str) -> String {
+    let mut stripped = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    let _ = chars.next();
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let _ = chars.next();
+                    let mut saw_esc = false;
+                    for c in chars.by_ref() {
+                        if c == '\u{7}' {
+                            break;
+                        }
+                        if saw_esc && c == '\\' {
+                            break;
+                        }
+                        saw_esc = c == '\u{1b}';
+                    }
+                }
+                Some(_) => {
+                    let _ = chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        if ch == '\u{8}' {
+            let _ = stripped.pop();
+            continue;
+        }
+        stripped.push(ch);
+    }
+    stripped.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn event_payload(session_id: &str, key: &str, value: Value) -> Value {
@@ -535,6 +664,139 @@ fn now_millis() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
+    match mime.to_ascii_lowercase().as_str() {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        _ => None,
+    }
+}
+
+fn data_url_to_temp_image(data_url: &str) -> Result<PathBuf, String> {
+    let Some(rest) = data_url.strip_prefix("data:") else {
+        return Err("invalid image data URL".to_string());
+    };
+    let Some((metadata, payload)) = rest.split_once(',') else {
+        return Err("invalid image data URL".to_string());
+    };
+    let mut metadata_parts = metadata.split(';');
+    let mime = metadata_parts.next().unwrap_or("");
+    let is_base64 = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
+    if !is_base64 {
+        return Err("image data URL must be base64 encoded".to_string());
+    }
+    let ext = image_extension_for_mime(mime)
+        .ok_or_else(|| format!("unsupported image MIME type: {mime}"))?;
+    let cleaned_payload: String = payload
+        .chars()
+        .filter(|ch| *ch != '\r' && *ch != '\n')
+        .collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cleaned_payload.as_bytes())
+        .map_err(|err| format!("invalid image data URL: {err}"))?;
+    let dir = std::env::temp_dir().join("bat-codex-images");
+    fs::create_dir_all(&dir).map_err(|err| format!("create temp image dir failed: {err}"))?;
+    let n = CODEX_TEMP_IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+    let path = dir.join(format!(
+        "img-{}-{}-{n}.{ext}",
+        std::process::id(),
+        now_millis()
+    ));
+    fs::write(&path, bytes).map_err(|err| format!("write temp image failed: {err}"))?;
+    Ok(path)
+}
+
+fn is_absolute_local_path(value: &str) -> bool {
+    Path::new(value).is_absolute()
+        || value.starts_with("\\\\")
+        || value.as_bytes().get(1).is_some_and(|b| *b == b':')
+}
+
+fn codex_image_input_item(
+    image: &str,
+    temp_image_paths: &mut Vec<PathBuf>,
+) -> Result<Value, String> {
+    let trimmed = image.trim();
+    if trimmed.is_empty() {
+        return Err("empty image attachment".to_string());
+    }
+    if trimmed.starts_with("data:") {
+        let path = data_url_to_temp_image(trimmed)?;
+        let item = json!({ "type": "localImage", "path": path.to_string_lossy().to_string() });
+        temp_image_paths.push(path);
+        return Ok(item);
+    }
+    if is_absolute_local_path(trimmed) {
+        return Ok(json!({ "type": "localImage", "path": trimmed }));
+    }
+    Ok(json!({ "type": "image", "url": trimmed }))
+}
+
+fn cleanup_temp_images(paths: Vec<PathBuf>) {
+    for path in paths {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn cleanup_session_temp_images(session: &mut CodexSession) {
+    cleanup_temp_images(std::mem::take(&mut session.temporary_image_paths));
+}
+
+fn build_turn_input(prompt: &str, images: Vec<String>) -> Result<(Value, Vec<PathBuf>), String> {
+    let mut temp_image_paths = Vec::new();
+    let mut items = Vec::with_capacity(images.len() + 1);
+    for image in images {
+        match codex_image_input_item(&image, &mut temp_image_paths) {
+            Ok(item) => items.push(item),
+            Err(err) => {
+                cleanup_temp_images(temp_image_paths);
+                return Err(err);
+            }
+        }
+    }
+    items.push(json!({ "type": "text", "text": prompt, "text_elements": [] }));
+    Ok((Value::Array(items), temp_image_paths))
+}
+
+fn build_turn_start_params(thread_id: &str, input: Value, model: &str, effort: &str) -> Value {
+    json!({
+        "threadId": thread_id,
+        "input": input,
+        "model": model,
+        "effort": effort,
+        "summary": DEFAULT_CODEX_REASONING_SUMMARY,
+        "reasoningEffort": effort,
+    })
+}
+
+fn reasoning_text_from_item(item: &Value) -> String {
+    if item_type(item) != Some("reasoning") {
+        return String::new();
+    }
+    let summary = item.get("summary").map(text_from_value).unwrap_or_default();
+    if !summary.trim().is_empty() {
+        return summary;
+    }
+    item.get("content").map(text_from_value).unwrap_or_default()
+}
+
+fn turn_error_message_from_value(value: &Value) -> Option<String> {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("additionalDetails")
+                .and_then(Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .map(str::to_string)
+        })
 }
 
 fn codex_sessions_root(app: &AppHandle) -> Option<PathBuf> {
@@ -871,6 +1133,8 @@ impl CodexAppServerState {
             last_turn_first_token_ms: None,
             last_turn_duration_ms: None,
             messages: Vec::new(),
+            temporary_image_paths: Vec::new(),
+            command_outputs: HashMap::new(),
             is_running: false,
             is_resting: false,
         };
@@ -1018,6 +1282,8 @@ impl CodexAppServerState {
             last_turn_first_token_ms: None,
             last_turn_duration_ms: None,
             messages: Vec::new(),
+            temporary_image_paths: Vec::new(),
+            command_outputs: HashMap::new(),
             is_running: false,
             is_resting: false,
         };
@@ -1080,6 +1346,7 @@ impl CodexAppServerState {
         prompt: String,
         images: Vec<String>,
     ) -> Result<Value, BridgeError> {
+        let image_count = images.len();
         let prompt = if prompt.trim().is_empty() && !images.is_empty() {
             "Please analyze the attached image.".to_string()
         } else {
@@ -1088,11 +1355,21 @@ impl CodexAppServerState {
         if prompt.is_empty() {
             return Ok(json!({ "ok": false, "error": "empty prompt" }));
         }
+        let (input, mut temp_image_paths) = match build_turn_input(&prompt, images) {
+            Ok(input) => input,
+            Err(err) => {
+                self.fail_turn(app, &session_id, err.clone());
+                return Ok(json!({ "ok": false, "error": err }));
+            }
+        };
         let (thread_id, model, effort) = {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
-            let session = sessions
-                .get_mut(&session_id)
-                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            let Some(session) = sessions.get_mut(&session_id) else {
+                cleanup_temp_images(temp_image_paths);
+                return Err(bridge_error("Codex session not started"));
+            };
+            cleanup_session_temp_images(session);
+            session.temporary_image_paths.append(&mut temp_image_paths);
             session.is_running = true;
             session.is_resting = false;
             session.num_turns += 1;
@@ -1101,7 +1378,8 @@ impl CodexAppServerState {
             session.last_turn_duration_ms = None;
             session.assistant_text.clear();
             session.thinking_text.clear();
-            let msg = make_user_message(&session_id, &prompt, images.len());
+            session.command_outputs.clear();
+            let msg = make_user_message(&session_id, &prompt, image_count);
             session.messages.push(msg.clone());
             emit(app, "claude:message", &session_id, "message", msg);
             (
@@ -1113,29 +1391,18 @@ impl CodexAppServerState {
                 session.effort.clone(),
             )
         };
-        let input = if images.is_empty() {
-            json!([{ "type": "text", "text": prompt }])
-        } else {
-            let mut items = images
-                .into_iter()
-                .map(|image| json!({ "type": "image", "image": image }))
-                .collect::<Vec<_>>();
-            items.push(json!({ "type": "text", "text": prompt }));
-            Value::Array(items)
-        };
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
-        let response = connection
-            .request(
-                "turn/start",
-                json!({
-                    "threadId": thread_id,
-                    "input": input,
-                    "model": model,
-                    "reasoningEffort": effort,
-                }),
-                TURN_START_TIMEOUT,
-            )
-            .map_err(bridge_error)?;
+        let response = match connection.request(
+            "turn/start",
+            build_turn_start_params(&thread_id, input, &model, &effort),
+            TURN_START_TIMEOUT,
+        ) {
+            Ok(response) => response,
+            Err(err) => {
+                self.fail_turn(app, &session_id, format!("Codex error: {err}"));
+                return Ok(json!({ "ok": false, "error": err }));
+            }
+        };
         if let Some(turn_id) = response
             .get("turn")
             .and_then(|v| v.get("id"))
@@ -1154,14 +1421,46 @@ impl CodexAppServerState {
         Ok(json!({ "ok": true }))
     }
 
+    fn fail_turn(&self, app: &AppHandle, session_id: &str, message: String) {
+        let meta = {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            sessions.get_mut(session_id).map(|session| {
+                session.is_running = false;
+                session.active_turn_id = None;
+                if let Some(started_at) = session.last_turn_started_at {
+                    session.last_turn_duration_ms = Some(started_at.elapsed().as_millis() as u64);
+                }
+                cleanup_session_temp_images(session);
+                session.command_outputs.clear();
+                session.metadata()
+            })
+        };
+        if let Some(meta) = meta {
+            emit(app, "claude:status", session_id, "meta", meta);
+        }
+        emit(app, "claude:error", session_id, "error", json!(message));
+        emit(
+            app,
+            "claude:turn-end",
+            session_id,
+            "payload",
+            json!({ "reason": "error", "error": message }),
+        );
+    }
+
     pub fn abort_session(&self, app: &AppHandle, session_id: String) -> Result<Value, BridgeError> {
         let (thread_id, turn_id) = {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             let Some(session) = sessions.get_mut(&session_id) else {
                 return Ok(json!({ "ok": true }));
             };
+            let thread_id = session.thread_id.clone();
+            let turn_id = session.active_turn_id.clone();
             session.is_running = false;
-            (session.thread_id.clone(), session.active_turn_id.clone())
+            session.active_turn_id = None;
+            cleanup_session_temp_images(session);
+            session.command_outputs.clear();
+            (thread_id, turn_id)
         };
         if let (Some(thread_id), Some(turn_id)) = (thread_id, turn_id) {
             let connection = self.ensure_connection(app).map_err(bridge_error)?;
@@ -1188,7 +1487,8 @@ impl CodexAppServerState {
             .lock()
             .expect("codex sessions lock")
             .remove(&session_id);
-        if let Some(session) = removed {
+        if let Some(mut session) = removed {
+            cleanup_session_temp_images(&mut session);
             if let Some(thread_id) = session.thread_id {
                 self.inner
                     .thread_to_session
@@ -1261,6 +1561,8 @@ impl CodexAppServerState {
             session.last_turn_first_token_ms = None;
             session.last_turn_duration_ms = None;
             session.messages.clear();
+            cleanup_session_temp_images(session);
+            session.command_outputs.clear();
             session.is_running = false;
             session.is_resting = false;
             session.start_time = Instant::now();
@@ -1579,7 +1881,13 @@ fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &st
                     .map(str::to_string);
             }
         }
+        "error" => handle_error_notification(app, state, &session_id, &params),
         "turn/completed" => handle_turn_completed(app, state, &session_id, &params),
+        "rawResponseItem/completed" => {
+            if let Some(item) = params.get("item") {
+                append_completed_reasoning_if_missing(app, state, &session_id, item);
+            }
+        }
         "thread/tokenUsage/updated" => handle_usage_updated(app, state, &session_id, &params),
         "item/started" => {
             if let Some(item) = params.get("item") {
@@ -1604,19 +1912,23 @@ fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &st
             }
         }
         "item/commandExecution/outputDelta" => {
-            let delta = text_from_value(&params);
-            if !delta.is_empty() {
-                emit(
-                    app,
-                    "claude:stream",
-                    &session_id,
-                    "data",
-                    json!({ "text": delta }),
-                );
-            }
+            handle_command_execution_output_delta(app, state, &session_id, &params);
         }
         _ => {}
     }
+}
+
+fn handle_error_notification(
+    app: &AppHandle,
+    state: &CodexAppServerState,
+    session_id: &str,
+    params: &Value,
+) {
+    let message = params
+        .get("error")
+        .and_then(turn_error_message_from_value)
+        .unwrap_or_else(|| "Codex turn failed.".to_string());
+    state.fail_turn(app, session_id, message);
 }
 
 fn append_stream_delta(
@@ -1651,6 +1963,92 @@ fn append_stream_delta(
     );
 }
 
+fn append_completed_reasoning_if_missing(
+    app: &AppHandle,
+    state: &CodexAppServerState,
+    session_id: &str,
+    item: &Value,
+) {
+    let delta = reasoning_text_from_item(item);
+    if delta.trim().is_empty() {
+        return;
+    }
+    let should_emit = {
+        let sessions = state.inner.sessions.lock().expect("codex sessions lock");
+        sessions
+            .get(session_id)
+            .map(|session| session.thinking_text.trim().is_empty())
+            .unwrap_or(false)
+    };
+    if should_emit {
+        append_stream_delta(app, state, session_id, "thinking", delta);
+    }
+}
+
+fn handle_command_execution_output_delta(
+    app: &AppHandle,
+    state: &CodexAppServerState,
+    session_id: &str,
+    params: &Value,
+) {
+    let Some(item_id) = params.get("itemId").and_then(Value::as_str) else {
+        return;
+    };
+    let delta = params
+        .get("delta")
+        .and_then(Value::as_str)
+        .map(sanitize_terminal_output)
+        .unwrap_or_default();
+    if delta.is_empty() {
+        return;
+    }
+    let result = {
+        let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
+        let Some(session) = sessions.get_mut(session_id) else {
+            return;
+        };
+        let output = session
+            .command_outputs
+            .entry(item_id.to_string())
+            .or_default();
+        output.push_str(&delta);
+        output.clone()
+    };
+    emit(
+        app,
+        "claude:tool-result",
+        session_id,
+        "result",
+        json!({
+            "id": item_id,
+            "status": "running",
+            "result": result,
+        }),
+    );
+}
+
+fn completed_command_execution_result(
+    state: &CodexAppServerState,
+    session_id: &str,
+    item: &Value,
+) -> Option<String> {
+    let item_id = item_id(item);
+    let raw = item
+        .get("aggregatedOutput")
+        .or_else(|| item.get("result"))
+        .or_else(|| item.get("error"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let accumulated = {
+        let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
+        sessions
+            .get_mut(session_id)
+            .and_then(|session| session.command_outputs.remove(&item_id))
+    };
+    raw.or(accumulated)
+        .map(|value| sanitize_terminal_output(&value))
+}
+
 fn handle_item_started(
     app: &AppHandle,
     state: &CodexAppServerState,
@@ -1670,13 +2068,20 @@ fn handle_item_started(
             }
         }
         Some("commandExecution") => {
+            let id = item_id(item);
+            {
+                let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
+                if let Some(session) = sessions.get_mut(session_id) {
+                    session.command_outputs.entry(id.clone()).or_default();
+                }
+            }
             emit(
                 app,
                 "claude:tool-use",
                 session_id,
                 "toolCall",
                 json!({
-                    "id": item_id(item),
+                    "id": id,
                     "sessionId": session_id,
                     "toolName": "Bash",
                     "input": { "command": item.get("command").and_then(Value::as_str).unwrap_or("") },
@@ -1758,6 +2163,11 @@ fn handle_item_completed(
     session_id: &str,
     item: &Value,
 ) {
+    if item_type(item) == Some("reasoning") {
+        append_completed_reasoning_if_missing(app, state, session_id, item);
+        return;
+    }
+
     if item_type(item) == Some("agentMessage") {
         let text = text_from_value(item);
         let (content, thinking) = {
@@ -1796,7 +2206,20 @@ fn handle_item_completed(
     }
 
     match item_type(item) {
-        Some("commandExecution" | "fileChange" | "mcpToolCall" | "webSearch") => {
+        Some("commandExecution") => {
+            emit(
+                app,
+                "claude:tool-result",
+                session_id,
+                "result",
+                json!({
+                    "id": item_id(item),
+                    "status": tool_status(item),
+                    "result": completed_command_execution_result(state, session_id, item),
+                }),
+            );
+        }
+        Some("fileChange" | "mcpToolCall" | "webSearch") => {
             emit(
                 app,
                 "claude:tool-result",
@@ -1869,13 +2292,15 @@ fn handle_turn_completed(
     session_id: &str,
     params: &Value,
 ) {
-    let (reason, result, meta) = {
+    let (reason, result, meta, error_message) = {
         let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
         session.is_running = false;
         session.active_turn_id = None;
+        cleanup_session_temp_images(session);
+        session.command_outputs.clear();
         let turn = params.get("turn").unwrap_or(params);
         if let Some(usage) = turn.get("usage") {
             if let Some(v) = read_usage_u64(usage, &["inputTokens", "input_tokens", "input"]) {
@@ -1907,8 +2332,20 @@ fn handle_turn_completed(
             "failed" => "error",
             _ => "completed",
         };
+        let error_message = if reason == "error" {
+            turn.get("error")
+                .and_then(turn_error_message_from_value)
+                .unwrap_or_else(|| "Codex turn failed.".to_string())
+        } else {
+            String::new()
+        };
         let result = session.assistant_text.clone();
-        (reason.to_string(), result, session.metadata())
+        (
+            reason.to_string(),
+            result,
+            session.metadata(),
+            error_message,
+        )
     };
     emit(app, "claude:status", session_id, "meta", meta);
     if reason == "completed" {
@@ -1919,13 +2356,25 @@ fn handle_turn_completed(
             "result",
             json!({ "subtype": "success", "result": if result.is_empty() { Value::Null } else { json!(result) }, "totalCost": 0 }),
         );
+    } else if reason == "error" {
+        emit(
+            app,
+            "claude:error",
+            session_id,
+            "error",
+            json!(error_message),
+        );
     }
     emit(
         app,
         "claude:turn-end",
         session_id,
         "payload",
-        json!({ "reason": reason, "result": result }),
+        if reason == "error" {
+            json!({ "reason": reason, "error": error_message })
+        } else {
+            json!({ "reason": reason, "result": result })
+        },
     );
 }
 
@@ -1993,6 +2442,86 @@ mod tests {
     }
 
     #[test]
+    fn codex_turn_input_converts_data_url_images_to_local_image_items() {
+        let (input, temp_images) = build_turn_input(
+            "describe this",
+            vec!["data:image/png;base64,aGVsbG8=".to_string()],
+        )
+        .expect("turn input");
+        let items = input.as_array().expect("input items");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["type"], "localImage");
+        let path = items[0]["path"].as_str().expect("image path").to_string();
+        assert!(Path::new(&path).is_file());
+        assert_eq!(
+            items[1],
+            json!({ "type": "text", "text": "describe this", "text_elements": [] })
+        );
+        cleanup_temp_images(temp_images);
+        assert!(!Path::new(&path).exists());
+    }
+
+    #[test]
+    fn codex_turn_input_uses_protocol_url_field_for_remote_images() {
+        let (input, temp_images) = build_turn_input(
+            "describe this",
+            vec!["https://example.com/screenshot.png".to_string()],
+        )
+        .expect("turn input");
+        assert!(temp_images.is_empty());
+        let items = input.as_array().expect("input items");
+        assert_eq!(
+            items[0],
+            json!({ "type": "image", "url": "https://example.com/screenshot.png" })
+        );
+    }
+
+    #[test]
+    fn codex_turn_start_params_request_reasoning_summary() {
+        let params = build_turn_start_params(
+            "thread-1",
+            json!([{ "type": "text", "text": "hello", "text_elements": [] }]),
+            "gpt-5.5",
+            "high",
+        );
+        assert_eq!(params["threadId"], "thread-1");
+        assert_eq!(params["model"], "gpt-5.5");
+        assert_eq!(params["effort"], "high");
+        assert_eq!(params["summary"], DEFAULT_CODEX_REASONING_SUMMARY);
+        assert_eq!(params["reasoningEffort"], "high");
+    }
+
+    #[test]
+    fn codex_reasoning_text_prefers_summary() {
+        let text = reasoning_text_from_item(&json!({
+            "type": "reasoning",
+            "summary": [{ "type": "summary_text", "text": "summary text" }],
+            "content": [{ "type": "reasoning_text", "text": "raw reasoning text" }],
+            "encrypted_content": null,
+        }));
+        assert_eq!(text, "summary text");
+    }
+
+    #[test]
+    fn codex_reasoning_text_reads_thread_item_content_fallback() {
+        let text = reasoning_text_from_item(&json!({
+            "type": "reasoning",
+            "id": "reasoning-1",
+            "summary": [],
+            "content": ["fallback reasoning text"],
+        }));
+        assert_eq!(text, "fallback reasoning text");
+    }
+
+    #[test]
+    fn codex_terminal_output_sanitizer_removes_control_codes() {
+        let output = sanitize_terminal_output(
+            "vite build\u{1b}[2K\rtransforming...\n\u{1b}[32m✓\u{1b}[0m done",
+        );
+        assert_eq!(output, "vite build\ntransforming...\n✓ done");
+    }
+
+    #[test]
     fn codex_metadata_includes_context_window() {
         let session = CodexSession {
             session_id: "s-1".to_string(),
@@ -2014,6 +2543,8 @@ mod tests {
             last_turn_first_token_ms: None,
             last_turn_duration_ms: None,
             messages: Vec::new(),
+            temporary_image_paths: Vec::new(),
+            command_outputs: HashMap::new(),
             is_running: false,
             is_resting: false,
         };
@@ -2053,6 +2584,8 @@ mod tests {
                     last_turn_first_token_ms: None,
                     last_turn_duration_ms: None,
                     messages: Vec::new(),
+                    temporary_image_paths: Vec::new(),
+                    command_outputs: HashMap::new(),
                     is_running: false,
                     is_resting: false,
                 },

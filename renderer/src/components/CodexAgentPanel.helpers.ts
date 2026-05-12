@@ -12,7 +12,7 @@ export function shouldAutoContinueAfterTurnEnd(payload: { reason?: string; error
 export function toolInputSummary(_toolName: string, input: Record<string, unknown>): string {
   const askUserSummary = summarizeAskUserInput(input)
   if (askUserSummary) return askUserSummary
-  if (input.command) return String(input.command).slice(0, 80)
+  if (input.command) return summarizeShellCommand(String(input.command)) || String(input.command).slice(0, 80)
   if (input.file_path) return String(input.file_path)
   if (input.pattern) return String(input.pattern)
   if (input.query) return String(input.query).slice(0, 80)
@@ -34,11 +34,72 @@ export function firstMeaningfulLine(text: string): string {
   return text.split(/\r?\n/).find(line => line.trim().length > 0)?.trim() || ''
 }
 
+function stripShellQuotes(value: string): string {
+  const trimmed = value.trim()
+  const quote = trimmed[0]
+  if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+function cleanShellArg(value: string): string {
+  return stripShellQuotes(value.trim()).replace(/\\(["' ])/g, '$1')
+}
+
+function compactShellPath(path: string): string {
+  return truncateMiddle(path.replace(/^\.\//, ''), 72)
+}
+
+function unwrapShellCommand(command: string): string {
+  const trimmed = command.trim()
+  const match = /^(?:\/[^\s]+\/)?(?:zsh|bash|sh)\s+-lc\s+([\s\S]+)$/.exec(trimmed)
+  return match ? stripShellQuotes(match[1]) : trimmed
+}
+
+function summarizeSingleShellReadCommand(command: string): string | null {
+  const trimmed = command.trim()
+  const numberedSed = /^nl\s+-ba\s+(.+?)\s*\|\s*sed\s+-n\s+['"]?(\d+)(?:,(\d+))?p['"]?$/.exec(trimmed)
+  if (numberedSed) {
+    const [, path, start, end] = numberedSed
+    return `read ${compactShellPath(cleanShellArg(path))}:${start}${end ? `-${end}` : ''}`
+  }
+  const sed = /^sed\s+-n\s+['"]?(\d+)(?:,(\d+))?p['"]?\s+(.+)$/.exec(trimmed)
+  if (sed) {
+    const [, start, end, path] = sed
+    return `read ${compactShellPath(cleanShellArg(path))}:${start}${end ? `-${end}` : ''}`
+  }
+  const cat = /^cat\s+(.+)$/.exec(trimmed)
+  if (cat) return `read ${compactShellPath(cleanShellArg(cat[1]))}`
+  const rg = /^rg(?:\s+-[^\s]+)*\s+(.+?)\s+(.+)$/.exec(trimmed)
+  if (rg) return `search ${truncateMiddle(cleanShellArg(rg[1]), 32)} in ${compactShellPath(cleanShellArg(rg[2]))}`
+  return null
+}
+
+export function summarizeShellCommand(command: string): string | null {
+  const unwrapped = unwrapShellCommand(command)
+  const parts = unwrapped.split(/\s+&&\s+/).map(part => part.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const summaries = parts.map(summarizeSingleShellReadCommand)
+  if (summaries.some(summary => !summary)) return null
+  const visible = summaries.slice(0, 2).join(' + ')
+  return summaries.length > 2 ? `${visible} + ${summaries.length - 2} more` : visible
+}
+
 export function formatContentSize(text: string): string {
   const lines = text ? text.split(/\r?\n/).length : 0
   const chars = text.length
   if (lines <= 1) return `${chars.toLocaleString()} chars`
   return `${lines.toLocaleString()} lines · ${chars.toLocaleString()} chars`
+}
+
+export function buildCollapsedOutputPreview(text: string, maxLines = 4): string[] {
+  return text
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0)
+    .slice(0, maxLines)
+    .map(line => truncateMiddle(line.trim(), 180))
 }
 
 export function toolInputContent(input: Record<string, unknown>): string {

@@ -1078,14 +1078,27 @@
 }
 
 .claude-tool-collapsed-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+  width: 100%;
   min-width: 0;
   color: var(--text-secondary);
 }
 
+.claude-tool-collapsed-meta {
+  white-space: nowrap;
+}
+
+.claude-tool-collapsed-preview-lines {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .claude-tool-collapsed-preview {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

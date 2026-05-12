@@ -31,8 +31,11 @@ function loadWorkspaceTab(): WorkspaceTab {
 
 // ThumbnailBar panel settings
 const THUMBNAIL_SETTINGS_KEY = 'better-terminal-thumbnail-settings'
-const DEFAULT_THUMBNAIL_HEIGHT = 180
-const MIN_THUMBNAIL_HEIGHT = 80
+const LEGACY_DEFAULT_THUMBNAIL_HEIGHT = 180
+const DEFAULT_THUMBNAIL_HEIGHT = 220
+// Header + thumbnail header eats ~55px; below 180 the preview region is
+// only a line or two tall and visibly clipped (#thumbnail-preview).
+const MIN_THUMBNAIL_HEIGHT = 180
 const MAX_THUMBNAIL_HEIGHT = 400
 
 interface ThumbnailSettings {
@@ -44,7 +47,13 @@ function loadThumbnailSettings(): ThumbnailSettings {
   try {
     const saved = localStorage.getItem(THUMBNAIL_SETTINGS_KEY)
     if (saved) {
-      return JSON.parse(saved)
+      const parsed = JSON.parse(saved) as ThumbnailSettings
+      const savedHeight = parsed.height ?? DEFAULT_THUMBNAIL_HEIGHT
+      const migratedHeight = savedHeight <= LEGACY_DEFAULT_THUMBNAIL_HEIGHT
+        ? DEFAULT_THUMBNAIL_HEIGHT
+        : savedHeight
+      const height = Math.min(MAX_THUMBNAIL_HEIGHT, Math.max(MIN_THUMBNAIL_HEIGHT, migratedHeight))
+      return { ...parsed, height }
     }
   } catch (e) {
     console.error('Failed to load thumbnail settings:', e)
