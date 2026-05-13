@@ -117,11 +117,6 @@ const LEGACY_V1_PARAM_KEYS = new Map([
   ['openai:set-api-key', ['key']],
   ['openai:compact-now', ['sessionId']],
 
-  ['profile:load', ['profileId']],
-  ['profile:load-snapshot', ['profileId']],
-  ['profile:activate', ['profileId']],
-  ['profile:deactivate', ['profileId']],
-
   ['snippet:getById', ['id']],
   ['snippet:create', ['input']],
   ['snippet:update', ['id', 'updates']],

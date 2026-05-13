@@ -21,6 +21,14 @@ pub struct CommandError {
     message: String,
 }
 
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CommandError {}
+
 pub fn mime_for_extension(ext: &str) -> &'static str {
     match ext.to_ascii_lowercase().as_str() {
         "png" => "image/png",

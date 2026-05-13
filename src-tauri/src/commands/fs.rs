@@ -10,6 +10,7 @@
 // have to branch on host kind. The deny-list logic lives in
 // crate::path_guard so we can unit-test it independently of Tauri.
 
+use crate::event_hub::publish_runtime_event;
 use crate::path_guard::is_sensitive_path;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -21,7 +22,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -766,7 +767,12 @@ pub fn fs_watch(app: AppHandle, state: State<'_, FsWatcherState>, dir_path: Stri
                 std::thread::spawn(move || {
                     std::thread::sleep(WATCH_DEBOUNCE);
                     if debounce_check.load(Ordering::SeqCst) == ticket {
-                        let _ = app_emit.emit("fs:changed", changed_path);
+                        publish_runtime_event(
+                            &app_emit,
+                            "fs:changed",
+                            serde_json::Value::String(changed_path),
+                            "rust-fs-watch",
+                        );
                     }
                 });
             }

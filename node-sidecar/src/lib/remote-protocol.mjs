@@ -63,8 +63,6 @@ export const PROXIED_CHANNELS = new Set([
   'snippet:getAll', 'snippet:getById', 'snippet:create', 'snippet:update',
   'snippet:delete', 'snippet:toggleFavorite', 'snippet:search',
   'snippet:getCategories', 'snippet:getFavorites', 'snippet:getByWorkspace',
-  // Profile
-  'profile:list', 'profile:load', 'profile:load-snapshot', 'profile:get-active-ids', 'profile:activate', 'profile:deactivate',
   // Agent presets supported by host
   'agent:list-presets',
 ])

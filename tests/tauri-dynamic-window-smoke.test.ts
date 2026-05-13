@@ -22,17 +22,36 @@ const exePath = resolve(
 )
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+const electronProductName = 'BetterAgentTerminal'
+const tauriIdentifier = 'org.tonyq.better-agent-terminal'
 
 function appDataDir(): string {
+  const electronDir = electronAppDataDir()
+  return existsSync(electronDir) ? electronDir : tauriAppDataDir()
+}
+
+function electronAppDataDir(): string {
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA
     if (!appData) throw new Error('APPDATA is not set')
-    return join(appData, 'com.tonyq.better-agent-terminal')
+    return join(appData, electronProductName)
   }
   if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'com.tonyq.better-agent-terminal')
+    return join(homedir(), 'Library', 'Application Support', electronProductName)
   }
-  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'com.tonyq.better-agent-terminal')
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), electronProductName)
+}
+
+function tauriAppDataDir(): string {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA
+    if (!appData) throw new Error('APPDATA is not set')
+    return join(appData, tauriIdentifier)
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', tauriIdentifier)
+  }
+  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), tauriIdentifier)
 }
 
 function killTree(pid: number): void {

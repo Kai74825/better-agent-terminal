@@ -144,12 +144,20 @@
   margin-left: 4px;
 }
 
+.claude-messages-shell {
+  flex: 1;
+  position: relative;
+  display: flex;
+  min-height: 120px;
+  overflow: hidden;
+}
+
 .claude-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: auto;
   padding: 16px 16px 24px 0;
-  min-height: 120px;
 }
 
 .claude-messages::-webkit-scrollbar {
@@ -468,10 +476,9 @@
 
 /* Scroll to bottom button */
 .scroll-to-bottom-btn {
-  position: sticky;
-  bottom: 8px;
-  float: right;
-  margin-right: 12px;
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
   width: 36px;
   height: 36px;
   border-radius: 50%;

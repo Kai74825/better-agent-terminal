@@ -60,6 +60,12 @@ impl WorktreeState {
     }
 }
 
+fn worktree_info_value(info: WorktreeInfo) -> Value {
+    let mut value = serde_json::to_value(info).unwrap_or(Value::Null);
+    value["success"] = Value::Bool(true);
+    value
+}
+
 fn bridge_error(message: impl Into<String>) -> BridgeError {
     BridgeError {
         message: message.into(),
@@ -307,9 +313,95 @@ fn create_worktree_native(
         created_at: now_ms(),
     };
     state.set(info.clone());
-    let mut value = serde_json::to_value(info).unwrap_or(Value::Null);
-    value["success"] = Value::Bool(true);
-    Ok(value)
+    Ok(worktree_info_value(info))
+}
+
+pub fn ensure_worktree_for_session_native(
+    state: &WorktreeState,
+    session_id: String,
+    cwd: String,
+    worktree_path: Option<String>,
+    branch_name: Option<String>,
+) -> Result<Value, BridgeError> {
+    if session_id.trim().is_empty() || cwd.trim().is_empty() {
+        return Ok(
+            json!({ "success": false, "error": "worktree.ensure: missing sessionId or cwd" }),
+        );
+    }
+
+    let requested_worktree_path = worktree_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string);
+    let inferred_worktree_path = requested_worktree_path.clone().or_else(|| {
+        let cwd_path = Path::new(&cwd);
+        let is_bat_worktree = cwd_path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some(WORKTREE_DIR);
+        (is_bat_worktree && cwd_path.exists()).then(|| cwd.clone())
+    });
+
+    if let Some(path) = inferred_worktree_path.filter(|path| Path::new(path).exists()) {
+        let path_ref = Path::new(&path);
+        let git_root = worktree_git_root_from_path(&path)
+            .map(|root| root.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let branch_name = branch_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| get_branch(path_ref));
+        let original_cwd = if requested_worktree_path.is_some() {
+            cwd
+        } else if git_root.is_empty() {
+            cwd
+        } else {
+            git_root.clone()
+        };
+        let info = WorktreeInfo {
+            session_id,
+            worktree_path: path,
+            branch_name,
+            git_root,
+            original_cwd,
+            source_branch: String::new(),
+            created_at: 0,
+        };
+        state.set(info.clone());
+        return Ok(worktree_info_value(info));
+    }
+
+    let Some(git_root) = get_git_root(&cwd) else {
+        return Ok(json!({ "success": false, "error": "Not a git repository" }));
+    };
+    let short_id: String = session_id.chars().take(8).collect();
+    let expected_path = PathBuf::from(&git_root).join(WORKTREE_DIR).join(&short_id);
+    if expected_path.exists() {
+        let path = expected_path.to_string_lossy().to_string();
+        let branch_name = branch_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| get_branch(&expected_path));
+        let info = WorktreeInfo {
+            session_id,
+            worktree_path: path,
+            branch_name,
+            git_root,
+            original_cwd: cwd,
+            source_branch: String::new(),
+            created_at: 0,
+        };
+        state.set(info.clone());
+        return Ok(worktree_info_value(info));
+    }
+
+    create_worktree_native(state, session_id, cwd)
 }
 
 fn force_remove_worktree(info: &WorktreeInfo, delete_branch: bool) {
@@ -591,6 +683,60 @@ mod tests {
         let info = state.get("session-1").expect("stored worktree");
         assert_eq!(info.original_cwd, "C:/repo");
         assert_eq!(info.branch_name, "bat/worktree-session-1");
+    }
+
+    #[test]
+    fn ensure_rehydrates_existing_requested_worktree() {
+        let state = WorktreeState::default();
+        let base = std::env::temp_dir().join(format!("bat-worktree-ensure-{}", now_ms()));
+        let worktree_path = base.join(WORKTREE_DIR).join("session-1");
+        fs::create_dir_all(&worktree_path).expect("create fake worktree");
+
+        let result = ensure_worktree_for_session_native(
+            &state,
+            "session-1".into(),
+            base.to_string_lossy().to_string(),
+            Some(worktree_path.to_string_lossy().to_string()),
+            Some("bat/worktree-session-1".into()),
+        )
+        .expect("ensure worktree");
+
+        assert_eq!(result["success"], true);
+        assert_eq!(
+            result["worktreePath"].as_str(),
+            Some(worktree_path.to_string_lossy().as_ref())
+        );
+        let info = state.get("session-1").expect("stored worktree");
+        assert_eq!(info.branch_name, "bat/worktree-session-1");
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn ensure_infers_existing_worktree_cwd() {
+        let state = WorktreeState::default();
+        let base = std::env::temp_dir().join(format!("bat-worktree-cwd-{}", now_ms()));
+        let worktree_path = base.join(WORKTREE_DIR).join("session-1");
+        fs::create_dir_all(&worktree_path).expect("create fake worktree");
+
+        let result = ensure_worktree_for_session_native(
+            &state,
+            "session-1".into(),
+            worktree_path.to_string_lossy().to_string(),
+            None,
+            Some("bat/worktree-session-1".into()),
+        )
+        .expect("ensure worktree");
+
+        assert_eq!(result["success"], true);
+        assert_eq!(
+            result["worktreePath"].as_str(),
+            Some(worktree_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            result["originalCwd"].as_str(),
+            Some(base.to_string_lossy().as_ref())
+        );
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]

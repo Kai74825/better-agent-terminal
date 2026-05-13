@@ -20,7 +20,9 @@ use crate::app_data;
 use crate::codex_app_server::{should_handle_codex, CodexAppServerState};
 use crate::commands::notification as notification_cmd;
 use crate::commands::profile as profile_cmd;
+use crate::commands::worktree as worktree_cmd;
 use crate::event_hub::publish_runtime_event;
+use crate::remote_client::RustRemoteClientState;
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use crate::window_registry;
 use serde::Serialize;
@@ -87,7 +89,7 @@ fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
 
 async fn remote_invoke_for_window(
     app: &AppHandle,
-    state: &SidecarState,
+    _state: &SidecarState,
     window: &WebviewWindow,
     channel: &'static str,
     args: Vec<Value>,
@@ -96,20 +98,11 @@ async fn remote_invoke_for_window(
     if !is_remote_profile_window(app, window) {
         return None;
     }
-    let app = app.clone();
-    let state = state.clone();
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        call_with_timeout(
-            &app,
-            &state,
-            "remote.invoke",
-            json!({
-                "channel": channel,
-                "args": args,
-                "timeoutMs": timeout.as_millis() as u64,
-            }),
-            timeout + Duration::from_secs(5),
-        )
+        remote_client
+            .invoke(channel, args, timeout)
+            .map_err(BridgeError::from)
     })
     .await
     .map_err(|err| BridgeError {
@@ -1372,83 +1365,83 @@ fn emit_codex_route_metric(
     publish_runtime_event(app, "sidecar:metric", payload, "codex-route");
 }
 
-fn codex_worktree_rehydrate_params(session_id: &str, options: &Option<Value>) -> Option<Value> {
-    let options = options.as_ref()?;
-    if options.get("agentPreset").and_then(Value::as_str) != Some("codex-agent-worktree") {
-        return None;
-    }
-    let worktree_path = options
-        .get("worktreePath")
+fn is_codex_worktree_options(options: &Option<Value>) -> bool {
+    options
+        .as_ref()
+        .and_then(|value| value.get("agentPreset"))
         .and_then(Value::as_str)
-        .filter(|path| !path.trim().is_empty())?;
-    let cwd = options
+        == Some("codex-agent-worktree")
+}
+
+async fn prepare_codex_worktree_options(
+    worktree_state: worktree_cmd::WorktreeState,
+    session_id: String,
+    options: Option<Value>,
+) -> Result<Option<Value>, BridgeError> {
+    if !is_codex_worktree_options(&options) {
+        return Ok(options);
+    }
+
+    let mut options_value = options.unwrap_or(Value::Null);
+    let cwd = options_value
         .get("cwd")
         .and_then(Value::as_str)
         .filter(|path| !path.trim().is_empty())
-        .unwrap_or(worktree_path);
-    let branch_name = options
+        .ok_or_else(|| BridgeError {
+            message: "codex worktree start: missing cwd".into(),
+        })?
+        .to_string();
+    let worktree_path = options_value
+        .get("worktreePath")
+        .and_then(Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .map(str::to_string);
+    let branch_name = options_value
         .get("worktreeBranch")
         .and_then(Value::as_str)
         .filter(|branch| !branch.trim().is_empty())
-        .unwrap_or("worktree");
-    Some(json!({
-        "sessionId": session_id,
-        "cwd": cwd,
-        "worktreePath": worktree_path,
-        "branchName": branch_name,
-    }))
-}
-
-async fn rehydrate_codex_worktree_if_needed(
-    app: &AppHandle,
-    sidecar_state: SidecarState,
-    session_id: &str,
-    options: &Option<Value>,
-) {
-    let Some(params) = codex_worktree_rehydrate_params(session_id, options) else {
-        return;
-    };
-    let app_for_call = app.clone();
-    let started = Instant::now();
+        .map(str::to_string);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        call_with_timeout(
-            &app_for_call,
-            &sidecar_state,
-            "worktree.rehydrate",
-            params,
-            DEFAULT_TIMEOUT,
+        worktree_cmd::ensure_worktree_for_session_native(
+            &worktree_state,
+            session_id,
+            cwd,
+            worktree_path,
+            branch_name,
         )
     })
-    .await;
-    match result {
-        Ok(Ok(_)) => emit_codex_route_metric(
-            app,
-            "codexWorktree",
-            "worktree.rehydrate",
-            session_id,
-            started.elapsed(),
-            true,
-            None,
-        ),
-        Ok(Err(err)) => emit_codex_route_metric(
-            app,
-            "codexWorktree",
-            "worktree.rehydrate",
-            session_id,
-            started.elapsed(),
-            false,
-            Some(err.message),
-        ),
-        Err(err) => emit_codex_route_metric(
-            app,
-            "codexWorktree",
-            "worktree.rehydrate",
-            session_id,
-            started.elapsed(),
-            false,
-            Some(format!("worktree.rehydrate worker failed: {err}")),
-        ),
+    .await
+    .map_err(|err| BridgeError {
+        message: format!("codex worktree prepare worker failed: {err}"),
+    })??;
+
+    if result.get("success").and_then(Value::as_bool) != Some(true) {
+        let message = result
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("Failed to create Codex Agent worktree.")
+            .to_string();
+        return Err(BridgeError { message });
     }
+
+    if let Some(options_object) = options_value.as_object_mut() {
+        options_object.insert("useWorktree".into(), Value::Bool(true));
+        if let Some(path) = result.get("worktreePath").and_then(Value::as_str) {
+            options_object.insert("worktreePath".into(), Value::String(path.to_string()));
+        }
+        if let Some(branch) = result.get("branchName").and_then(Value::as_str) {
+            options_object.insert("worktreeBranch".into(), Value::String(branch.to_string()));
+        }
+        if let Some(original_cwd) = result
+            .get("originalCwd")
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+        {
+            options_object.insert("cwd".into(), Value::String(original_cwd.to_string()));
+        }
+    }
+
+    Ok(Some(options_value))
 }
 
 #[tauri::command]
@@ -1488,16 +1481,11 @@ pub async fn claude_start_session(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, SidecarState>,
+    worktree_state: State<'_, worktree_cmd::WorktreeState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    notification_cmd::register_agent_session_from_options(
-        &app,
-        window.label(),
-        &session_id,
-        options.as_ref(),
-    );
     if let Some(result) = remote_invoke_for_window(
         &app,
         &state,
@@ -1513,8 +1501,16 @@ pub async fn claude_start_session(
     {
         return result;
     }
+    let options =
+        prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
+            .await?;
+    notification_cmd::register_agent_session_from_options(
+        &app,
+        window.label(),
+        &session_id,
+        options.as_ref(),
+    );
     if should_handle_codex(&options) {
-        rehydrate_codex_worktree_if_needed(&app, (*state).clone(), &session_id, &options).await;
         let codex = (*codex_state).clone();
         let codex_app = app.clone();
         let codex_session_id = session_id.clone();
@@ -2582,17 +2578,12 @@ pub async fn claude_resume_session(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, SidecarState>,
+    worktree_state: State<'_, worktree_cmd::WorktreeState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     sdk_session_id: String,
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    notification_cmd::register_agent_session_from_options(
-        &app,
-        window.label(),
-        &session_id,
-        options.as_ref(),
-    );
     if let Some(result) = remote_invoke_for_window(
         &app,
         &state,
@@ -2619,9 +2610,17 @@ pub async fn claude_resume_session(
     {
         return result;
     }
+    let options =
+        prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
+            .await?;
+    notification_cmd::register_agent_session_from_options(
+        &app,
+        window.label(),
+        &session_id,
+        options.as_ref(),
+    );
     let should_use_codex = should_handle_codex(&options);
     if should_use_codex || codex_state.is_owned(&session_id) {
-        rehydrate_codex_worktree_if_needed(&app, (*state).clone(), &session_id, &options).await;
         let codex = (*codex_state).clone();
         let codex_app = app.clone();
         let codex_session_id = session_id.clone();
@@ -3319,36 +3318,6 @@ mod tests {
         assert_eq!(agents[0].model.as_deref(), Some("claude-sonnet-4-6"));
 
         fs::remove_dir_all(base).ok();
-    }
-
-    #[test]
-    fn codex_worktree_rehydrate_params_require_existing_worktree_path() {
-        assert!(codex_worktree_rehydrate_params(
-            "s-1",
-            &Some(json!({
-                "agentPreset": "codex-agent-worktree",
-                "cwd": "/repo",
-                "useWorktree": true
-            }))
-        )
-        .is_none());
-
-        let params = codex_worktree_rehydrate_params(
-            "s-1",
-            &Some(json!({
-                "agentPreset": "codex-agent-worktree",
-                "cwd": "/repo",
-                "useWorktree": true,
-                "worktreePath": "/repo/.bat-worktrees/s-1",
-                "worktreeBranch": "bat/worktree-s-1"
-            })),
-        )
-        .expect("rehydrate params");
-
-        assert_eq!(params["sessionId"], "s-1");
-        assert_eq!(params["cwd"], "/repo");
-        assert_eq!(params["worktreePath"], "/repo/.bat-worktrees/s-1");
-        assert_eq!(params["branchName"], "bat/worktree-s-1");
     }
 
     #[test]

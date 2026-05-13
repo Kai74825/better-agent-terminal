@@ -3556,79 +3556,81 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           })}
         </div>
       )}
-      <div
-        className="claude-messages claude-timeline"
-        ref={messagesContainerRef}
-        onScroll={handleMessagesScroll}
-        onWheel={handleMessagesWheel}
-        onMouseDown={handleMessagesMouseDown}
-        onMouseUp={handleMessagesMouseUp}
-        onAuxClick={handleMessagesAuxClick}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          setContextMenu({ x: e.clientX, y: e.clientY, kind: 'messages' })
-        }}
-      >
-        {(hasMoreArchived || isLoadingMore) && (
-          <div className="claude-load-more">
-            <button
-              className="claude-load-more-btn"
-              onClick={loadMoreArchived}
-              disabled={isLoadingMore}
-            >
-              {isLoadingMore ? t('common.loading') : t('claude.loadOlderMessages', { count: archivedCountRef.current - loadedFromArchiveRef.current })}
-            </button>
-          </div>
-        )}
-        {isResumingHistory && (
-          <div className="claude-resume-skeleton">
-            <span className="claude-resume-skeleton-spinner" />
-            <span>{t('claude.resumingHistory')}</span>
-          </div>
-        )}
-        {allMessages.map((item, i) => {
-          const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
-            <div key={`divider-${i}`} className="claude-time-divider">
-              <span>{formatTimestamp(item.timestamp || 0)}</span>
-            </div>
-          ) : null
-          return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
-        })}
-        {isStreaming && !streamingText && !streamingThinking && showThinkingMsg && (
-          <div className="tl-item">
-            <div className="tl-dot dot-thinking" />
-            <div className="tl-content claude-thinking">
-              <span className="claude-thinking-text">{t('claude.thinking')}</span>
-              <span className="claude-thinking-dots"><span>.</span><span>.</span><span>.</span></span>
-            </div>
-          </div>
-        )}
-        {streamingThinking && showThinkingMsg && (
-          <div className="tl-item">
-            <div className="tl-dot dot-thinking" />
-            <div className="tl-content claude-thinking-block">
-              <div
-                className="claude-thinking-toggle"
-                onClick={() => setShowThinking(prev => !prev)}
+      <div className="claude-messages-shell">
+        <div
+          className="claude-messages claude-timeline"
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+          onWheel={handleMessagesWheel}
+          onMouseDown={handleMessagesMouseDown}
+          onMouseUp={handleMessagesMouseUp}
+          onAuxClick={handleMessagesAuxClick}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setContextMenu({ x: e.clientX, y: e.clientY, kind: 'messages' })
+          }}
+        >
+          {(hasMoreArchived || isLoadingMore) && (
+            <div className="claude-load-more">
+              <button
+                className="claude-load-more-btn"
+                onClick={loadMoreArchived}
+                disabled={isLoadingMore}
               >
-                <span className={`claude-tool-chevron ${showThinking ? 'expanded' : ''}`}>&#9654;</span>
-                <span className="claude-thinking-label">{t('claude.thinking')}{isStreaming && streamingThinking && !streamingText ? '...' : ''}</span>
+                {isLoadingMore ? t('common.loading') : t('claude.loadOlderMessages', { count: archivedCountRef.current - loadedFromArchiveRef.current })}
+              </button>
+            </div>
+          )}
+          {isResumingHistory && (
+            <div className="claude-resume-skeleton">
+              <span className="claude-resume-skeleton-spinner" />
+              <span>{t('claude.resumingHistory')}</span>
+            </div>
+          )}
+          {allMessages.map((item, i) => {
+            const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
+              <div key={`divider-${i}`} className="claude-time-divider">
+                <span>{formatTimestamp(item.timestamp || 0)}</span>
               </div>
-              {showThinking && (
-                <pre ref={streamingThinkingRef} className="claude-thinking-content">{streamingThinking}</pre>
-              )}
+            ) : null
+            return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
+          })}
+          {isStreaming && !streamingText && !streamingThinking && showThinkingMsg && (
+            <div className="tl-item">
+              <div className="tl-dot dot-thinking" />
+              <div className="tl-content claude-thinking">
+                <span className="claude-thinking-text">{t('claude.thinking')}</span>
+                <span className="claude-thinking-dots"><span>.</span><span>.</span><span>.</span></span>
+              </div>
             </div>
-          </div>
-        )}
-        {streamingText && (
-          <div className="tl-item">
-            <div className="tl-dot dot-assistant" />
-            <div className="tl-content claude-message-assistant">
-              <div className="claude-markdown"><LinkedText text={streamingText} /><span className="claude-cursor">|</span></div>
+          )}
+          {streamingThinking && showThinkingMsg && (
+            <div className="tl-item">
+              <div className="tl-dot dot-thinking" />
+              <div className="tl-content claude-thinking-block">
+                <div
+                  className="claude-thinking-toggle"
+                  onClick={() => setShowThinking(prev => !prev)}
+                >
+                  <span className={`claude-tool-chevron ${showThinking ? 'expanded' : ''}`}>&#9654;</span>
+                  <span className="claude-thinking-label">{t('claude.thinking')}{isStreaming && streamingThinking && !streamingText ? '...' : ''}</span>
+                </div>
+                {showThinking && (
+                  <pre ref={streamingThinkingRef} className="claude-thinking-content">{streamingThinking}</pre>
+                )}
+              </div>
             </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
+          )}
+          {streamingText && (
+            <div className="tl-item">
+              <div className="tl-dot dot-assistant" />
+              <div className="tl-content claude-message-assistant">
+                <div className="claude-markdown"><LinkedText text={streamingText} /><span className="claude-cursor">|</span></div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
         {userScrolledUp && (
           <button
             className="scroll-to-bottom-btn"

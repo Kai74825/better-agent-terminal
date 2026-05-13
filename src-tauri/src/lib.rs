@@ -14,6 +14,7 @@ mod event_hub;
 mod log_file;
 mod network_addresses;
 mod path_guard;
+mod remote_client;
 pub mod remote_core;
 mod remote_server;
 mod sidecar;
@@ -42,6 +43,7 @@ pub fn run() {
         .manage(worker_buffer_cmd::WorkerBufferState::default())
         .manage(worktree_cmd::WorktreeState::default())
         .manage(event_hub::RuntimeEventHubState::default())
+        .manage(remote_client::RustRemoteClientState::default())
         .manage(remote_server::RustRemoteServerState::default())
         .manage(codex_app_server::CodexAppServerState::default())
         .manage(window_registry::WindowRegistryState::default())

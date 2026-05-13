@@ -1,3 +1,8 @@
+use crate::commands::{
+    agent as agent_cmd, fs as fs_cmd, git as git_cmd, github as github_cmd, image as image_cmd,
+    openai as openai_cmd, profile as profile_cmd, settings as settings_cmd, snippet as snippet_cmd,
+    worktree as worktree_cmd,
+};
 use crate::electron_safe_storage::{
     read_secret_json, read_secret_string, write_secret_json, write_secret_string, SecretJsonRead,
 };
@@ -11,7 +16,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -22,7 +27,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::{Role, WebSocket};
 use tungstenite::Message;
@@ -30,11 +35,9 @@ use tungstenite::Message;
 const DEFAULT_REMOTE_PORT: u16 = 9876;
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_INVOKE_TIMEOUT: Duration = Duration::from_secs(300);
-const CERT_PRIME_TIMEOUT: Duration = Duration::from_secs(10);
 const TOKEN_FILE: &str = "server-token.enc.json";
 const LEGACY_TOKEN_FILE: &str = "server-token.json";
 const CERT_FILE: &str = "server-cert.enc.json";
-const LEGACY_COMPAT_MIN_PRIVATE_KEY_DER_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,7 +120,6 @@ impl RustRemoteServerState {
             .unwrap_or_else(generate_token);
         persist_token(&data_dir, &token);
 
-        prime_legacy_compatible_certificate(&app, &sidecar, &data_dir);
         let cert = ensure_remote_certificate(&data_dir)?;
         let fingerprint = fingerprint_sha256(&cert.cert_der);
         let config = Arc::new(build_tls_config(&cert)?);
@@ -304,51 +306,7 @@ fn ensure_remote_certificate(data_dir: &Path) -> Result<RemoteCertificate, Strin
     Ok(cert)
 }
 
-fn certificate_needs_legacy_compat_prime(data_dir: &Path) -> bool {
-    let cert_path = data_dir.join(CERT_FILE);
-    let SecretJsonRead::Read(stored) = read_secret_json::<StoredCertificate>(data_dir, &cert_path)
-    else {
-        return true;
-    };
-    let Ok(cert) = stored_certificate_to_remote(&stored) else {
-        return true;
-    };
-    // rcgen's default is ECDSA P-256, whose PKCS#8 private key is tiny
-    // (~138 bytes). The legacy Electron server generated 2048-bit RSA keys
-    // (~1.2KB) via selfsigned. Prefer the RSA shape for old Electron clients
-    // that report only a generic "Connection failed" during TLS setup.
-    cert.key_der.len() < LEGACY_COMPAT_MIN_PRIVATE_KEY_DER_BYTES
-}
-
-fn prime_legacy_compatible_certificate(app: &AppHandle, sidecar: &SidecarState, data_dir: &Path) {
-    if !certificate_needs_legacy_compat_prime(data_dir) {
-        return;
-    }
-    let Ok(cfg) = resolve_spawn_config(app) else {
-        remote_debug_log(app, "certificate prime skipped: sidecar config unavailable");
-        return;
-    };
-    let sink = app_handle_emit_sink(app.clone());
-    match sidecar.call_with_emit(
-        &cfg,
-        Some(sink),
-        "remote.ensureCertificate",
-        json!({ "configDir": data_dir.to_string_lossy().to_string(), "force": true }),
-        CERT_PRIME_TIMEOUT,
-    ) {
-        Ok(value) => {
-            if let Some(error) = value.get("error").and_then(Value::as_str) {
-                remote_debug_log(app, format!("certificate prime failed: {error}"));
-            } else {
-                remote_debug_log(app, "certificate primed by sidecar");
-            }
-        }
-        Err(err) => {
-            remote_debug_log(app, format!("certificate prime failed: {}", err.message));
-        }
-    }
-}
-
+#[cfg(test)]
 fn generate_remote_certificate() -> Result<RemoteCertificate, String> {
     stored_certificate_to_remote(&generate_stored_certificate()?)
 }
@@ -803,10 +761,6 @@ fn invoke_sidecar_for_remote(
     if channel.is_empty() {
         return Err("remote invoke: missing channel".to_string());
     }
-    if channel == "profile:list" {
-        return serde_json::to_value(crate::commands::profile::profile_list(app.clone()))
-            .map_err(|err| format!("remote profile:list serialization failed: {err}"));
-    }
     let args = frame
         .get("args")
         .and_then(Value::as_array)
@@ -819,6 +773,9 @@ fn invoke_sidecar_for_remote(
             .unwrap_or_else(|| legacy_v1_args_to_params(channel, &args)),
         RemoteProtocol::LegacyV1 => legacy_v1_args_to_params(channel, &args),
     };
+    if let Some(result) = invoke_rust_for_remote(app, channel, &params) {
+        return result;
+    }
     let method = channel_to_sidecar_method(channel);
     let cfg = resolve_spawn_config(app).map_err(|err| err.message)?;
     let sink = app_handle_emit_sink(app.clone());
@@ -826,6 +783,465 @@ fn invoke_sidecar_for_remote(
     sidecar
         .call_with_emit(&cfg, Some(sink), &method, params, timeout)
         .map_err(|err| err.message)
+}
+
+fn profile_id_from_params(channel: &str, params: &Value) -> Result<String, String> {
+    let profile_id = params
+        .get("profileId")
+        .and_then(Value::as_str)
+        .or_else(|| params.as_str())
+        .unwrap_or("")
+        .trim();
+    if profile_id.is_empty() {
+        Err(format!("{channel}: profileId is required"))
+    } else {
+        Ok(profile_id.to_string())
+    }
+}
+
+fn string_param(params: &Value, key: &str, method: &str) -> Result<String, String> {
+    string_param_any(params, &[key], method)
+}
+
+fn string_param_any(params: &Value, keys: &[&str], method: &str) -> Result<String, String> {
+    if let Some(value) = params.as_str() {
+        return Ok(value.to_string());
+    }
+    for key in keys {
+        if let Some(value) = params.get(*key).and_then(Value::as_str) {
+            return Ok(value.to_string());
+        }
+    }
+    Err(format!(
+        "{method}: missing {}",
+        keys.first().copied().unwrap_or("string")
+    ))
+}
+
+fn optional_string_param(params: &Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn i64_param(params: &Value, key: &str, method: &str) -> Result<i64, String> {
+    if let Some(value) = params.as_i64() {
+        return Ok(value);
+    }
+    params
+        .get(key)
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("{method}: missing {key}"))
+}
+
+fn bool_param(params: &Value, key: &str, default: bool) -> bool {
+    params.get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn string_vec_param(params: &Value, key: &str, method: &str) -> Result<Vec<String>, String> {
+    let Some(values) = params.get(key).and_then(Value::as_array) else {
+        return Err(format!("{method}: missing {key}"));
+    };
+    Ok(values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect())
+}
+
+fn deserialize_param<T: DeserializeOwned>(
+    value: Value,
+    method: &str,
+    key: &str,
+) -> Result<T, String> {
+    serde_json::from_value(value).map_err(|err| format!("{method}: invalid {key}: {err}"))
+}
+
+fn to_json_value<T: Serialize>(method: &str, value: T) -> Result<Value, String> {
+    serde_json::to_value(value).map_err(|err| format!("{method} serialization failed: {err}"))
+}
+
+fn bridge_error_message(err: crate::sidecar::BridgeError) -> String {
+    err.message
+}
+
+fn invoke_rust_for_remote(
+    app: &AppHandle,
+    channel: &str,
+    params: &Value,
+) -> Option<Result<Value, String>> {
+    let result = match channel {
+        "agent:list-presets" => Ok(agent_cmd::agent_preset_ids()),
+        "settings:load" => tauri::async_runtime::block_on(settings_cmd::settings_load(app.clone()))
+            .map_err(|err| err.to_string())
+            .and_then(|value| to_json_value(channel, value)),
+        "settings:save" => string_param(params, "data", channel).and_then(|data| {
+            tauri::async_runtime::block_on(settings_cmd::settings_save(app.clone(), data))
+                .map_err(|err| err.to_string())?;
+            Ok(Value::Bool(true))
+        }),
+        "settings:get-shell-path" => string_param(params, "shellType", channel)
+            .map(settings_cmd::settings_get_shell_path)
+            .and_then(|value| to_json_value(channel, value)),
+        "settings:detect-cx" => {
+            tauri::async_runtime::block_on(settings_cmd::settings_detect_cx(app.clone()))
+                .map_err(|err| err.to_string())
+                .and_then(|value| to_json_value(channel, value))
+        }
+        "fs:home" => to_json_value(channel, fs_cmd::fs_home(app.clone())),
+        "fs:readdir" => {
+            string_param_any(params, &["dirPath", "path"], channel).and_then(|dir_path| {
+                let value = tauri::async_runtime::block_on(fs_cmd::fs_readdir(dir_path));
+                to_json_value(channel, value)
+            })
+        }
+        "fs:readFile" => {
+            string_param_any(params, &["path", "filePath"], channel).and_then(|path| {
+                let value = tauri::async_runtime::block_on(fs_cmd::fs_read_file(path));
+                to_json_value(channel, value)
+            })
+        }
+        "fs:list-dirs" => {
+            string_param_any(params, &["dirPath", "path"], channel).and_then(|dir_path| {
+                let include_hidden = bool_param(params, "includeHidden", false);
+                let value = tauri::async_runtime::block_on(fs_cmd::fs_list_dirs(
+                    app.clone(),
+                    dir_path,
+                    include_hidden,
+                ));
+                to_json_value(channel, value)
+            })
+        }
+        "fs:mkdir" => string_param(params, "parentPath", channel).and_then(|parent_path| {
+            string_param(params, "name", channel).and_then(|name| {
+                let value = tauri::async_runtime::block_on(fs_cmd::fs_mkdir(parent_path, name));
+                to_json_value(channel, value)
+            })
+        }),
+        "fs:delete-path" => {
+            string_param_any(params, &["targetPath", "path"], channel).and_then(|target_path| {
+                let value = tauri::async_runtime::block_on(fs_cmd::fs_delete_path(target_path));
+                to_json_value(channel, value)
+            })
+        }
+        "fs:quick-locations" => {
+            let value = tauri::async_runtime::block_on(fs_cmd::fs_quick_locations(app.clone()));
+            to_json_value(channel, value)
+        }
+        "fs:search" => {
+            let dir_path = match string_param_any(params, &["dirPath", "path"], channel) {
+                Ok(value) => value,
+                Err(_) => return Some(Ok(Value::Array(Vec::new()))),
+            };
+            let query = match string_param(params, "query", channel) {
+                Ok(value) => value,
+                Err(_) => return Some(Ok(Value::Array(Vec::new()))),
+            };
+            let value = tauri::async_runtime::block_on(fs_cmd::fs_search(dir_path, query));
+            to_json_value(channel, value)
+        }
+        "fs:resolve-path-links" => string_param(params, "cwd", channel).and_then(|cwd| {
+            string_vec_param(params, "rawPaths", channel).and_then(|raw_paths| {
+                let value =
+                    tauri::async_runtime::block_on(fs_cmd::fs_resolve_path_links(cwd, raw_paths));
+                to_json_value(channel, value)
+            })
+        }),
+        "fs:watch" => string_param_any(params, &["dirPath", "path"], channel).map(|dir_path| {
+            Value::Bool(fs_cmd::fs_watch(
+                app.clone(),
+                app.state::<fs_cmd::FsWatcherState>(),
+                dir_path,
+            ))
+        }),
+        "fs:unwatch" => string_param_any(params, &["dirPath", "path"], channel).map(|dir_path| {
+            Value::Bool(fs_cmd::fs_unwatch(
+                app.state::<fs_cmd::FsWatcherState>(),
+                dir_path,
+            ))
+        }),
+        "git:get-github-url" => {
+            string_param_any(params, &["folderPath", "cwd"], channel).and_then(|folder_path| {
+                let value =
+                    tauri::async_runtime::block_on(git_cmd::git_get_github_url(folder_path));
+                to_json_value(channel, value)
+            })
+        }
+        "git:branch" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_branch(cwd));
+            to_json_value(channel, value)
+        }),
+        "git:log" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let count = params.get("count").and_then(Value::as_i64);
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_log(cwd, count));
+            to_json_value(channel, value)
+        }),
+        "git:diff" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let commit_hash = optional_string_param(params, "commitHash");
+            let file_path = optional_string_param(params, "filePath");
+            let value =
+                tauri::async_runtime::block_on(git_cmd::git_get_diff(cwd, commit_hash, file_path));
+            to_json_value(channel, value)
+        }),
+        "git:diff-files" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let commit_hash = optional_string_param(params, "commitHash");
+            let value =
+                tauri::async_runtime::block_on(git_cmd::git_get_diff_files(cwd, commit_hash));
+            to_json_value(channel, value)
+        }),
+        "git:getRoot" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_root(cwd));
+            to_json_value(channel, value)
+        }),
+        "git:status" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_status(cwd));
+            to_json_value(channel, value)
+        }),
+        "github:check-cli" => {
+            let value = tauri::async_runtime::block_on(github_cmd::github_check_cli());
+            to_json_value(channel, value)
+        }
+        "github:pr-list" => string_param(params, "cwd", channel)
+            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_pr_list(cwd))),
+        "github:issue-list" => string_param(params, "cwd", channel)
+            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_issue_list(cwd))),
+        "github:pr-view" => string_param(params, "cwd", channel).and_then(|cwd| {
+            i64_param(params, "number", channel).map(|number| {
+                tauri::async_runtime::block_on(github_cmd::github_pr_view(cwd, number))
+            })
+        }),
+        "github:issue-view" => string_param(params, "cwd", channel).and_then(|cwd| {
+            i64_param(params, "number", channel).map(|number| {
+                tauri::async_runtime::block_on(github_cmd::github_issue_view(cwd, number))
+            })
+        }),
+        "github:pr-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
+            i64_param(params, "number", channel).and_then(|number| {
+                string_param(params, "body", channel).map(|body| {
+                    tauri::async_runtime::block_on(github_cmd::github_pr_comment(cwd, number, body))
+                })
+            })
+        }),
+        "github:issue-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
+            i64_param(params, "number", channel).and_then(|number| {
+                string_param(params, "body", channel).map(|body| {
+                    tauri::async_runtime::block_on(github_cmd::github_issue_comment(
+                        cwd, number, body,
+                    ))
+                })
+            })
+        }),
+        "image:read-as-data-url" => string_param_any(params, &["path", "filePath"], channel)
+            .and_then(|path| {
+                tauri::async_runtime::block_on(image_cmd::image_read_as_data_url(path))
+                    .map(Value::String)
+                    .map_err(|err| err.to_string())
+            }),
+        "openai:get-api-key-status" => {
+            tauri::async_runtime::block_on(openai_cmd::openai_get_api_key_status(app.clone()))
+                .map_err(bridge_error_message)
+        }
+        "openai:set-api-key" => {
+            string_param_any(params, &["apiKey", "key"], channel).and_then(|api_key| {
+                tauri::async_runtime::block_on(openai_cmd::openai_set_api_key(app.clone(), api_key))
+                    .map_err(bridge_error_message)
+            })
+        }
+        "openai:clear-api-key" => {
+            tauri::async_runtime::block_on(openai_cmd::openai_clear_api_key(app.clone()))
+                .map_err(bridge_error_message)
+        }
+        "openai:list-sessions" => Ok(Value::Array(Vec::new())),
+        "openai:compact-now" => Ok(Value::Bool(false)),
+        "snippet:getAll" => to_json_value(
+            channel,
+            snippet_cmd::snippet_get_all(app.clone(), app.state::<snippet_cmd::SnippetState>()),
+        ),
+        "snippet:getById" => i64_param(params, "id", channel).and_then(|id| {
+            to_json_value(
+                channel,
+                snippet_cmd::snippet_get_by_id(
+                    app.clone(),
+                    app.state::<snippet_cmd::SnippetState>(),
+                    id,
+                ),
+            )
+        }),
+        "snippet:getFavorites" => to_json_value(
+            channel,
+            snippet_cmd::snippet_get_favorites(
+                app.clone(),
+                app.state::<snippet_cmd::SnippetState>(),
+            ),
+        ),
+        "snippet:search" => {
+            let query = match string_param(params, "query", channel) {
+                Ok(value) => value,
+                Err(_) => return Some(Ok(Value::Array(Vec::new()))),
+            };
+            to_json_value(
+                channel,
+                snippet_cmd::snippet_search(
+                    app.clone(),
+                    app.state::<snippet_cmd::SnippetState>(),
+                    query,
+                ),
+            )
+        }
+        "snippet:getByWorkspace" => {
+            let workspace_id = params
+                .as_str()
+                .map(ToString::to_string)
+                .or_else(|| optional_string_param(params, "workspaceId"));
+            to_json_value(
+                channel,
+                snippet_cmd::snippet_get_by_workspace(
+                    app.clone(),
+                    app.state::<snippet_cmd::SnippetState>(),
+                    workspace_id,
+                ),
+            )
+        }
+        "snippet:getCategories" => to_json_value(
+            channel,
+            snippet_cmd::snippet_get_categories(
+                app.clone(),
+                app.state::<snippet_cmd::SnippetState>(),
+            ),
+        ),
+        "snippet:create" => {
+            let input_value = params
+                .get("input")
+                .cloned()
+                .unwrap_or_else(|| params.clone());
+            if !input_value
+                .get("title")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+                || !input_value.get("content").and_then(Value::as_str).is_some()
+            {
+                Err("snippet:create: missing input.title / input.content".to_string())
+            } else {
+                deserialize_param::<snippet_cmd::CreateSnippetInput>(input_value, channel, "input")
+                    .and_then(|input| {
+                        to_json_value(
+                            channel,
+                            snippet_cmd::snippet_create(
+                                app.clone(),
+                                app.state::<snippet_cmd::SnippetState>(),
+                                input,
+                            ),
+                        )
+                    })
+            }
+        }
+        "snippet:update" => i64_param(params, "id", channel).and_then(|id| {
+            let updates_value = params
+                .get("updates")
+                .cloned()
+                .ok_or_else(|| "snippet:update: missing updates".to_string())?;
+            deserialize_param::<snippet_cmd::UpdateSnippetInput>(updates_value, channel, "updates")
+                .and_then(|updates| {
+                    to_json_value(
+                        channel,
+                        snippet_cmd::snippet_update(
+                            app.clone(),
+                            app.state::<snippet_cmd::SnippetState>(),
+                            id,
+                            updates,
+                        ),
+                    )
+                })
+        }),
+        "snippet:delete" => i64_param(params, "id", channel).map(|id| {
+            Value::Bool(snippet_cmd::snippet_delete(
+                app.clone(),
+                app.state::<snippet_cmd::SnippetState>(),
+                id,
+            ))
+        }),
+        "snippet:toggleFavorite" => i64_param(params, "id", channel).and_then(|id| {
+            to_json_value(
+                channel,
+                snippet_cmd::snippet_toggle_favorite(
+                    app.clone(),
+                    app.state::<snippet_cmd::SnippetState>(),
+                    id,
+                ),
+            )
+        }),
+        "worktree:create" => string_param(params, "sessionId", channel).and_then(|session_id| {
+            string_param(params, "cwd", channel).and_then(|cwd| {
+                tauri::async_runtime::block_on(worktree_cmd::worktree_create(
+                    app.state::<worktree_cmd::WorktreeState>(),
+                    session_id,
+                    cwd,
+                ))
+                .map_err(bridge_error_message)
+            })
+        }),
+        "worktree:remove" => string_param(params, "sessionId", channel).and_then(|session_id| {
+            let delete_branch = bool_param(params, "deleteBranch", true);
+            tauri::async_runtime::block_on(worktree_cmd::worktree_remove(
+                app.state::<worktree_cmd::WorktreeState>(),
+                session_id,
+                delete_branch,
+            ))
+            .map_err(bridge_error_message)
+        }),
+        "worktree:status" => string_param(params, "sessionId", channel).and_then(|session_id| {
+            tauri::async_runtime::block_on(worktree_cmd::worktree_status(
+                app.state::<worktree_cmd::WorktreeState>(),
+                session_id,
+            ))
+            .map_err(bridge_error_message)
+        }),
+        "worktree:merge" => string_param(params, "sessionId", channel).and_then(|session_id| {
+            let strategy =
+                optional_string_param(params, "strategy").unwrap_or_else(|| "merge".into());
+            tauri::async_runtime::block_on(worktree_cmd::worktree_merge(
+                app.state::<worktree_cmd::WorktreeState>(),
+                session_id,
+                strategy,
+            ))
+            .map_err(bridge_error_message)
+        }),
+        "worktree:rehydrate" => string_param(params, "sessionId", channel).and_then(|session_id| {
+            string_param(params, "cwd", channel).and_then(|cwd| {
+                string_param(params, "worktreePath", channel).and_then(|worktree_path| {
+                    string_param(params, "branchName", channel).and_then(|branch_name| {
+                        tauri::async_runtime::block_on(worktree_cmd::worktree_rehydrate(
+                            app.state::<worktree_cmd::WorktreeState>(),
+                            session_id,
+                            cwd,
+                            worktree_path,
+                            branch_name,
+                        ))
+                        .map_err(bridge_error_message)
+                    })
+                })
+            })
+        }),
+        "profile:list" => serde_json::to_value(profile_cmd::profile_list(app.clone()))
+            .map_err(|err| format!("remote profile:list serialization failed: {err}")),
+        "profile:get-active-ids" => {
+            serde_json::to_value(profile_cmd::profile_get_active_ids(app.clone()))
+                .map_err(|err| format!("remote profile:get-active-ids serialization failed: {err}"))
+        }
+        "profile:load-snapshot" => profile_id_from_params(channel, params).map(|profile_id| {
+            profile_cmd::profile_load_snapshot_for_remote(app, &profile_id).unwrap_or(Value::Null)
+        }),
+        "profile:load" => profile_id_from_params(channel, params).map(|profile_id| {
+            profile_cmd::profile_load_for_remote(app, &profile_id).unwrap_or(Value::Null)
+        }),
+        "profile:activate" => profile_id_from_params(channel, params)
+            .map(|profile_id| Value::Bool(profile_cmd::activate_profile_id(app, &profile_id))),
+        "profile:deactivate" => profile_id_from_params(channel, params)
+            .map(|profile_id| Value::Bool(profile_cmd::deactivate_profile_id(app, &profile_id))),
+        _ => return None,
+    };
+    Some(result)
 }
 
 fn remote_invoke_timeout(channel: &str) -> Duration {
@@ -983,19 +1399,6 @@ mod tests {
             fingerprint_sha256(&cert2.cert_der)
         );
         assert_eq!(cert1.cert_der, cert2.cert_der);
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn default_rcgen_certificate_requests_legacy_prime() {
-        let dir = temp_remote_dir("cert-prime");
-        let stored = generate_stored_certificate().unwrap();
-        let payload = json!({
-            "enc": false,
-            "data": serde_json::to_string(&stored).unwrap(),
-        });
-        fs::write(dir.join(CERT_FILE), payload.to_string()).unwrap();
-        assert!(certificate_needs_legacy_compat_prime(&dir));
         let _ = fs::remove_dir_all(dir);
     }
 

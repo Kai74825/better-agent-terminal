@@ -265,6 +265,91 @@ pub fn event_params_to_legacy_v1_args(channel: &str, params: &Value) -> Vec<Valu
     }
 }
 
+pub fn legacy_v1_event_args_to_params(channel: &str, args: &[Value]) -> Value {
+    match channel {
+        "pty:output" => json!({
+            "id": args.first().cloned().unwrap_or(Value::Null),
+            "data": args.get(1).cloned().unwrap_or(Value::Null),
+        }),
+        "pty:exit" => json!({
+            "id": args.first().cloned().unwrap_or(Value::Null),
+            "exitCode": args.get(1).cloned().unwrap_or(Value::Null),
+        }),
+        "claude:session-reset" => json!({
+            "sessionId": args.first().cloned().unwrap_or(Value::Null),
+        }),
+        "claude:message" => claude_event_params(args, "message"),
+        "claude:tool-use" => claude_event_params(args, "toolCall"),
+        "claude:tool-result" => claude_event_params(args, "result"),
+        "claude:stream" => claude_event_params(args, "data"),
+        "claude:result" => claude_event_params(args, "result"),
+        "claude:turn-end" => claude_event_params(args, "payload"),
+        "claude:error" => claude_event_params(args, "error"),
+        "claude:status" => claude_event_params(args, "meta"),
+        "claude:permission-request" => claude_event_params(args, "data"),
+        "claude:permission-resolved" => claude_event_params(args, "toolUseId"),
+        "claude:ask-user" => claude_event_params(args, "data"),
+        "claude:ask-user-resolved" => claude_event_params(args, "toolUseId"),
+        "claude:modeChange" => claude_event_params(args, "mode"),
+        "claude:history" => claude_event_params(args, "items"),
+        "claude:resume-loading" => claude_event_params(args, "loading"),
+        "claude:prompt-suggestion" => claude_event_params(args, "suggestion"),
+        "claude:worktree-info" => claude_event_params(args, "payload"),
+        "claude:rate-limit" => claude_event_params(args, "info"),
+        "fs:changed"
+        | "workspace:detached"
+        | "workspace:reattached"
+        | "workspace:reload"
+        | "system:resume" => args.first().cloned().unwrap_or(Value::Null),
+        _ => json!({ "args": args }),
+    }
+}
+
+fn claude_event_params(args: &[Value], payload_key: &str) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "sessionId".to_string(),
+        args.first().cloned().unwrap_or(Value::Null),
+    );
+    map.insert(
+        payload_key.to_string(),
+        args.get(1).cloned().unwrap_or(Value::Null),
+    );
+    Value::Object(map)
+}
+
+pub fn is_proxied_remote_event(channel: &str) -> bool {
+    matches!(
+        channel,
+        "pty:output"
+            | "pty:exit"
+            | "claude:message"
+            | "claude:tool-use"
+            | "claude:tool-result"
+            | "claude:stream"
+            | "claude:result"
+            | "claude:turn-end"
+            | "claude:error"
+            | "claude:status"
+            | "claude:permission-request"
+            | "claude:permission-resolved"
+            | "claude:ask-user"
+            | "claude:ask-user-resolved"
+            | "claude:modeChange"
+            | "claude:history"
+            | "claude:resume-loading"
+            | "claude:prompt-suggestion"
+            | "claude:session-reset"
+            | "claude:worktree-info"
+            | "claude:rate-limit"
+            | "fs:changed"
+            | "workspace:detached"
+            | "workspace:reattached"
+            | "workspace:reload"
+            | "system:resume"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +477,22 @@ mod tests {
             event_params_to_legacy_v1_args("workspace:reload", &json!("{\"workspaces\":[]}")),
             vec![json!("{\"workspaces\":[]}")]
         );
+    }
+
+    #[test]
+    fn maps_legacy_event_args_to_named_params() {
+        assert_eq!(
+            legacy_v1_event_args_to_params(
+                "claude:message",
+                &[json!("s1"), json!({ "role": "assistant" })],
+            ),
+            json!({ "sessionId": "s1", "message": { "role": "assistant" } })
+        );
+        assert_eq!(
+            legacy_v1_event_args_to_params("workspace:reload", &[json!("{\"workspaces\":[]}")]),
+            json!("{\"workspaces\":[]}")
+        );
+        assert!(is_proxied_remote_event("claude:stream"));
+        assert!(!is_proxied_remote_event("settings:load"));
     }
 }

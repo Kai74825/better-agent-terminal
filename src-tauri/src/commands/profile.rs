@@ -425,6 +425,18 @@ fn list_response_at(dir: &Path) -> ProfileListResponse {
     }
 }
 
+fn load_profile_snapshot_at(dir: &Path, profile_id: &str, activate: bool) -> Option<Value> {
+    let mut index = read_index_at(dir);
+    if activate && !activate_profile_in_index(&mut index, profile_id) {
+        return None;
+    }
+    let snapshot = read_snapshot_at(dir, profile_id)?;
+    if activate {
+        let _ = write_index_at(dir, index);
+    }
+    Some(snapshot)
+}
+
 fn unique_profile_id(index: &ProfileIndex, name: &str) -> String {
     let base = slugify(name);
     let ids = index
@@ -607,6 +619,16 @@ pub fn profile_get_active_ids(app: AppHandle) -> Vec<String> {
     profiles_dir(&app)
         .map(|dir| read_index_at(&dir).active_profile_ids)
         .unwrap_or_else(|| vec![DEFAULT_PROFILE_ID.into()])
+}
+
+pub fn profile_load_snapshot_for_remote(app: &AppHandle, profile_id: &str) -> Option<Value> {
+    let dir = profiles_dir(app)?;
+    load_profile_snapshot_at(&dir, profile_id, false)
+}
+
+pub fn profile_load_for_remote(app: &AppHandle, profile_id: &str) -> Option<Value> {
+    let dir = profiles_dir(app)?;
+    load_profile_snapshot_at(&dir, profile_id, true)
 }
 
 #[tauri::command]
@@ -1035,6 +1057,47 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read_to_string(dir.join(TOKEN_FILE)).unwrap(), encrypted);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn load_profile_snapshot_at_can_activate_without_sidecar_profile_handler() {
+        let dir = temp_profile_dir("remote-load-snapshot");
+        let entry = profile_from_options(
+            unique_profile_id(&read_index_at(&dir), "Dev"),
+            "Dev".into(),
+            None,
+        );
+        write_index_at(
+            &dir,
+            ProfileIndex {
+                profiles: vec![default_entry(), entry.clone()],
+                active_profile_ids: vec![DEFAULT_PROFILE_ID.into()],
+                active_profile_id: None,
+            },
+        )
+        .unwrap();
+        write_snapshot_at(
+            &dir,
+            &entry.id,
+            &json!({
+                "id": entry.id,
+                "name": "Dev",
+                "version": 2,
+                "windows": [{
+                    "workspaces": [{ "id": "w1" }],
+                    "activeWorkspaceId": "w1",
+                    "activeGroup": null,
+                    "terminals": [],
+                    "activeTerminalId": null
+                }]
+            }),
+        )
+        .unwrap();
+
+        let snapshot = load_profile_snapshot_at(&dir, &entry.id, true).unwrap();
+        assert_eq!(snapshot["version"], json!(2));
+        assert!(read_index_at(&dir).active_profile_ids.contains(&entry.id));
         fs::remove_dir_all(dir).ok();
     }
 

@@ -218,11 +218,7 @@ fn bridge_error(message: impl Into<String>) -> BridgeError {
 fn is_codex_agent_preset(options: &Value) -> bool {
     match options.get("agentPreset").and_then(Value::as_str) {
         Some("codex-agent") => true,
-        Some("codex-agent-worktree") => options
-            .get("worktreePath")
-            .and_then(Value::as_str)
-            .map(|path| !path.trim().is_empty())
-            .unwrap_or(false),
+        Some("codex-agent-worktree") => true,
         _ => false,
     }
 }
@@ -2394,12 +2390,12 @@ mod tests {
     }
 
     #[test]
-    fn codex_worktree_preset_routes_to_rust_only_after_worktree_exists() {
+    fn codex_worktree_preset_routes_to_rust_runtime() {
         assert!(should_handle_codex(&Some(json!({
             "agentPreset": "codex-agent",
             "cwd": "/repo"
         }))));
-        assert!(!should_handle_codex(&Some(json!({
+        assert!(should_handle_codex(&Some(json!({
             "agentPreset": "codex-agent-worktree",
             "cwd": "/repo",
             "useWorktree": true

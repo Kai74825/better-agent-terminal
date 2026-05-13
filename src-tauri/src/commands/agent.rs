@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-const AGENT_PRESET_IDS: &[&str] = &[
+pub const AGENT_PRESET_IDS: &[&str] = &[
     "claude-code",
     "claude-code-v2",
     "claude-code-worktree",
@@ -16,6 +16,10 @@ const AGENT_PRESET_IDS: &[&str] = &[
 
 #[tauri::command]
 pub async fn agent_list_presets() -> Value {
+    agent_preset_ids()
+}
+
+pub fn agent_preset_ids() -> Value {
     json!(AGENT_PRESET_IDS)
 }
 

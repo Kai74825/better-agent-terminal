@@ -40,38 +40,94 @@ import {
 } from './lib/models.mjs'
 import { dataUrlToContentBlock, loadInstalledPlugins, __setPluginsPathOverrideForTests } from './lib/plugins.mjs'
 import { scanSkills, parseSkillFrontmatter } from './lib/skills.mjs'
-
-// Side-effect imports: each handler module calls registerHandler() at
-// module load. The import order doesn't matter for correctness — the
-// registry is a Map keyed by method name — but keep it grouped by
-// namespace for readability.
-import './handlers/claude-auth.mjs'
-import './handlers/claude-session.mjs'
-import './handlers/claude-permission.mjs'
-import './handlers/claude-history.mjs'
-import './handlers/claude-send.mjs'
-import './handlers/claude-readonly.mjs'
-import './handlers/claude-mcp.mjs'
-import './handlers/openai.mjs'
-import './handlers/worktree.mjs'
-import './handlers/profile.mjs'
-import './handlers/agent.mjs'
-import './handlers/remote-tunnel.mjs'
-import './handlers/update.mjs'
-import './handlers/image.mjs'
-import './handlers/fs.mjs'
-import './handlers/git.mjs'
-import './handlers/github.mjs'
-import './handlers/settings.mjs'
-import './handlers/snippet.mjs'
-import './handlers/fs-watch.mjs'
-
-// Remote invoke bridge — must run after every handler module has called
-// registerHandler(). It introspects PROXIED_CHANNELS and auto-wires each
-// to the matching sidecar JSON-RPC method, so an authenticated remote
-// client can drive any allowed channel through the WebSocket server.
 import { wireRemoteBridgeHandlers } from './lib/remote-bridge.mjs'
-wireRemoteBridgeHandlers()
+
+const CLAUDE_HANDLER_MODULES = [
+  './handlers/claude-auth.mjs',
+  './handlers/claude-session.mjs',
+  './handlers/claude-permission.mjs',
+  './handlers/claude-history.mjs',
+  './handlers/claude-send.mjs',
+  './handlers/claude-readonly.mjs',
+  './handlers/claude-mcp.mjs',
+]
+
+const LEGACY_UTILITY_HANDLER_MODULES = [
+  './handlers/openai.mjs',
+  './handlers/agent.mjs',
+  './handlers/remote-tunnel.mjs',
+  './handlers/update.mjs',
+  './handlers/image.mjs',
+  './handlers/fs.mjs',
+  './handlers/git.mjs',
+  './handlers/github.mjs',
+  './handlers/settings.mjs',
+  './handlers/snippet.mjs',
+  './handlers/fs-watch.mjs',
+]
+
+export let compareVersions
+export let findClaudeCliPath
+export let listSessionsFallback
+export let __resetMetadataCacheForTests
+export let fetchAuthStatus
+export let readAccountIndex
+export let resolveClaudeCliBinary
+export let __resetClaudeCliCacheForTests
+export let AGENT_PRESET_IDS
+export let worktreeCreate
+export let worktreeRemove
+export let worktreeStatus
+export let worktreeRehydrate
+export let worktreeGetGitRoot
+export let worktreeGetBranch
+export let worktreeMerge
+export let activeWorktrees
+
+async function loadHandlers({ legacyUtilityHandlers = false } = {}) {
+  const loaded = new Map()
+  const load = async (path) => {
+    if (!loaded.has(path)) loaded.set(path, await import(path))
+    return loaded.get(path)
+  }
+  for (const path of CLAUDE_HANDLER_MODULES) await load(path)
+  if (legacyUtilityHandlers) {
+    for (const path of LEGACY_UTILITY_HANDLER_MODULES) await load(path)
+  }
+  const readonly = await load('./handlers/claude-readonly.mjs')
+  findClaudeCliPath = readonly.findClaudeCliPath
+  listSessionsFallback = readonly.listSessionsFallback
+  __resetMetadataCacheForTests = readonly.__resetMetadataCacheForTests
+
+  const auth = await load('./handlers/claude-auth.mjs')
+  fetchAuthStatus = auth.fetchAuthStatus
+  readAccountIndex = auth.readAccountIndex
+  resolveClaudeCliBinary = auth.resolveClaudeCliBinary
+  __resetClaudeCliCacheForTests = auth.__resetClaudeCliCacheForTests
+
+  const worktree = await load('./handlers/worktree.mjs')
+  if (legacyUtilityHandlers) worktree.registerWorktreeHandlers()
+  worktreeCreate = worktree.worktreeCreate
+  worktreeRemove = worktree.worktreeRemove
+  worktreeStatus = worktree.worktreeStatus
+  worktreeRehydrate = worktree.worktreeRehydrate
+  worktreeGetGitRoot = worktree.worktreeGetGitRoot
+  worktreeGetBranch = worktree.worktreeGetBranch
+  worktreeMerge = worktree.worktreeMerge
+  activeWorktrees = worktree.activeWorktrees
+
+  if (legacyUtilityHandlers) {
+    const update = await load('./handlers/update.mjs')
+    compareVersions = update.compareVersions
+    const agent = await load('./handlers/agent.mjs')
+    AGENT_PRESET_IDS = agent.AGENT_PRESET_IDS
+  }
+
+  // Remote invoke bridge — must run after every selected handler module has
+  // called registerHandler(). Production sidecar only wires Claude SDK-backed
+  // channels; utility namespaces now belong to Rust.
+  wireRemoteBridgeHandlers()
+}
 
 // Ping is the lone built-in that doesn't fit any namespace — keep it
 // here so the entry file has at least one obvious registration.
@@ -122,33 +178,7 @@ export {
   parseSkillFrontmatter,
 }
 
-// Re-export from handler modules. These are read by the test suite
-// directly (e.g. mod.compareVersions, mod.findClaudeCliPath), so they
-// must keep flowing out of server.mjs.
-export { compareVersions } from './handlers/update.mjs'
-export {
-  findClaudeCliPath,
-  listSessionsFallback,
-  __resetMetadataCacheForTests,
-} from './handlers/claude-readonly.mjs'
-export {
-  fetchAuthStatus,
-  readAccountIndex,
-  resolveClaudeCliBinary,
-  __resetClaudeCliCacheForTests,
-} from './handlers/claude-auth.mjs'
 export { resolveDataDir } from './lib/data-paths.mjs'
-export { AGENT_PRESET_IDS } from './handlers/agent.mjs'
-export {
-  worktreeCreate,
-  worktreeRemove,
-  worktreeStatus,
-  worktreeRehydrate,
-  worktreeGetGitRoot,
-  worktreeGetBranch,
-  worktreeMerge,
-  activeWorktrees,
-} from './handlers/worktree.mjs'
 
 // --- main ------------------------------------------------------------------
 
@@ -193,5 +223,9 @@ const isMain = (() => {
     return false
   }
 })()
+
+await loadHandlers({
+  legacyUtilityHandlers: !isMain || process.env.BAT_SIDECAR_ENABLE_LEGACY_HANDLERS === '1',
+})
 
 if (isMain) main()

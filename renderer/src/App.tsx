@@ -292,19 +292,36 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // Track previous terminal for Cmd+` toggle
-  const prevTerminalIdRef = useRef<string | null>(null)
-
-  // Keyboard shortcuts: Cmd+` (toggle terminal), Ctrl+` on Windows (cycle BAT windows),
+  // Keyboard shortcuts: Cmd+` on mac / Ctrl+` elsewhere (cycle BAT windows),
+  // Alt+` / Alt+Shift+` (cycle sessions in the current workspace),
   // Cmd/Ctrl+Left/Right (cycle tabs), Cmd/Ctrl+Up/Down (switch workspace)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-
       const isBackquote = e.key === '`' || e.code === 'Backquote'
 
-      // Windows: Ctrl+` cycles between BAT app windows.
-      if (host.platform === 'win32' && e.ctrlKey && !e.metaKey && isBackquote && !e.shiftKey) {
+      if (isBackquote && e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        const currentState = workspaceStore.getState()
+        if (!currentState.activeWorkspaceId) return
+        const terminals = workspaceStore.getWorkspaceTerminals(currentState.activeWorkspaceId)
+        if (terminals.length <= 1) return
+        const currentIndex = terminals.findIndex(t => t.id === currentState.focusedTerminalId)
+        const direction = e.shiftKey ? -1 : 1
+        const nextIndex = currentIndex >= 0
+          ? (currentIndex + direction + terminals.length) % terminals.length
+          : (direction > 0 ? 0 : terminals.length - 1)
+        workspaceStore.setFocusedTerminal(terminals[nextIndex].id)
+        window.dispatchEvent(new CustomEvent('workspace-switch-tab', { detail: { tab: 'terminal' } }))
+        return
+      }
+
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+
+      const isWindowCycleShortcut = host.platform === 'darwin'
+        ? e.metaKey && !e.ctrlKey
+        : e.ctrlKey && !e.metaKey
+
+      if (isBackquote && isWindowCycleShortcut && !e.shiftKey) {
         e.preventDefault()
         host.app.focusNextWindow()
         return
@@ -314,39 +331,6 @@ export default function App() {
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'Tab' || e.code === 'Tab')) {
         e.preventDefault()
         host.notification.focusLatestUnread()
-        return
-      }
-
-      // Cmd+` / Ctrl+`: Toggle between first regular terminal and Claude Code terminal
-      if (isBackquote && !e.shiftKey) {
-        e.preventDefault()
-        const currentState = workspaceStore.getState()
-        if (!currentState.activeWorkspaceId) return
-        const terminals = workspaceStore.getWorkspaceTerminals(currentState.activeWorkspaceId)
-        if (terminals.length === 0) return
-
-        const firstRegular = terminals.find(t => !t.agentPreset || t.agentPreset === 'none')
-        const agentTerminal = terminals.find(t => t.agentPreset && t.agentPreset !== 'none')
-        const focusedId = currentState.focusedTerminalId
-
-        // If focused on agent terminal → switch to first regular terminal
-        // If focused on regular terminal → switch back to agent terminal (or previous)
-        const focusedTerminal = terminals.find(t => t.id === focusedId)
-        const isOnAgent = focusedTerminal?.agentPreset && focusedTerminal.agentPreset !== 'none'
-
-        if (isOnAgent && firstRegular) {
-          prevTerminalIdRef.current = focusedId
-          workspaceStore.setFocusedTerminal(firstRegular.id)
-        } else if (!isOnAgent && agentTerminal) {
-          prevTerminalIdRef.current = focusedId
-          workspaceStore.setFocusedTerminal(agentTerminal.id)
-        } else if (!isOnAgent && prevTerminalIdRef.current) {
-          const prev = prevTerminalIdRef.current
-          prevTerminalIdRef.current = focusedId
-          workspaceStore.setFocusedTerminal(prev)
-        }
-        // Also ensure we're on the terminal tab
-        window.dispatchEvent(new CustomEvent('workspace-switch-tab', { detail: { tab: 'terminal' } }))
         return
       }
 

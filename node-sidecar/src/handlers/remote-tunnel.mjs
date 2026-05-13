@@ -1,10 +1,10 @@
 // remote.* / tunnel.* — server + client lifecycle live.
 //
 // startServer / stopServer / serverStatus boot the WebSocketServer port
-// from `lib/remote-server-impl.mjs`. connect / disconnect / clientStatus
+// from Rust in Tauri. connect / disconnect / clientStatus
 // / testConnection / listProfiles drive the singleton RemoteClient from
-// `lib/remote-client-impl.mjs`. listProfiles invokes the server-side
-// profile.list bridge and returns the remote's visible profile entries.
+// `lib/remote-client-impl.mjs`. listProfiles invokes the remote host's
+// Rust profile:list endpoint and returns the visible profile entries.
 //
 // `tunnel.getConnection` returns the live address list once the server
 // is running, otherwise the same {error, addresses} shape from #45 so

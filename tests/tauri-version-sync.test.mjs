@@ -10,4 +10,10 @@ assert.equal(
   'src-tauri/tauri.conf.json version must match package.json before preview release',
 )
 
+assert.equal(
+  tauriConfig.identifier,
+  'org.tonyq.better-agent-terminal',
+  'Tauri bundle identifier must stay aligned with the original app bundle id',
+)
+
 console.log('tauri-version-sync: passed')

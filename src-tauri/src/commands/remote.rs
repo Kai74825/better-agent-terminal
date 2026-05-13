@@ -1,20 +1,18 @@
 // remote.* — cross-machine server / client.
 //
-// The Rust host now owns server start/stop/status so remote IPC can move
-// toward the same dispatcher as local Tauri commands. The outgoing client
-// path still delegates to the Node sidecar for this slice.
+// The Rust host owns the remote server and the outbound remote client. The
+// Node sidecar remains available only behind server-side invoke fallback for
+// runtime namespaces that still require the Claude SDK wrapper.
 
 use crate::log_file::append_line;
+use crate::remote_client::RustRemoteClientState;
 use crate::remote_server::RustRemoteServerState;
-use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use crate::sidecar::{BridgeError, SidecarState};
 use crate::{app_data, sidecar};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
-use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
-
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Default, Deserialize, PartialEq)]
 struct RemoteAutoStartSettings {
@@ -60,17 +58,6 @@ fn log_remote_auto_start(app: &AppHandle, message: &str) {
         &dir.join("logs").join("tauri.log"),
         &format!("[RemoteServer] {message}\n"),
     );
-}
-
-fn call(
-    app: &AppHandle,
-    state: &SidecarState,
-    method: &str,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    let cfg = resolve_spawn_config(app)?;
-    let sink = app_handle_emit_sink(app.clone());
-    state.call_with_emit(&cfg, Some(sink), method, params, DEFAULT_TIMEOUT)
 }
 
 fn maybe_auto_start_remote_server(app: AppHandle, state: SidecarState) -> Result<(), String> {
@@ -130,20 +117,6 @@ pub fn spawn_auto_start_remote_server(app: AppHandle) {
     });
 }
 
-async fn call_blocking(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-    method: &'static str,
-    params: Value,
-) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || call(&app, &state, method, params))
-        .await
-        .map_err(|err| BridgeError {
-            message: format!("{method} worker failed: {err}"),
-        })?
-}
-
 #[tauri::command]
 pub async fn remote_start_server(
     app: AppHandle,
@@ -175,72 +148,77 @@ pub async fn remote_server_status(
 #[tauri::command]
 pub async fn remote_connect(
     app: AppHandle,
-    state: State<'_, SidecarState>,
+    client_state: State<'_, RustRemoteClientState>,
     host: String,
     port: u16,
     token: String,
     fingerprint: String,
     label: Option<String>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
-        state,
-        "remote.connect",
-        json!({ "host": host, "port": port, "token": token, "fingerprint": fingerprint, "label": label }),
-    )
+    let state = (*client_state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(state
+            .connect(app, host, port, token, fingerprint, label)
+            .unwrap_or_else(|error| json!({ "connected": false, "error": error })))
+    })
     .await
+    .map_err(|err| BridgeError {
+        message: format!("remote.connect worker failed: {err}"),
+    })?
 }
 
 #[tauri::command]
 pub async fn remote_disconnect(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    client_state: State<'_, RustRemoteClientState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "remote.disconnect", Value::Null).await
+    Ok(Value::Bool(client_state.disconnect()))
 }
 
 #[tauri::command]
 pub async fn remote_client_status(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    client_state: State<'_, RustRemoteClientState>,
 ) -> Result<Value, BridgeError> {
-    call_blocking(app, state, "remote.clientStatus", Value::Null).await
+    Ok(client_state.status())
 }
 
 #[tauri::command]
 pub async fn remote_test_connection(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    client_state: State<'_, RustRemoteClientState>,
     host: String,
     port: u16,
     token: String,
     fingerprint: String,
 ) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
-        state,
-        "remote.testConnection",
-        json!({ "host": host, "port": port, "token": token, "fingerprint": fingerprint }),
-    )
+    let state = (*client_state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(state
+            .test_connection(host, port, token, fingerprint)
+            .unwrap_or_else(|error| json!({ "ok": false, "error": error })))
+    })
     .await
+    .map_err(|err| BridgeError {
+        message: format!("remote.testConnection worker failed: {err}"),
+    })?
 }
 
 #[tauri::command]
 pub async fn remote_list_profiles(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
+    client_state: State<'_, RustRemoteClientState>,
     host: String,
     port: u16,
     token: String,
     fingerprint: String,
 ) -> Result<Value, BridgeError> {
-    call_blocking(
-        app,
-        state,
-        "remote.listProfiles",
-        json!({ "host": host, "port": port, "token": token, "fingerprint": fingerprint }),
-    )
+    let state = (*client_state).clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(state
+            .list_profiles(host, port, token, fingerprint)
+            .unwrap_or_else(|error| json!({ "error": error })))
+    })
     .await
+    .map_err(|err| BridgeError {
+        message: format!("remote.listProfiles worker failed: {err}"),
+    })?
 }
 
 #[cfg(test)]

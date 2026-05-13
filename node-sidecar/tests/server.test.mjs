@@ -62,57 +62,6 @@ async function inProcess() {
     else process.env.BAT_SIDECAR_DATA_DIR = savedDataDir
   }
 
-  // profile.* sidecar handlers read the same on-disk profile index/snapshot
-  // shape as Electron/Tauri profile managers. Remote server profile invokes
-  // depend on this; they must not collapse to default/null when data exists.
-  {
-    const saved = process.env.BAT_SIDECAR_DATA_DIR
-    const fakeData = mkdtempSync(join(tmpdir(), 'sidecar-profile-'))
-    process.env.BAT_SIDECAR_DATA_DIR = fakeData
-    try {
-      const profilesDir = join(fakeData, 'profiles')
-      mkdirSync(profilesDir, { recursive: true })
-      writeFileSync(join(profilesDir, 'index.json'), JSON.stringify({
-        profiles: [
-          { id: 'default', name: 'Default', type: 'local', createdAt: 0, updatedAt: 0 },
-          { id: 'dev', name: 'Dev', type: 'local', createdAt: 1, updatedAt: 2 },
-        ],
-        activeProfileIds: ['default'],
-      }))
-      writeFileSync(join(profilesDir, 'dev.json'), JSON.stringify({
-        id: 'dev',
-        name: 'Dev',
-        version: 2,
-        windows: [{
-          workspaces: [{ id: 'w1' }],
-          activeWorkspaceId: 'w1',
-          activeGroup: null,
-          terminals: [],
-          activeTerminalId: null,
-        }],
-      }))
-
-      const listed = await dispatch({ jsonrpc: '2.0', id: 31, method: 'profile.list' })
-      assert.equal(listed.result.profiles.length, 2)
-      assert.equal(listed.result.profiles[1].id, 'dev')
-      const snapshot = await dispatch({ jsonrpc: '2.0', id: 32, method: 'profile.loadSnapshot', params: 'dev' })
-      assert.equal(snapshot.result.version, 2)
-      assert.equal(snapshot.result.windows[0].activeWorkspaceId, 'w1')
-      const loaded = await dispatch({ jsonrpc: '2.0', id: 33, method: 'profile.load', params: 'dev' })
-      assert.equal(loaded.result.id, 'dev')
-      const active = await dispatch({ jsonrpc: '2.0', id: 34, method: 'profile.getActiveIds' })
-      assert.deepEqual(active.result, ['default', 'dev'])
-      const activateAgain = await dispatch({ jsonrpc: '2.0', id: 35, method: 'profile.activate', params: 'dev' })
-      assert.equal(activateAgain.result, true)
-      const activeAfterDuplicate = await dispatch({ jsonrpc: '2.0', id: 36, method: 'profile.getActiveIds' })
-      assert.deepEqual(activeAfterDuplicate.result, ['default', 'dev'])
-    } finally {
-      if (saved === undefined) delete process.env.BAT_SIDECAR_DATA_DIR
-      else process.env.BAT_SIDECAR_DATA_DIR = saved
-      rmSync(fakeData, { recursive: true, force: true })
-    }
-  }
-
   // Unknown methods produce a -32601 error and preserve the request id.
   const unknown = await dispatch({ jsonrpc: '2.0', id: 7, method: 'no.such.method' })
   assert.equal(unknown.error.code, -32601)
@@ -3476,7 +3425,6 @@ async function inProcess() {
     assert.equal(bridge.channelToMethod('snippet:toggleFavorite'), 'snippet.toggleFavorite')
     assert.equal(bridge.channelToMethod('git:getRoot'), 'git.getRoot')
     assert.equal(bridge.channelToMethod('agent:list-presets'), 'agent.listPresets')
-    assert.equal(bridge.channelToMethod('profile:get-active-ids'), 'profile.getActiveIds')
     // Empty/non-string throws — never silently returns garbage.
     assert.throws(() => bridge.channelToMethod(''), /non-empty string/)
     assert.throws(() => bridge.channelToMethod(null), /non-empty string/)
@@ -5459,18 +5407,6 @@ async function inProcess() {
         assert.equal(wrongTokenReply.result.ok, false)
       }
 
-      // (l) listProfiles through dispatch — remote server invokes
-      // sidecar profile.list and returns renderer-friendly profile rows.
-      {
-        const lpReply = await dispatch({
-          jsonrpc: '2.0', id: 9120, method: 'remote.listProfiles',
-          params: { host: '127.0.0.1', port: started.port, token: started.token, fingerprint: started.fingerprint },
-        })
-        assert.deepEqual(lpReply.result, {
-          profiles: [{ id: 'default', name: 'Default', type: 'local' }],
-          activeProfileIds: ['default'],
-        })
-      }
     } finally {
       restoreLogger()
       if (savedProfileDataDir === undefined) delete process.env.BAT_SIDECAR_DATA_DIR

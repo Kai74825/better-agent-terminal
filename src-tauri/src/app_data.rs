@@ -1,23 +1,27 @@
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 pub const TAURI_DATA_DIR_ENV: &str = "BAT_TAURI_DATA_DIR";
 
-// Pin storage to the Electron build's userData directory so a user keeps
-// their accounts/snippets/terminal-history when migrating between the
-// Electron and Tauri packages. Tauri's default app_data_dir() resolves to
-// the bundle identifier (com.tonyq.better-agent-terminal), which would
-// split data between the two builds.
+// Keep existing Electron users on the Electron build's userData directory
+// so accounts/snippets/terminal-history migrate cleanly. Fresh Tauri installs
+// use Tauri's default app_data_dir(), which follows the bundle identifier.
 const ELECTRON_PRODUCT_NAME: &str = "BetterAgentTerminal";
 
-pub fn app_data_dir(_app: &AppHandle) -> Result<PathBuf, String> {
+pub fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(raw) = std::env::var(TAURI_DATA_DIR_ENV) {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed));
         }
     }
-    electron_user_data_dir().ok_or_else(|| "could not resolve Electron userData dir".to_string())
+
+    select_app_data_dir(
+        electron_user_data_dir(),
+        app.path()
+            .app_data_dir()
+            .map_err(|err| format!("could not resolve Tauri app data dir: {err}")),
+    )
 }
 
 pub fn app_data_dir_opt(app: &AppHandle) -> Option<PathBuf> {
@@ -55,5 +59,55 @@ fn electron_user_data_dir() -> Option<PathBuf> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         None
+    }
+}
+
+fn select_app_data_dir(
+    electron_dir: Option<PathBuf>,
+    tauri_dir: Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = electron_dir {
+        if dir.exists() {
+            return Ok(dir);
+        }
+    }
+    tauri_dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("bat-app-data-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn selects_existing_electron_user_data_dir() {
+        let electron = tmp_dir("electron-existing");
+        let tauri = tmp_dir("tauri-default");
+        let _ = fs::remove_dir_all(&electron);
+        let _ = fs::remove_dir_all(&tauri);
+        fs::create_dir_all(&electron).unwrap();
+
+        let selected = select_app_data_dir(Some(electron.clone()), Ok(tauri.clone())).unwrap();
+
+        assert_eq!(selected, electron);
+        let _ = fs::remove_dir_all(&selected);
+        let _ = fs::remove_dir_all(&tauri);
+    }
+
+    #[test]
+    fn selects_tauri_default_when_electron_user_data_dir_is_missing() {
+        let electron = tmp_dir("electron-missing");
+        let tauri = tmp_dir("tauri-default");
+        let _ = fs::remove_dir_all(&electron);
+        let _ = fs::remove_dir_all(&tauri);
+
+        let selected = select_app_data_dir(Some(electron), Ok(tauri.clone())).unwrap();
+
+        assert_eq!(selected, tauri);
+        let _ = fs::remove_dir_all(&selected);
     }
 }
