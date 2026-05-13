@@ -34,6 +34,8 @@ struct WorktreeInfo {
     git_root: String,
     original_cwd: String,
     source_branch: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    fork_head: String,
     created_at: u64,
     // Cache for merged-status lookups. We keep these on WorktreeInfo so the
     // existing `state.set` / `state.get` round-trip transparently preserves
@@ -312,6 +314,7 @@ fn create_worktree_native(
     let worktree_base = git_root_path.join(WORKTREE_DIR);
     let worktree_path = worktree_base.join(&short_id);
     let source_branch = get_branch(&git_root_path);
+    let fork_head = rev_parse(&git_root_path, &source_branch);
     let mut branch_name = format!("bat/worktree-{short_id}");
 
     fs::create_dir_all(&worktree_base).map_err(|err| bridge_error(err.to_string()))?;
@@ -339,6 +342,7 @@ fn create_worktree_native(
         MAX_OUTPUT_BYTES,
     )
     .map_err(bridge_error)?;
+    write_worktree_fork_head(&git_root_path, &branch_name, &fork_head);
     link_claude_untracked(&git_root_path, &worktree_path);
 
     let info = WorktreeInfo {
@@ -348,6 +352,7 @@ fn create_worktree_native(
         git_root,
         original_cwd: cwd,
         source_branch,
+        fork_head,
         created_at: now_ms(),
         cached_host_head: String::new(),
         cached_worktree_head: String::new(),
@@ -493,6 +498,11 @@ pub fn ensure_worktree_for_session_native(
         } else {
             git_root.clone()
         };
+        let fork_head = if git_root.is_empty() {
+            String::new()
+        } else {
+            load_worktree_fork_head(Path::new(&git_root), &branch_name)
+        };
         let info = WorktreeInfo {
             session_id,
             worktree_path: path,
@@ -500,6 +510,7 @@ pub fn ensure_worktree_for_session_native(
             git_root,
             original_cwd,
             source_branch: String::new(),
+            fork_head,
             created_at: 0,
             cached_host_head: String::new(),
             cached_worktree_head: String::new(),
@@ -522,6 +533,8 @@ pub fn ensure_worktree_for_session_native(
             .filter(|branch| !branch.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| get_branch(&expected_path));
+        let git_root_path = Path::new(&git_root);
+        let fork_head = load_worktree_fork_head(git_root_path, &branch_name);
         let info = WorktreeInfo {
             session_id,
             worktree_path: path,
@@ -529,6 +542,7 @@ pub fn ensure_worktree_for_session_native(
             git_root,
             original_cwd: cwd,
             source_branch: String::new(),
+            fork_head,
             created_at: 0,
             cached_host_head: String::new(),
             cached_worktree_head: String::new(),
@@ -588,6 +602,77 @@ fn rev_parse(git_root: &Path, rev: &str) -> String {
     .unwrap_or_default()
 }
 
+fn worktree_fork_head_config_key(branch_name: &str) -> Option<String> {
+    let branch_name = branch_name.trim();
+    (!branch_name.is_empty()).then(|| format!("branch.{branch_name}.bat-fork-head"))
+}
+
+fn write_worktree_fork_head(git_root: &Path, branch_name: &str, fork_head: &str) {
+    let Some(key) = worktree_fork_head_config_key(branch_name) else {
+        return;
+    };
+    if fork_head.trim().is_empty() {
+        return;
+    }
+    let _ = run_git_ok(git_root, &["config", "--local", &key, fork_head]);
+}
+
+fn read_worktree_fork_head(git_root: &Path, branch_name: &str) -> String {
+    let Some(key) = worktree_fork_head_config_key(branch_name) else {
+        return String::new();
+    };
+    run_git(
+        git_root,
+        &["config", "--local", "--get", &key],
+        DEFAULT_TIMEOUT,
+        1024 * 1024,
+    )
+    .unwrap_or_default()
+}
+
+fn read_worktree_reflog_fork_head(git_root: &Path, branch_name: &str) -> String {
+    let branch_name = branch_name.trim();
+    if branch_name.is_empty() {
+        return String::new();
+    }
+    run_git(
+        git_root,
+        &["reflog", "show", "--format=%H", "--reverse", branch_name],
+        DEFAULT_TIMEOUT,
+        1024 * 1024,
+    )
+    .ok()
+    .and_then(|stdout| {
+        stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_string)
+    })
+    .unwrap_or_default()
+}
+
+fn load_worktree_fork_head(git_root: &Path, branch_name: &str) -> String {
+    let fork_head = read_worktree_fork_head(git_root, branch_name);
+    if fork_head.is_empty() {
+        read_worktree_reflog_fork_head(git_root, branch_name)
+    } else {
+        fork_head
+    }
+}
+
+fn resolve_fork_head(state: &WorktreeState, info: &mut WorktreeInfo, git_root: &Path) -> String {
+    if !info.fork_head.is_empty() {
+        return info.fork_head.clone();
+    }
+    let fork_head = load_worktree_fork_head(git_root, &info.branch_name);
+    if !fork_head.is_empty() {
+        info.fork_head = fork_head.clone();
+        state.set(info.clone());
+    }
+    fork_head
+}
+
 fn compute_merged_kind(git_root: &Path, source_branch: &str, branch_name: &str) -> MergedKind {
     // Fast path: ancestor check — worktree HEAD is reachable from source HEAD.
     // Covers merge --no-ff and fast-forward merges.
@@ -638,7 +723,8 @@ fn worktree_status_native(state: &WorktreeState, session_id: String) -> Value {
         return Value::Null;
     };
     let source_branch = resolve_source_branch(state, &mut info);
-    let git_root = Path::new(&info.git_root);
+    let git_root_path = PathBuf::from(&info.git_root);
+    let git_root = git_root_path.as_path();
     let diff = if source_branch.is_empty() {
         String::new()
     } else {
@@ -657,18 +743,23 @@ fn worktree_status_native(state: &WorktreeState, session_id: String) -> Value {
         let host_head = rev_parse(git_root, &source_branch);
         let worktree_head = rev_parse(git_root, &info.branch_name);
         if !host_head.is_empty() && !worktree_head.is_empty() {
-            let cache_hit = info.cached_merged.is_some()
-                && info.cached_host_head == host_head
-                && info.cached_worktree_head == worktree_head;
-            if cache_hit {
-                merged_kind = info.cached_merged;
+            let fork_head = resolve_fork_head(state, &mut info, git_root);
+            if !fork_head.is_empty() && worktree_head == fork_head {
+                merged_kind = None;
             } else {
-                let kind = compute_merged_kind(git_root, &source_branch, &info.branch_name);
-                info.cached_host_head = host_head;
-                info.cached_worktree_head = worktree_head;
-                info.cached_merged = Some(kind);
-                state.set(info.clone());
-                merged_kind = Some(kind);
+                let cache_hit = info.cached_merged.is_some()
+                    && info.cached_host_head == host_head
+                    && info.cached_worktree_head == worktree_head;
+                if cache_hit {
+                    merged_kind = info.cached_merged;
+                } else {
+                    let kind = compute_merged_kind(git_root, &source_branch, &info.branch_name);
+                    info.cached_host_head = host_head;
+                    info.cached_worktree_head = worktree_head;
+                    info.cached_merged = Some(kind);
+                    state.set(info.clone());
+                    merged_kind = Some(kind);
+                }
             }
         }
     }
@@ -785,12 +876,21 @@ fn rehydrate_worktree_native(
         if existing.worktree_path == worktree_path {
             existing.original_cwd = cwd;
             if !branch_name.trim().is_empty() {
-                existing.branch_name = branch_name;
+                existing.branch_name = branch_name.clone();
+            }
+            if existing.fork_head.is_empty() && !existing.git_root.is_empty() {
+                let git_root_path = Path::new(&existing.git_root);
+                existing.fork_head = load_worktree_fork_head(git_root_path, &existing.branch_name);
             }
             state.set(existing);
             return json!({ "success": true });
         }
     }
+    let fork_head = if git_root.is_empty() {
+        String::new()
+    } else {
+        load_worktree_fork_head(Path::new(&git_root), &branch_name)
+    };
     state.set(WorktreeInfo {
         session_id,
         worktree_path,
@@ -798,6 +898,7 @@ fn rehydrate_worktree_native(
         git_root,
         original_cwd: cwd,
         source_branch: String::new(),
+        fork_head,
         created_at: 0,
         cached_host_head: String::new(),
         cached_worktree_head: String::new(),
@@ -981,5 +1082,122 @@ mod tests {
             worktree_status_native(&state, "missing".into()),
             Value::Null
         );
+    }
+
+    #[test]
+    fn status_does_not_mark_unmodified_fork_as_merged() {
+        if !Command::new("git")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let state = WorktreeState::default();
+        let repo = std::env::temp_dir().join(format!("bat-worktree-status-{}", now_ms()));
+        fs::create_dir_all(&repo).expect("create repo dir");
+        run_git(
+            &repo,
+            &["init", "-b", "main"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("init repo");
+        run_git(
+            &repo,
+            &["config", "user.email", "test@example.com"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("set email");
+        run_git(
+            &repo,
+            &["config", "user.name", "Test"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("set name");
+        fs::write(repo.join("README.md"), "# fixture\n").expect("write readme");
+        run_git(&repo, &["add", "."], DEFAULT_TIMEOUT, MAX_OUTPUT_BYTES).expect("git add");
+        run_git(
+            &repo,
+            &["commit", "-m", "init"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("git commit");
+
+        let session_id = "session-unchanged".to_string();
+        let created = create_worktree_native(
+            None,
+            &state,
+            session_id.clone(),
+            repo.to_string_lossy().to_string(),
+            false,
+        )
+        .expect("create worktree");
+        assert_eq!(created["success"], true);
+        assert!(created["forkHead"]
+            .as_str()
+            .is_some_and(|head| !head.is_empty()));
+
+        let status = worktree_status_native(&state, session_id.clone());
+        assert_eq!(status["merged"], false);
+        assert_eq!(status["mergedKind"], "unknown");
+
+        let info = state.get(&session_id).expect("stored worktree");
+        let rehydrated_state = WorktreeState::default();
+        assert_eq!(
+            rehydrate_worktree_native(
+                &rehydrated_state,
+                "session-rehydrated".into(),
+                repo.to_string_lossy().to_string(),
+                info.worktree_path.clone(),
+                info.branch_name.clone(),
+            )["success"],
+            true
+        );
+        let rehydrated_status =
+            worktree_status_native(&rehydrated_state, "session-rehydrated".into());
+        assert_eq!(rehydrated_status["merged"], false);
+        assert_eq!(rehydrated_status["mergedKind"], "unknown");
+
+        let worktree_path = PathBuf::from(&info.worktree_path);
+        fs::write(
+            worktree_path.join("README.md"),
+            "# fixture\n\nchanged in worktree\n",
+        )
+        .expect("write worktree change");
+        run_git(
+            &worktree_path,
+            &["add", "README.md"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("git add worktree");
+        run_git(
+            &worktree_path,
+            &["commit", "-m", "worktree change"],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("git commit worktree");
+        run_git(
+            &repo,
+            &["merge", "--no-ff", "--no-edit", &info.branch_name],
+            DEFAULT_TIMEOUT,
+            MAX_OUTPUT_BYTES,
+        )
+        .expect("merge worktree");
+
+        let merged_status = worktree_status_native(&state, session_id);
+        assert_eq!(merged_status["merged"], true);
+        assert_eq!(merged_status["mergedKind"], "ancestor");
+
+        fs::remove_dir_all(repo).ok();
     }
 }
