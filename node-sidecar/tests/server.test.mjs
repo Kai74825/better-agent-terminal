@@ -182,6 +182,16 @@ async function inProcess() {
     )
   }
 
+  {
+    const { isCodexThreadNotFoundError } = await import('../src/handlers/codex.mjs')
+    assert.equal(
+      isCodexThreadNotFoundError('thread not found: 019e1bfc-e8f6-77e1-9886-1833ce991217'),
+      true,
+    )
+    assert.equal(isCodexThreadNotFoundError(new Error('Thread 019e1bfc not found')), true)
+    assert.equal(isCodexThreadNotFoundError('rate limit exceeded'), false)
+  }
+
   // Session lifecycle stubs validate sessionId and return ok.
   const start = await dispatch({ jsonrpc: '2.0', id: 100, method: 'claude.startSession', params: { sessionId: 's-1', options: { cwd: '/x' } } })
   assert.equal(start.result.ok, true)

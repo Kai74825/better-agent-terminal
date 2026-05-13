@@ -770,6 +770,28 @@ fn build_turn_start_params(thread_id: &str, input: Value, model: &str, effort: &
     })
 }
 
+fn build_thread_resume_params(
+    thread_id: &str,
+    model: &str,
+    cwd: &str,
+    approval_policy: &str,
+    sandbox_mode: &str,
+) -> Value {
+    json!({
+        "threadId": thread_id,
+        "model": model,
+        "cwd": cwd,
+        "approvalPolicy": approval_policy,
+        "sandbox": app_server_sandbox(sandbox_mode),
+        "serviceName": "better_agent_terminal",
+    })
+}
+
+fn is_thread_not_found_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("thread not found") || (lower.contains("thread") && lower.contains("not found"))
+}
+
 fn reasoning_text_from_item(item: &Value) -> String {
     if item_type(item) != Some("reasoning") {
         return String::new();
@@ -1359,7 +1381,7 @@ impl CodexAppServerState {
                 return Ok(json!({ "ok": false, "error": err }));
             }
         };
-        let (thread_id, model, effort) = {
+        let (thread_id, model, effort, cwd, approval_policy, sandbox_mode) = {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             let Some(session) = sessions.get_mut(&session_id) else {
                 cleanup_temp_images(temp_image_paths);
@@ -1386,18 +1408,65 @@ impl CodexAppServerState {
                     .ok_or_else(|| bridge_error("Codex thread not started"))?,
                 session.model.clone(),
                 session.effort.clone(),
+                session.cwd.clone(),
+                session.approval_policy.clone(),
+                session.sandbox_mode.clone(),
             )
         };
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         let response = match connection.request(
             "turn/start",
-            build_turn_start_params(&thread_id, input, &model, &effort),
+            build_turn_start_params(&thread_id, input.clone(), &model, &effort),
             TURN_START_TIMEOUT,
         ) {
             Ok(response) => response,
             Err(err) => {
-                self.fail_turn(app, &session_id, format!("Codex error: {err}"));
-                return Ok(json!({ "ok": false, "error": err }));
+                if is_thread_not_found_error(&err) {
+                    match connection.request(
+                        "thread/resume",
+                        build_thread_resume_params(
+                            &thread_id,
+                            &model,
+                            &cwd,
+                            &approval_policy,
+                            &sandbox_mode,
+                        ),
+                        REQUEST_TIMEOUT,
+                    ) {
+                        Ok(_) => {
+                            self.inner
+                                .thread_to_session
+                                .lock()
+                                .expect("codex thread map lock")
+                                .insert(thread_id.clone(), session_id.clone());
+                            match connection.request(
+                                "turn/start",
+                                build_turn_start_params(&thread_id, input, &model, &effort),
+                                TURN_START_TIMEOUT,
+                            ) {
+                                Ok(response) => response,
+                                Err(retry_err) => {
+                                    self.fail_turn(
+                                        app,
+                                        &session_id,
+                                        format!("Codex error after thread resume: {retry_err}"),
+                                    );
+                                    return Ok(json!({ "ok": false, "error": retry_err }));
+                                }
+                            }
+                        }
+                        Err(resume_err) => {
+                            let message = format!(
+                                "Codex error: thread not found: {thread_id}; resume failed: {resume_err}"
+                            );
+                            self.fail_turn(app, &session_id, message.clone());
+                            return Ok(json!({ "ok": false, "error": message }));
+                        }
+                    }
+                } else {
+                    self.fail_turn(app, &session_id, format!("Codex error: {err}"));
+                    return Ok(json!({ "ok": false, "error": err }));
+                }
             }
         };
         if let Some(turn_id) = response
@@ -2486,6 +2555,36 @@ mod tests {
         assert_eq!(params["effort"], "high");
         assert_eq!(params["summary"], DEFAULT_CODEX_REASONING_SUMMARY);
         assert_eq!(params["reasoningEffort"], "high");
+    }
+
+    #[test]
+    fn codex_thread_resume_params_preserve_runtime_options() {
+        let params = build_thread_resume_params(
+            "thread-1",
+            "gpt-5.5",
+            "/repo",
+            "never",
+            "danger-full-access",
+        );
+        assert_eq!(params["threadId"], "thread-1");
+        assert_eq!(params["model"], "gpt-5.5");
+        assert_eq!(params["cwd"], "/repo");
+        assert_eq!(params["approvalPolicy"], "never");
+        assert_eq!(params["sandbox"], "danger-full-access");
+        assert_eq!(params["serviceName"], "better_agent_terminal");
+    }
+
+    #[test]
+    fn codex_thread_not_found_detector_matches_protocol_errors() {
+        assert!(is_thread_not_found_error(
+            "thread not found: 019e1bfc-e8f6-77e1-9886-1833ce991217"
+        ));
+        assert!(is_thread_not_found_error(
+            "Codex error: Thread 019e1bfc not found"
+        ));
+        assert!(!is_thread_not_found_error(
+            "turn failed: rate limit exceeded"
+        ));
     }
 
     #[test]

@@ -150,6 +150,24 @@ function stringifyCodexError(error, fallback = 'Unknown error') {
   return message
 }
 
+export function isCodexThreadNotFoundError(error) {
+  const message = stringifyCodexError(error, '').toLowerCase()
+  return message.includes('thread not found') || (message.includes('thread') && message.includes('not found'))
+}
+
+function recoverCodexThread(sessionId, session) {
+  if (!session?.threadId || typeof session?.codexInstance?.resumeThread !== 'function') {
+    return false
+  }
+  try {
+    session.thread = session.codexInstance.resumeThread(session.threadId, threadOptions(session))
+    return Boolean(session.thread)
+  } catch (err) {
+    logWarn(`[codex:${sessionId.slice(0, 8)}] thread resume failed: ${stringifyCodexError(err)}`)
+    return false
+  }
+}
+
 function extractText(value) {
   if (!value) return ''
   if (typeof value === 'string') return value
@@ -553,13 +571,15 @@ export async function sendCodexMessage(params) {
   session.state.streamingThinking = ''
   const ctrl = session.abortController
 
-  addMessage(sessionId, {
-    id: `user-${Date.now()}`,
-    sessionId,
-    role: 'user',
-    content: prompt + (images.length ? `\n[${images.length} image${images.length > 1 ? 's' : ''} attached]` : ''),
-    timestamp: Date.now(),
-  })
+  if (!params?._suppressUserEcho) {
+    addMessage(sessionId, {
+      id: `user-${Date.now()}`,
+      sessionId,
+      role: 'user',
+      content: prompt + (images.length ? `\n[${images.length} image${images.length > 1 ? 's' : ''} attached]` : ''),
+      timestamp: Date.now(),
+    })
+  }
 
   const tempImages = []
   try {
@@ -625,6 +645,14 @@ export async function sendCodexMessage(params) {
     return { ok: true }
   } catch (err) {
     if (!ctrl.signal.aborted) {
+      if (!params?._retriedAfterThreadResume && isCodexThreadNotFoundError(err) && recoverCodexThread(sessionId, session)) {
+        logWarn(`[codex:${sessionId.slice(0, 8)}] thread not found; resumed ${session.threadId} and retrying turn`)
+        return sendCodexMessage({
+          ...params,
+          _retriedAfterThreadResume: true,
+          _suppressUserEcho: true,
+        })
+      }
       const message = `Codex error: ${stringifyCodexError(err)}`
       logError(`[codex:${sessionId.slice(0, 8)}] ${message}`)
       send('claude:error', sessionId, 'error', message)
