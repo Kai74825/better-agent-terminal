@@ -110,13 +110,7 @@ interface TerminalThumbnailProps {
   onClick?: () => void
 }
 
-const dlog = (...args: unknown[]) => host.debug.log(...args)
-let thumbRenderCount = 0
 export const TerminalThumbnail = memo(function TerminalThumbnail({ terminal, isActive, onClick }: TerminalThumbnailProps) {
-  thumbRenderCount++
-  if (thumbRenderCount <= 30 || thumbRenderCount % 50 === 0) {
-    dlog(`[render] Thumbnail render #${thumbRenderCount} id=${terminal.id.slice(0,8)} active=${isActive}`)
-  }
   const [preview, setPreview] = useState<string>(previewCache.get(terminal.id) || '')
   const [fontFamily, setFontFamily] = useState<string>(settingsStore.getFontFamilyString())
 

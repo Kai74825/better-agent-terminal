@@ -43,12 +43,7 @@ function getWindowsBuildNumber(): number | undefined {
   return Number.isFinite(build) ? build : undefined
 }
 
-let renderCount = 0
 export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, isActive = true, terminalType, agentPreset }: TerminalPanelProps) {
-  renderCount++
-  if (renderCount <= 50 || renderCount % 50 === 0) {
-    dlog(`[render] TerminalPanel render #${renderCount} terminal=${terminalId} active=${isActive}`)
-  }
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
