@@ -210,6 +210,18 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     }
     return null
   })
+  useEffect(() => {
+    if (!isWorktreeSession || !terminal?.worktreePath || !terminal?.worktreeBranch) return
+    setWorktreeInfo(prev => {
+      if (prev?.worktreePath === terminal.worktreePath && prev?.branchName === terminal.worktreeBranch) return prev
+      return {
+        branchName: terminal.worktreeBranch!,
+        worktreePath: terminal.worktreePath!,
+        sourceBranch: prev?.sourceBranch || '',
+        gitRoot: prev?.gitRoot,
+      }
+    })
+  }, [isWorktreeSession, terminal?.worktreePath, terminal?.worktreeBranch])
   const markdownCwd = worktreeInfo?.worktreePath || terminal?.worktreePath || cwd
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
   const [isResumingHistory, setIsResumingHistory] = useState(false)
@@ -1020,7 +1032,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         setAskOtherText({})
         setSessionMeta(null)
         setHasSdkSession(false)
-        setWorktreeInfo(null)
+        // Do not clear worktreeInfo - resetSession preserves the worktree
+        // and startSession re-emits claude:worktree-info before this event fires.
         setActivePlanFile(null)
         dismissedPlanFileRef.current = null
         workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
