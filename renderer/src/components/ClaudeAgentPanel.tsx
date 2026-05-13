@@ -398,33 +398,51 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   }, [])
 
   // Auto-scroll to bottom — use instant scroll to avoid layout thrashing with rapid updates
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottomNow = useCallback(() => {
     userScrollIntentUntilRef.current = 0
     const el = messagesContainerRef.current
     if (el) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      const bottom = Math.max(0, el.scrollHeight - el.clientHeight)
+      el.scrollTop = bottom
+      el.scrollTo({ top: bottom, behavior: 'auto' })
       lastScrollTopRef.current = el.scrollTop
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     setUserScrolledUp(false)
     isNearBottomRef.current = true
     followOutputRef.current = true
   }, [])
 
+  const scrollToBottom = useCallback(() => {
+    scrollToBottomNow()
+  }, [scrollToBottomNow])
+
+  const forceScrollToBottom = useCallback(() => {
+    scrollToBottomNow()
+    requestAnimationFrame(scrollToBottomNow)
+    requestAnimationFrame(() => requestAnimationFrame(scrollToBottomNow))
+    window.setTimeout(scrollToBottomNow, 50)
+    window.setTimeout(scrollToBottomNow, 150)
+  }, [scrollToBottomNow])
+
+  const handleScrollToBottomPointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    forceScrollToBottom()
+  }, [forceScrollToBottom])
+
   const handleScrollToBottomClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault()
     e.stopPropagation()
-    scrollToBottom()
-    requestAnimationFrame(scrollToBottom)
-  }, [scrollToBottom])
+    forceScrollToBottom()
+  }, [forceScrollToBottom])
 
   const scrollToBottomAfterRender = useCallback(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        scrollToBottom()
+        scrollToBottomNow()
       })
     })
-  }, [scrollToBottom])
+  }, [scrollToBottomNow])
 
   // Handle user scroll events on messages container
   const handleMessagesScroll = useCallback(() => {
@@ -3649,6 +3667,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         {userScrolledUp && (
           <button
             className="scroll-to-bottom-btn"
+            onPointerDown={handleScrollToBottomPointerDown}
             onMouseDown={(e) => {
               e.preventDefault()
               e.stopPropagation()
