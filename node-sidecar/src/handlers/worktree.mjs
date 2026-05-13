@@ -6,8 +6,6 @@ import { platform } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 
-import { registerHandler } from '../lib/protocol.mjs'
-
 export const WORKTREE_DIR = '.bat-worktrees'
 export const activeWorktrees = new Map()
 
@@ -279,55 +277,7 @@ export async function worktreeMerge(sessionId, strategy = 'merge') {
   }
 }
 
-// --- handlers --------------------------------------------------------------
-
-let registered = false
-
-export function registerWorktreeHandlers() {
-  if (registered) return
-  registered = true
-  registerHandler('worktree.create', async (params) => {
-    const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
-    const cwd = typeof params?.cwd === 'string' ? params.cwd : ''
-    if (!sessionId || !cwd) {
-      return { success: false, error: 'worktree.create: missing sessionId or cwd' }
-    }
-    try {
-      const info = await worktreeCreate(sessionId, cwd)
-      return { success: true, ...info }
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-  registerHandler('worktree.remove', async (params) => {
-    const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
-    const deleteBranch = params?.deleteBranch !== false
-    if (!sessionId) return { success: false, error: 'worktree.remove: missing sessionId' }
-    try {
-      await worktreeRemove(sessionId, deleteBranch)
-      return { success: true }
-    } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) }
-    }
-  })
-  registerHandler('worktree.status', async (params) => {
-    const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
-    if (!sessionId) return null
-    return worktreeStatus(sessionId)
-  })
-  registerHandler('worktree.merge', async (params) => {
-    const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
-    const strategy = typeof params?.strategy === 'string' ? params.strategy : 'merge'
-    if (!sessionId) return { success: false, error: 'worktree.merge: missing sessionId' }
-    return worktreeMerge(sessionId, strategy)
-  })
-  registerHandler('worktree.rehydrate', async (params) => {
-    const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : ''
-    const cwd = typeof params?.cwd === 'string' ? params.cwd : ''
-    const worktreePath = typeof params?.worktreePath === 'string' ? params.worktreePath : ''
-    const branchName = typeof params?.branchName === 'string' ? params.branchName : ''
-    if (!sessionId || !worktreePath) return { success: false }
-    worktreeRehydrate(sessionId, cwd, worktreePath, branchName)
-    return { success: true }
-  })
-}
+// worktree.* JSON-RPC handlers moved to Rust (commands/worktree.rs +
+// remote_server.rs). This module now only exports utility functions that
+// other sidecar handlers (codex.mjs, claude-readonly.mjs, claude-session.mjs)
+// still use for codex-session worktree lifecycle.

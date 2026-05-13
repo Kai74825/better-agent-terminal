@@ -52,20 +52,6 @@ const CLAUDE_HANDLER_MODULES = [
   './handlers/claude-mcp.mjs',
 ]
 
-const LEGACY_UTILITY_HANDLER_MODULES = [
-  './handlers/openai.mjs',
-  './handlers/agent.mjs',
-  './handlers/remote-tunnel.mjs',
-  './handlers/update.mjs',
-  './handlers/fs.mjs',
-  './handlers/git.mjs',
-  './handlers/github.mjs',
-  './handlers/settings.mjs',
-  './handlers/snippet.mjs',
-  './handlers/fs-watch.mjs',
-]
-
-export let compareVersions
 export let findClaudeCliPath
 export let listSessionsFallback
 export let __resetMetadataCacheForTests
@@ -73,26 +59,14 @@ export let fetchAuthStatus
 export let readAccountIndex
 export let resolveClaudeCliBinary
 export let __resetClaudeCliCacheForTests
-export let AGENT_PRESET_IDS
-export let worktreeCreate
-export let worktreeRemove
-export let worktreeStatus
-export let worktreeRehydrate
-export let worktreeGetGitRoot
-export let worktreeGetBranch
-export let worktreeMerge
-export let activeWorktrees
 
-async function loadHandlers({ legacyUtilityHandlers = false } = {}) {
+async function loadHandlers() {
   const loaded = new Map()
   const load = async (path) => {
     if (!loaded.has(path)) loaded.set(path, await import(path))
     return loaded.get(path)
   }
   for (const path of CLAUDE_HANDLER_MODULES) await load(path)
-  if (legacyUtilityHandlers) {
-    for (const path of LEGACY_UTILITY_HANDLER_MODULES) await load(path)
-  }
   const readonly = await load('./handlers/claude-readonly.mjs')
   findClaudeCliPath = readonly.findClaudeCliPath
   listSessionsFallback = readonly.listSessionsFallback
@@ -104,27 +78,10 @@ async function loadHandlers({ legacyUtilityHandlers = false } = {}) {
   resolveClaudeCliBinary = auth.resolveClaudeCliBinary
   __resetClaudeCliCacheForTests = auth.__resetClaudeCliCacheForTests
 
-  const worktree = await load('./handlers/worktree.mjs')
-  if (legacyUtilityHandlers) worktree.registerWorktreeHandlers()
-  worktreeCreate = worktree.worktreeCreate
-  worktreeRemove = worktree.worktreeRemove
-  worktreeStatus = worktree.worktreeStatus
-  worktreeRehydrate = worktree.worktreeRehydrate
-  worktreeGetGitRoot = worktree.worktreeGetGitRoot
-  worktreeGetBranch = worktree.worktreeGetBranch
-  worktreeMerge = worktree.worktreeMerge
-  activeWorktrees = worktree.activeWorktrees
-
-  if (legacyUtilityHandlers) {
-    const update = await load('./handlers/update.mjs')
-    compareVersions = update.compareVersions
-    const agent = await load('./handlers/agent.mjs')
-    AGENT_PRESET_IDS = agent.AGENT_PRESET_IDS
-  }
-
-  // Remote invoke bridge — must run after every selected handler module has
-  // called registerHandler(). Production sidecar only wires Claude SDK-backed
-  // channels; utility namespaces now belong to Rust.
+  // Remote invoke bridge — Rust owns every PROXIED_CHANNEL natively in
+  // remote_server.rs. The JS bridge stays wired so the protocol module
+  // keeps its registerRemoteHandler hook live for tests, but no legacy
+  // utility handlers are mounted here.
   wireRemoteBridgeHandlers()
 }
 
@@ -223,8 +180,6 @@ const isMain = (() => {
   }
 })()
 
-await loadHandlers({
-  legacyUtilityHandlers: !isMain || process.env.BAT_SIDECAR_ENABLE_LEGACY_HANDLERS === '1',
-})
+await loadHandlers()
 
 if (isMain) main()
