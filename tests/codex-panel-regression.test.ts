@@ -17,7 +17,7 @@ async function main() {
   )
   assert.match(
     source,
-    /resumeSession\([\s\S]*effectiveModel \|\| savedModel[\s\S]*permissionMode,\s*effectiveEffort as EffortLevel\)/,
+    /const resumeResult = await host\.claude\.resumeSession\([\s\S]*effectiveModel \|\| savedModel[\s\S]*permissionMode,\s*effectiveEffort as EffortLevel[\s\S]*\) as \{ stale\?: boolean \} \| null/,
     'Codex auto-resume should preserve effective model, permission mode, and effort',
   )
   assert.match(
@@ -35,6 +35,16 @@ async function main() {
       panelSource.includes('onPointerDown={handleScrollToBottomPointerDown}'),
       true,
       `${name} scroll-to-bottom button should run on pointer down, not only click`,
+    )
+    assert.equal(
+      panelSource.includes('const sendClaudeMessage = useCallback(async ('),
+      true,
+      `${name} panel should funnel sends through a startup-aware helper`,
+    )
+    assert.match(
+      panelSource,
+      /await ensureSessionStarted\(\)[\s\S]*host\.claude\.sendMessage\(sessionId, prompt, images, autoCompactWindow, clientMessage\)/,
+      `${name} panel should await session startup before sending the first message`,
     )
   }
 

@@ -32,6 +32,12 @@ import { CodexTodoChecklist } from './CodexTodoChecklist'
 // remount can cancel.
 const startedSessions = new Set<string>()
 const startedSessionCleanupTimers = new Map<string, number>()
+const startedSessionPromises = new Map<string, Promise<void>>()
+
+function clearStartedSessionTracking(sessionId: string): void {
+  startedSessions.delete(sessionId)
+  startedSessionPromises.delete(sessionId)
+}
 
 function cancelStartedSessionCleanup(sessionId: string): void {
   const timer = startedSessionCleanupTimers.get(sessionId)
@@ -44,7 +50,7 @@ function cancelStartedSessionCleanup(sessionId: string): void {
 function scheduleStartedSessionCleanup(sessionId: string): void {
   cancelStartedSessionCleanup(sessionId)
   const timer = window.setTimeout(() => {
-    startedSessions.delete(sessionId)
+    clearStartedSessionTracking(sessionId)
     startedSessionCleanupTimers.delete(sessionId)
   }, 1000)
   startedSessionCleanupTimers.set(sessionId, timer)
@@ -295,7 +301,6 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const ARCHIVE_TRIGGER = 300 // archive when exceeding this
   const LOAD_BATCH = 50
   const historyLoadedRef = useRef(false)
-  const sessionStartedRef = useRef(false)
   const inputHistoryRef = useRef<string[]>([])
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
@@ -866,7 +871,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }])
           setIsStreaming(true)
           setTimeout(() => {
-            host.claude.sendMessage(sessionId, acPrompt)
+            void sendClaudeMessage(acPrompt)
           }, 150)
         }
       }),
@@ -1125,7 +1130,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }])
           scrollToBottomAfterRender()
           setIsStreaming(true)
-          host.claude.sendMessage(sessionId, prompt, images)
+          void sendClaudeMessage(prompt, images)
         } else {
           dlog2(`${tag} onHistory setting messages (history only, no pending prompt)`)
           setMessages(historyItems)
@@ -1169,73 +1174,43 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const dlog = (...args: unknown[]) => host.debug.log(...args)
     let cancelled = false
     cancelStartedSessionCleanup(sessionId)
-    dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
-    if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
-      sessionStartedRef.current = true
-      startedSessions.add(sessionId)
-
-      ;(async () => {
-        await waitForTauriAgentListeners()
+    dlog(`${stag} mount effect: inSet=${startedSessions.has(sessionId)} promise=${startedSessionPromises.has(sessionId)}`)
+    ;(async () => {
+      try {
+        await ensureSessionStarted()
         if (cancelled) return
-        const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
-        const savedSdkSessionId = terminal?.sdkSessionId
-        const savedModel = terminal?.model
-        const apiVersion = terminal?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
-        const useWorktree = terminal?.agentPreset === 'codex-agent-worktree' || !!terminal?.worktreePath
-        const globalSettings = settingsStore.getSettings()
-        dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}" apiVersion=${apiVersion}`)
-
-        const effectiveModel = isCodexSession
-          ? resolveCodexModel(savedModel, globalSettings.defaultCodexModel)
-          : (savedModel || globalSettings.defaultClaudeModel || '')
-        if (effectiveModel) setCurrentModel(effectiveModel)
-
-        const effectiveEffort = isCodexSession
-          ? effortLevel
-          : (globalSettings.defaultEffort || 'high')
-        if (!isCodexSession) setEffortLevel(effectiveEffort)
-
         const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
-        if (cancelled) return
-        if (existingState) {
-          historyLoadedRef.current = true
-          setIsResumingHistory(false)
-          setMessages((existingState.messages || []) as MessageItem[])
-          setIsStreaming(!!existingState.isStreaming)
-          setStreamingText(existingState.streamingText || '')
-          setStreamingThinking(existingState.streamingThinking || '')
-          const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
-          if (!cancelled && meta) setSessionMeta(meta as unknown as SessionMeta)
-          if (!isTauri() || !isCodexSession) {
-            return
+        if (cancelled || !existingState) return
+        historyLoadedRef.current = true
+        setIsResumingHistory(false)
+        setMessages((existingState.messages || []) as MessageItem[])
+        setIsStreaming(!!existingState.isStreaming)
+        setStreamingText(existingState.streamingText || '')
+        setStreamingThinking(existingState.streamingThinking || '')
+        const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
+        if (cancelled || !meta) return
+        setSessionMeta(meta as unknown as SessionMeta)
+        if ((meta as unknown as SessionMeta).model) {
+          const nextModel = (meta as unknown as SessionMeta).model!
+          setCurrentModel(prev => isCodexSession ? nextModel : (prev || nextModel))
+          if (isCodexSession) {
+            workspaceStore.updateTerminalModel(sessionId, nextModel)
           }
-          dlog(`${stag} HYDRATED existing state; binding Tauri Codex runtime`)
         }
-
-        if (savedSdkSessionId) {
-          dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
-          historyLoadedRef.current = true
-          setIsResumingHistory(true)
-          host.claude.resumeSession(sessionId, savedSdkSessionId, cwd, effectiveModel || savedModel, apiVersion,
-            useWorktree ? true : undefined, terminal?.worktreePath, terminal?.worktreeBranch, terminal?.agentPreset,
-            codexSandboxMode, codexApprovalPolicy, permissionMode, effectiveEffort as EffortLevel)
-            .catch(() => {
-              if (!cancelled) setIsResumingHistory(false)
-            })
-        } else {
-          dlog(`${stag} FRESH startSession`)
-          host.claude.startSession(sessionId, {
-            cwd, permissionMode, model: effectiveModel || undefined,
-            effort: effectiveEffort as EffortLevel,
-            apiVersion,
-            agentPreset: terminal?.agentPreset,
-            ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
-            ...(useWorktree ? { useWorktree: true, worktreePath: terminal?.worktreePath, worktreeBranch: terminal?.worktreeBranch } : {}),
-            ...(globalSettings.autoCompactWindow ? { autoCompactWindow: globalSettings.autoCompactWindow } : {}),
-          })
+        if (!(meta as unknown as SessionMeta).sdkSessionId) {
+          setHasSdkSession(false)
         }
-      })()
-    }
+        if (!isTauri() || !isCodexSession) {
+          return
+        }
+        dlog(`${stag} HYDRATED existing state; binding Tauri Codex runtime`)
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setIsResumingHistory(false)
+          dlog(`${stag} mount effect init failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    })()
     return () => {
       cancelled = true
       scheduleStartedSessionCleanup(sessionId)
@@ -1259,6 +1234,90 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       }).catch(() => {})
     }
   }, [isActive, sessionId, isCodexSession])
+
+  const ensureSessionStarted = useCallback(async () => {
+    const existingStart = startedSessionPromises.get(sessionId)
+    if (existingStart) {
+      await existingStart
+      return
+    }
+
+    const startPromise = (async () => {
+      const stag = `[Codex:${sessionId.slice(0, 8)}]`
+      const dlog = (...args: unknown[]) => host.debug.log(...args)
+      await waitForTauriAgentListeners()
+      const terminalState = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+      const savedSdkSessionId = terminalState?.sdkSessionId
+      const savedModel = terminalState?.model
+      const apiVersion = terminalState?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
+      const useWorktree = terminalState?.agentPreset === 'codex-agent-worktree' || !!terminalState?.worktreePath
+      const globalSettings = settingsStore.getSettings()
+      const effectiveModel = isCodexSession
+        ? resolveCodexModel(currentModel || savedModel, globalSettings.defaultCodexModel)
+        : (currentModel || savedModel || globalSettings.defaultClaudeModel || '')
+      const effectiveEffort = isCodexSession
+        ? effortLevel
+        : (globalSettings.defaultEffort || 'high')
+
+      const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
+      if (existingState) {
+        dlog(`${stag} ensureSessionStarted: existing session`)
+        return
+      }
+
+      if (savedSdkSessionId) {
+        dlog(`${stag} ensureSessionStarted: resume sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
+        const resumeResult = await host.claude.resumeSession(
+          sessionId,
+          savedSdkSessionId,
+          cwd,
+          effectiveModel || savedModel,
+          apiVersion,
+          useWorktree ? true : undefined,
+          terminalState?.worktreePath,
+          terminalState?.worktreeBranch,
+          terminalState?.agentPreset,
+          codexSandboxMode,
+          codexApprovalPolicy,
+          permissionMode,
+          effectiveEffort as EffortLevel,
+        ) as { stale?: boolean } | null
+        if (!resumeResult?.stale) return
+        dlog(`${stag} ensureSessionStarted: stale sdkSessionId=${savedSdkSessionId.slice(0, 8)}; starting fresh session`)
+        workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
+      }
+
+      dlog(`${stag} ensureSessionStarted: startSession`)
+      await host.claude.startSession(sessionId, {
+        cwd,
+        permissionMode,
+        model: effectiveModel || undefined,
+        effort: effectiveEffort as EffortLevel,
+        apiVersion,
+        agentPreset: terminalState?.agentPreset,
+        ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
+        ...(useWorktree ? { useWorktree: true, worktreePath: terminalState?.worktreePath, worktreeBranch: terminalState?.worktreeBranch } : {}),
+        ...(globalSettings.autoCompactWindow ? { autoCompactWindow: globalSettings.autoCompactWindow } : {}),
+      })
+    })().catch((err: unknown) => {
+      clearStartedSessionTracking(sessionId)
+      throw err
+    })
+
+    startedSessions.add(sessionId)
+    startedSessionPromises.set(sessionId, startPromise)
+    await startPromise
+  }, [sessionId, cwd, currentModel, effortLevel, isCodexSession, codexSandboxMode, codexApprovalPolicy, permissionMode])
+
+  const sendClaudeMessage = useCallback(async (
+    prompt: string,
+    images?: string[],
+    autoCompactWindow?: number | null,
+    clientMessage?: { id?: string; displayContent?: string; suppressUserEcho?: boolean },
+  ) => {
+    await ensureSessionStarted()
+    return host.claude.sendMessage(sessionId, prompt, images, autoCompactWindow, clientMessage)
+  }, [ensureSessionStarted, sessionId])
 
   // Fetch supported models on demand when model list is opened (no session required)
   useEffect(() => {
@@ -1471,8 +1530,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     setIsStreaming(false)
     setSessionMeta(null)
     // Reset the started guard so the new session can start
-    startedSessions.delete(sessionId)
-    sessionStartedRef.current = false
+    clearStartedSessionTracking(sessionId)
     // Mark that history will be loaded — prevents sys-init from wiping messages
     historyLoadedRef.current = true
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
@@ -1907,7 +1965,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         setIsInterrupted(false)
         setStreamingText('')
         setStreamingThinking('')
-        await host.claude.sendMessage(sessionId, contextPrompt)
+        await sendClaudeMessage(contextPrompt)
       } catch {
         setMessages(prev => [...prev, {
           id: `error-${Date.now()}`,
@@ -1979,7 +2037,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
     try {
       const sendInvokeStarted = performance.now()
-      const result = await host.claude.sendMessage(sessionId, promptToSend, imageDataUrls.length > 0 ? imageDataUrls : undefined) as { ok?: boolean; error?: string } | undefined
+      const result = await sendClaudeMessage(promptToSend, imageDataUrls.length > 0 ? imageDataUrls : undefined) as { ok?: boolean; error?: string } | undefined
       if (debugSend) {
         host.debug.log(
           `${tag} handleSend sendMessage returned elapsedMs=${Math.round(performance.now() - sendInvokeStarted)} totalMs=${Math.round(performance.now() - sendStart)} result=${JSON.stringify(result)}`
@@ -1993,7 +2051,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       }
       throw err
     }
-  }, [isRemoteConnected, isStreaming, sessionId, attachedImages, attachedFiles, clearInput])
+  }, [isRemoteConnected, isStreaming, sessionId, attachedImages, attachedFiles, clearInput, sendClaudeMessage])
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
@@ -3931,7 +3989,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               onClick={async () => {
                 if (!await host.dialog.confirm(`Merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then use host folder (${worktreeInfo.gitRoot}) to merge worktree folder (${worktreeInfo.worktreePath}). Steps:\n1. Stage and commit all changes in the worktree folder with a meaningful commit message\n2. Switch to host folder (${worktreeInfo.gitRoot}) and merge the worktree branch (${worktreeInfo.branchName}) into ${worktreeInfo.sourceBranch}\nDo not push to remote. Do not create a PR.`
-                await host.claude.sendMessage(sessionId, cmd)
+                await sendClaudeMessage(cmd)
               }}
               title={`Commit and merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}`}
             >Merge to Host</button>
@@ -3940,7 +3998,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               onClick={async () => {
                 if (!await host.dialog.confirm(`Push ${worktreeInfo.branchName} directly to origin/main?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then push directly to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Pull origin/main and resolve any conflicts if needed\n3. Push to origin/main\nDo not create a PR. Do not ask for confirmation.`
-                await host.claude.sendMessage(sessionId, cmd)
+                await sendClaudeMessage(cmd)
               }}
               title="Commit, pull, resolve conflicts, and push to origin/main"
             >Push to Main</button>
@@ -3948,7 +4006,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               className="claude-worktree-btn"
               onClick={async () => {
                 const cmd = `Commit all current changes and create or update a pull request to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Push this branch to origin\n3. Check if a PR from this branch to main already exists (gh pr list --head ${worktreeInfo.branchName})\n4. If a PR exists: update it with the latest changes summary (gh pr edit)\n5. If no PR exists: create one with gh pr create, include a summary of all changes in the description\nDo not merge the PR.`
-                await host.claude.sendMessage(sessionId, cmd)
+                await sendClaudeMessage(cmd)
               }}
               title="Commit, push branch, and create or update PR to main"
             >Create PR</button>

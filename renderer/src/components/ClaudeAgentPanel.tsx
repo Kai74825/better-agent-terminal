@@ -137,6 +137,12 @@ type MessageItem = ClaudeMessage | ClaudeToolCall
 // remount can cancel.
 const startedSessions = new Set<string>()
 const startedSessionCleanupTimers = new Map<string, number>()
+const startedSessionPromises = new Map<string, Promise<void>>()
+
+function clearStartedSessionTracking(sessionId: string): void {
+  startedSessions.delete(sessionId)
+  startedSessionPromises.delete(sessionId)
+}
 
 function cancelStartedSessionCleanup(sessionId: string): void {
   const timer = startedSessionCleanupTimers.get(sessionId)
@@ -149,7 +155,7 @@ function cancelStartedSessionCleanup(sessionId: string): void {
 function scheduleStartedSessionCleanup(sessionId: string): void {
   cancelStartedSessionCleanup(sessionId)
   const timer = window.setTimeout(() => {
-    startedSessions.delete(sessionId)
+    clearStartedSessionTracking(sessionId)
     startedSessionCleanupTimers.delete(sessionId)
   }, 1000)
   startedSessionCleanupTimers.set(sessionId, timer)
@@ -349,7 +355,6 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const ARCHIVE_TRIGGER = 300 // archive when exceeding this
   const LOAD_BATCH = 50
   const historyLoadedRef = useRef(false)
-  const sessionStartedRef = useRef(false)
   const inputHistoryRef = useRef<string[]>([])
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
@@ -1136,8 +1141,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             timestamp: Date.now(),
           }])
           setIsStreaming(true)
-          host.claude.sendMessage(
-            sessionId,
+          void sendClaudeMessage(
             prompt,
             images,
             getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow),
@@ -1185,75 +1189,35 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     const dlog = (...args: unknown[]) => host.debug.log(...args)
     let cancelled = false
     cancelStartedSessionCleanup(sessionId)
-    dlog(`${stag} mount effect: startedRef=${sessionStartedRef.current} inSet=${startedSessions.has(sessionId)}`)
-    if (!sessionStartedRef.current && !startedSessions.has(sessionId)) {
-      sessionStartedRef.current = true
-      startedSessions.add(sessionId)
-
-      ;(async () => {
-        await waitForTauriAgentListeners()
+    dlog(`${stag} mount effect: inSet=${startedSessions.has(sessionId)} promise=${startedSessionPromises.has(sessionId)}`)
+    ;(async () => {
+      try {
+        await ensureSessionStarted()
         if (cancelled) return
-        const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
-        const savedSdkSessionId = terminal?.sdkSessionId
-        const savedModel = normalizeClaudeModelSelection(terminal?.model)
-        const apiVersion = terminal?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
-        const useWorktree = terminal?.agentPreset === 'claude-code-worktree' || !!terminal?.worktreePath
-        const globalSettings = settingsStore.getSettings()
-        dlog(`${stag} sdkSessionId=${savedSdkSessionId?.slice(0, 8)} pendingPrompt="${terminal?.pendingPrompt || ''}" apiVersion=${apiVersion}`)
-
-        // Restore saved model to UI, or use global default
-        const effectiveModel = normalizeClaudeModelSelection(savedModel || globalSettings.defaultClaudeModel)
-        if (effectiveModel) setCurrentModel(effectiveModel)
-
-        // Use global default effort
-        const effectiveEffort = globalSettings.defaultEffort || 'high'
-        setEffortLevel(effectiveEffort)
-
         const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
-        if (cancelled) return
-        if (existingState) {
-          historyLoadedRef.current = true
+        if (cancelled || !existingState) return
+        historyLoadedRef.current = true
+        setIsResumingHistory(false)
+        setMessages((existingState.messages || []) as MessageItem[])
+        setIsStreaming(!!existingState.isStreaming)
+        setStreamingText(existingState.streamingText || '')
+        setStreamingThinking(existingState.streamingThinking || '')
+        const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
+        if (cancelled || !meta) return
+        setSessionMeta(meta as unknown as SessionMeta)
+        if ((meta as unknown as SessionMeta).model) {
+          setCurrentModel(prev => prev || (meta as unknown as SessionMeta).model!)
+        }
+        if (!(meta as unknown as SessionMeta).sdkSessionId) {
+          setHasSdkSession(false)
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
           setIsResumingHistory(false)
-          setMessages((existingState.messages || []) as MessageItem[])
-          setIsStreaming(!!existingState.isStreaming)
-          setStreamingText(existingState.streamingText || '')
-          setStreamingThinking(existingState.streamingThinking || '')
-          const meta = await host.claude.getSessionMeta(sessionId).catch(() => null)
-          if (!cancelled && meta) setSessionMeta(meta as unknown as SessionMeta)
-          return
+          dlog(`${stag} mount effect init failed: ${err instanceof Error ? err.message : String(err)}`)
         }
-
-        if (savedSdkSessionId) {
-          dlog(`${stag} AUTO-RESUME sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
-          historyLoadedRef.current = true
-          setIsResumingHistory(true)
-          host.claude.resumeSession(sessionId, savedSdkSessionId, cwd, effectiveModel || savedModel, apiVersion,
-            useWorktree ? true : undefined, terminal?.worktreePath, terminal?.worktreeBranch, terminal?.agentPreset,
-            undefined, undefined, permissionMode, effectiveEffort as EffortLevel)
-            .then((result: unknown) => {
-              const resumeResult = result as ResumeSessionResult | null
-              if (!cancelled && resumeResult?.stale) {
-                dlog(`${stag} stale resume sdkSessionId=${savedSdkSessionId.slice(0, 8)}; clearing saved sdkSessionId`)
-                workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
-                setHasSdkSession(false)
-              }
-            })
-            .catch(() => {
-              if (!cancelled) setIsResumingHistory(false)
-            })
-        } else {
-          dlog(`${stag} FRESH startSession`)
-          host.claude.startSession(sessionId, {
-            cwd, permissionMode, model: effectiveModel,
-            effort: effectiveEffort as EffortLevel, apiVersion,
-            agentPreset: terminal?.agentPreset,
-            ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
-            ...(useWorktree ? { useWorktree: true, worktreePath: terminal?.worktreePath, worktreeBranch: terminal?.worktreeBranch } : {}),
-            ...(getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow) ? { autoCompactWindow: getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow)! } : {}),
-          })
-        }
-      })()
-    }
+      }
+    })()
     return () => {
       cancelled = true
       scheduleStartedSessionCleanup(sessionId)
@@ -1271,6 +1235,86 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       }).catch(() => {})
     }
   }, [isActive, sessionId])
+
+  const ensureSessionStarted = useCallback(async () => {
+    const existingStart = startedSessionPromises.get(sessionId)
+    if (existingStart) {
+      await existingStart
+      return
+    }
+
+    const startPromise = (async () => {
+      const stag = `[Claude:${sessionId.slice(0, 8)}]`
+      const dlog = (...args: unknown[]) => host.debug.log(...args)
+      await waitForTauriAgentListeners()
+      const terminalState = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+      const savedSdkSessionId = terminalState?.sdkSessionId
+      const savedModel = normalizeClaudeModelSelection(terminalState?.model)
+      const apiVersion = terminalState?.agentPreset === 'claude-code-v2' ? 'v2' as const : 'v1' as const
+      const useWorktree = terminalState?.agentPreset === 'claude-code-worktree' || !!terminalState?.worktreePath
+      const globalSettings = settingsStore.getSettings()
+      const effectiveModel = normalizeClaudeModelSelection(currentModel || savedModel || globalSettings.defaultClaudeModel)
+      const effectiveEffort = effortLevel || globalSettings.defaultEffort || 'high'
+
+      const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
+      if (existingState) {
+        dlog(`${stag} ensureSessionStarted: existing session`)
+        return
+      }
+
+      if (savedSdkSessionId) {
+        dlog(`${stag} ensureSessionStarted: resume sdkSessionId=${savedSdkSessionId.slice(0, 8)}`)
+        const resumeResult = await host.claude.resumeSession(
+          sessionId,
+          savedSdkSessionId,
+          cwd,
+          effectiveModel || savedModel,
+          apiVersion,
+          useWorktree ? true : undefined,
+          terminalState?.worktreePath,
+          terminalState?.worktreeBranch,
+          terminalState?.agentPreset,
+          undefined,
+          undefined,
+          permissionMode,
+          effectiveEffort as EffortLevel,
+        ) as ResumeSessionResult | null
+        if (!resumeResult?.stale) return
+        dlog(`${stag} ensureSessionStarted: stale sdkSessionId=${savedSdkSessionId.slice(0, 8)}; starting fresh session`)
+        workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
+      }
+
+      dlog(`${stag} ensureSessionStarted: startSession`)
+      await host.claude.startSession(sessionId, {
+        cwd,
+        permissionMode,
+        model: effectiveModel,
+        effort: effectiveEffort as EffortLevel,
+        apiVersion,
+        agentPreset: terminalState?.agentPreset,
+        ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
+        ...(useWorktree ? { useWorktree: true, worktreePath: terminalState?.worktreePath, worktreeBranch: terminalState?.worktreeBranch } : {}),
+        ...(getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow) ? { autoCompactWindow: getAutoCompactWindowForModel(effectiveModel, globalSettings.autoCompactWindow)! } : {}),
+      })
+    })().catch((err: unknown) => {
+      clearStartedSessionTracking(sessionId)
+      throw err
+    })
+
+    startedSessions.add(sessionId)
+    startedSessionPromises.set(sessionId, startPromise)
+    await startPromise
+  }, [sessionId, cwd, currentModel, effortLevel, permissionMode, isCodexSession, codexSandboxMode, codexApprovalPolicy])
+
+  const sendClaudeMessage = useCallback(async (
+    prompt: string,
+    images?: string[],
+    autoCompactWindow?: number | null,
+    clientMessage?: { id?: string; displayContent?: string; suppressUserEcho?: boolean },
+  ) => {
+    await ensureSessionStarted()
+    return host.claude.sendMessage(sessionId, prompt, images, autoCompactWindow, clientMessage)
+  }, [ensureSessionStarted, sessionId])
 
   // Project .mcp.json detection. The Claude SDK silently ignores
   // <cwd>/.mcp.json unless settings.json supplies an approval marker
@@ -1522,8 +1566,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     setIsStreaming(false)
     setSessionMeta(null)
     // Reset the started guard so the new session can start
-    startedSessions.delete(sessionId)
-    sessionStartedRef.current = false
+    clearStartedSessionTracking(sessionId)
     // Mark that history will be loaded — prevents sys-init from wiping messages
     historyLoadedRef.current = true
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
@@ -1948,8 +1991,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         setIsInterrupted(false)
         setStreamingText('')
         setStreamingThinking('')
-        await host.claude.sendMessage(
-          sessionId,
+        await sendClaudeMessage(
           contextPrompt,
           undefined,
           getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow),
@@ -2026,8 +2068,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
     const __sendT1 = performance.now()
     try {
-      await host.claude.sendMessage(
-        sessionId,
+      await sendClaudeMessage(
         promptToSend,
         imageDataUrls.length > 0 ? imageDataUrls : undefined,
         getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow),
@@ -2042,7 +2083,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         host.debug.log(`[handleSend] sync=${sync.toFixed(1)}ms invoke=${invoke.toFixed(1)}ms total=${total.toFixed(1)}ms sessionId=${sessionId} promptLen=${trimmed.length}`)
       }
     }
-  }, [isRemoteConnected, isStreaming, isInterrupted, sessionId, attachedImages, attachedFiles, clearInput])
+  }, [isRemoteConnected, isStreaming, isInterrupted, sessionId, attachedImages, attachedFiles, clearInput, sendClaudeMessage])
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
@@ -4033,7 +4074,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               onClick={async () => {
                 if (!await host.dialog.confirm(`Merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then use host folder (${worktreeInfo.gitRoot}) to merge worktree folder (${worktreeInfo.worktreePath}). Steps:\n1. Stage and commit all changes in the worktree folder with a meaningful commit message\n2. Switch to host folder (${worktreeInfo.gitRoot}) and merge the worktree branch (${worktreeInfo.branchName}) into ${worktreeInfo.sourceBranch}\nDo not push to remote. Do not create a PR.`
-                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await sendClaudeMessage(cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title={`Commit and merge ${worktreeInfo.branchName} into ${worktreeInfo.sourceBranch}`}
             >Merge to Host</button>
@@ -4042,7 +4083,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               onClick={async () => {
                 if (!await host.dialog.confirm(`Push ${worktreeInfo.branchName} directly to origin/main?`)) return
                 const cmd = `Commit all current changes with a descriptive message, then push directly to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Pull origin/main and resolve any conflicts if needed\n3. Push to origin/main\nDo not create a PR. Do not ask for confirmation.`
-                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await sendClaudeMessage(cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title="Commit, pull, resolve conflicts, and push to origin/main"
             >Push to Main</button>
@@ -4050,7 +4091,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               className="claude-worktree-btn"
               onClick={async () => {
                 const cmd = `Commit all current changes and create or update a pull request to origin/main. Steps:\n1. Stage and commit all changes with a meaningful commit message\n2. Push this branch to origin\n3. Check if a PR from this branch to main already exists (gh pr list --head ${worktreeInfo.branchName})\n4. If a PR exists: update it with the latest changes summary (gh pr edit)\n5. If no PR exists: create one with gh pr create, include a summary of all changes in the description\nDo not merge the PR.`
-                await host.claude.sendMessage(sessionId, cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
+                await sendClaudeMessage(cmd, undefined, getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow))
               }}
               title="Commit, push branch, and create or update PR to main"
             >Create PR</button>
