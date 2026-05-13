@@ -3,6 +3,7 @@ import { readFile } from 'fs/promises'
 
 async function main() {
   const source = await readFile('renderer/src/components/CodexAgentPanel.tsx', 'utf8')
+  const claudeSource = await readFile('renderer/src/components/ClaudeAgentPanel.tsx', 'utf8')
 
   assert.equal(
     source.includes('!isCodexSession && showResumeList'),
@@ -24,6 +25,18 @@ async function main() {
     /const resumeModel = currentModel[\s\S]*resumeModel[\s\S]*codexSandboxMode[\s\S]*codexApprovalPolicy[\s\S]*permissionMode[\s\S]*effortLevel as EffortLevel/,
     'Codex manual resume should preserve current model, sandbox, approval, permission mode, and effort',
   )
+  for (const [name, panelSource] of [['Codex', source], ['Claude', claudeSource]] as const) {
+    assert.match(
+      panelSource,
+      /const bottom = Math\.max\(0, el\.scrollHeight - el\.clientHeight\)[\s\S]*el\.scrollTop = bottom[\s\S]*el\.scrollTo\(\{ top: bottom, behavior: 'auto' \}\)/,
+      `${name} scroll-to-bottom should drive the messages container to its max scrollTop`,
+    )
+    assert.equal(
+      panelSource.includes('onPointerDown={handleScrollToBottomPointerDown}'),
+      true,
+      `${name} scroll-to-bottom button should run on pointer down, not only click`,
+    )
+  }
 
   console.log('Codex panel regression: passed')
 }
