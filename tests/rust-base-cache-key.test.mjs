@@ -41,6 +41,12 @@ dependencies = [
 const packages = parseCargoLock(sampleLock)
 const closure = collectBaseClosure(packages, ['tauri'])
 assert.deepEqual(closure.map((pkg) => pkg.name), ['serde', 'tauri', 'wry'])
+
+const crlfPackages = parseCargoLock(sampleLock.replace(/\n/g, '\r\n'))
+assert.deepEqual(
+  collectBaseClosure(crlfPackages, ['tauri']).map((pkg) => pkg.name),
+  ['serde', 'tauri', 'wry'],
+)
 assert.ok(RUST_BASE_CACHE_ROOTS.includes('tauri'))
 assert.ok(RUST_BASE_CACHE_ROOTS.includes('reqwest@0.12.28'))
 

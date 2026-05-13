@@ -54,7 +54,7 @@ function parseDependencyName(raw) {
 
 export function parseCargoLock(raw) {
   const packages = new Map()
-  for (const block of raw.split(/\n\[\[package\]\]\n/)) {
+  for (const block of raw.split(/\r?\n\[\[package\]\]\r?\n/)) {
     if (!block.includes('name = ')) continue
     const lines = block.split(/\r?\n/)
     const name = lines.map((line) => parseStringValue(line, 'name')).find(Boolean)
