@@ -87,7 +87,7 @@ jobs:
             artifact: release-win
             release_exts: '.exe'
             bundle: nsis
-            prerelease: false
+            prerelease: true
           - os: macos-15-intel
             platform: mac
             arch: x64
