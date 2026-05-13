@@ -56,24 +56,28 @@ jobs:
         include:
           - os: windows-latest
             platform: win
+            arch: x64
             artifact: release-win
             release_exts: '.exe'
             bundle: nsis
             prerelease: false
           - os: macos-15-intel
             platform: mac
+            arch: x64
             artifact: release-mac-x64
             release_exts: '.dmg'
             bundle: dmg
             prerelease: false
           - os: macos-14
             platform: mac
+            arch: arm64
             artifact: release-mac-arm64
             release_exts: '.dmg'
             bundle: dmg
             prerelease: true
           - os: ubuntu-22.04
             platform: linux
+            arch: x64
             artifact: release-linux
             release_exts: '.AppImage'
             bundle: appimage
@@ -215,6 +219,14 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
         run: pnpm exec tauri build --bundles ${{ matrix.bundle }}
+
+      - name: Normalize release asset names
+        if: env.BUILD_MATRIX_ENTRY == 'true'
+        env:
+          BAT_RELEASE_PLATFORM: ${{ matrix.platform }}
+          BAT_RELEASE_ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: node scripts/normalize-release-asset-names.mjs src-tauri/target/release/bundle
 
       - name: Smoke test Windows release binary
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'win'
