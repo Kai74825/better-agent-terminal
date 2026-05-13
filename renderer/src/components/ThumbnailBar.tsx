@@ -58,6 +58,14 @@ export function ThumbnailBar({
   const thumbnailListRef = useRef<HTMLDivElement>(null)
   const middlePanRef = useRef<{ startX: number; startScrollLeft: number } | null>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+  const pointerDragRef = useRef<{
+    id: string
+    pointerId: number
+    startX: number
+    startY: number
+    dragging: boolean
+  } | null>(null)
+  const suppressClickRef = useRef(false)
 
   // Close menu on outside click
   useEffect(() => {
@@ -137,39 +145,91 @@ export function ThumbnailBar({
     }
   }, [])
 
-  const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
-    setDraggedId(id)
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', id)
-    // Make the drag ghost semi-transparent
-    if (e.currentTarget instanceof HTMLElement) {
-      e.currentTarget.style.opacity = '0.4'
-    }
-  }, [])
-
-  const handleDragEnd = useCallback((e: React.DragEvent) => {
-    if (e.currentTarget instanceof HTMLElement) {
-      e.currentTarget.style.opacity = '1'
-    }
-    setDraggedId(null)
-    setDropTargetId(null)
-  }, [])
-
-  const handleDragOver = useCallback((e: React.DragEvent, id: string) => {
-    // Only handle drags that originated from a thumbnail (not resize handles etc.)
-    if (!draggedId || id === draggedId) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-
+  const resolveDropTarget = useCallback((clientX: number, clientY: number) => {
+    const list = thumbnailListRef.current
+    if (!list) return null
+    const element = document.elementFromPoint(clientX, clientY)
+    const wrapper = element?.closest?.<HTMLElement>('[data-thumbnail-id]')
+    if (!wrapper || !list.contains(wrapper)) return null
+    const id = wrapper.dataset.thumbnailId
+    if (!id) return null
     // Thumbnails are laid out horizontally — use the X axis so the
     // before/after indicator (left/right border) matches what the user sees.
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const rect = wrapper.getBoundingClientRect()
     const midX = rect.left + rect.width / 2
-    const pos = e.clientX < midX ? 'before' : 'after'
+    return {
+      id,
+      position: clientX < midX ? 'before' as const : 'after' as const,
+    }
+  }, [])
 
-    setDropTargetId(id)
-    setDropPosition(pos)
-  }, [draggedId])
+  const applyReorder = useCallback((sourceId: string, targetId: string, position: 'before' | 'after') => {
+    if (sourceId === targetId || !onReorder) return
+
+    const currentOrder = terminals.map(t => t.id)
+    const draggedIndex = currentOrder.indexOf(sourceId)
+    if (draggedIndex === -1) return
+
+    currentOrder.splice(draggedIndex, 1)
+    let newIndex = currentOrder.indexOf(targetId)
+    if (newIndex === -1) return
+    if (position === 'after') newIndex += 1
+
+    currentOrder.splice(newIndex, 0, sourceId)
+    onReorder(currentOrder)
+  }, [terminals, onReorder])
+
+  const handlePointerDown = useCallback((e: React.PointerEvent, id: string) => {
+    if (!onReorder || e.button !== 0) return
+    pointerDragRef.current = {
+      id,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }, [onReorder])
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    const drag = pointerDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+
+    const dx = Math.abs(e.clientX - drag.startX)
+    const dy = Math.abs(e.clientY - drag.startY)
+    if (!drag.dragging) {
+      if (dx < 4 && dy < 4) return
+      drag.dragging = true
+      suppressClickRef.current = true
+      setDraggedId(drag.id)
+    }
+
+    e.preventDefault()
+    const target = resolveDropTarget(e.clientX, e.clientY)
+    if (!target || target.id === drag.id) {
+      setDropTargetId(null)
+      return
+    }
+    setDropTargetId(target.id)
+    setDropPosition(target.position)
+  }, [resolveDropTarget])
+
+  const finishPointerDrag = useCallback((e: React.PointerEvent) => {
+    const drag = pointerDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+
+    const target = drag.dragging ? resolveDropTarget(e.clientX, e.clientY) : null
+    if (target && target.id !== drag.id) {
+      applyReorder(drag.id, target.id, target.position)
+    }
+
+    pointerDragRef.current = null
+    setDraggedId(null)
+    setDropTargetId(null)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch { /* pointer capture may already be gone */ }
+  }, [applyReorder, resolveDropTarget])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     // Only clear if leaving the element (not entering a child)
@@ -178,31 +238,6 @@ export function ThumbnailBar({
       setDropTargetId(null)
     }
   }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent, targetId: string) => {
-    e.preventDefault()
-    if (!draggedId || draggedId === targetId || !onReorder) return
-
-    const currentOrder = terminals.map(t => t.id)
-    const draggedIndex = currentOrder.indexOf(draggedId)
-    if (draggedIndex === -1) return
-
-    // Remove dragged item
-    currentOrder.splice(draggedIndex, 1)
-
-    // Calculate new index based on drop position
-    let newIndex = currentOrder.indexOf(targetId)
-    if (dropPosition === 'after') {
-      newIndex += 1
-    }
-
-    // Insert at new position
-    currentOrder.splice(newIndex, 0, draggedId)
-    onReorder(currentOrder)
-
-    setDraggedId(null)
-    setDropTargetId(null)
-  }, [draggedId, dropPosition, terminals, onReorder])
 
   const handleThumbnailContextMenu = useCallback((e: React.MouseEvent, terminalId: string) => {
     e.preventDefault()
@@ -352,13 +387,19 @@ export function ThumbnailBar({
         {terminals.map(terminal => (
           <div
             key={terminal.id}
-            draggable={!!onReorder}
-            onDragStart={(e) => handleDragStart(e, terminal.id)}
-            onDragEnd={handleDragEnd}
-            onDragOver={(e) => handleDragOver(e, terminal.id)}
+            data-thumbnail-id={terminal.id}
+            onPointerDown={(e) => handlePointerDown(e, terminal.id)}
+            onPointerMove={handlePointerMove}
+            onPointerUp={finishPointerDrag}
+            onPointerCancel={finishPointerDrag}
             onDragLeave={handleDragLeave}
-            onDrop={(e) => handleDrop(e, terminal.id)}
-            className={`thumbnail-drag-wrapper${
+            onClickCapture={(e) => {
+              if (!suppressClickRef.current) return
+              suppressClickRef.current = false
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            className={`thumbnail-drag-wrapper${onReorder ? ' sortable' : ''}${
               dropTargetId === terminal.id && draggedId !== terminal.id
                 ? ` drop-${dropPosition}`
                 : ''

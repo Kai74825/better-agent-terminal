@@ -17,6 +17,8 @@ import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-ur
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
 import { autoCompactWindowForClaudeSelection, displayNameForClaudeSelection, normalizeClaudeModelSelection, sdkModelForClaudeSelection } from '../utils/claude-model-presets'
+import { buildSnippetContextPrompt, parseSnippetSlashCommand, type SnippetForContext } from '../utils/snippet-command'
+import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { buildCollapsedOutputPreview, formatContentSize, summarizeShellCommand, truncateMiddle } from './CodexAgentPanel.helpers'
 import { normalizePendingAskUser, summarizeAskUserInput } from './AskUserQuestion.helpers'
 
@@ -1688,6 +1690,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       return
     }
 
+    const workerCommand = parseWorkerSlashCommand(trimmed)
+    if (workerCommand) {
+      clearInput()
+      const content = await dispatchWorkerCommand(workerCommand, workspaceId)
+      setMessages(prev => [...prev, {
+        id: `sys-worker-${Date.now()}`,
+        sessionId,
+        role: 'system' as const,
+        content,
+        timestamp: Date.now(),
+      }])
+      return
+    }
+
     // Intercept /resume command (only when not streaming)
     if (!isStreaming && trimmed === '/resume') {
       clearInput()
@@ -1883,31 +1899,15 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       return
     }
 
-    // Intercept /snippet command — inject snippet context into Claude session
-    if (!isCodexSession && (trimmed === '/snippet' || trimmed.startsWith('/snippet '))) {
-      const query = trimmed.slice('/snippet'.length).trim()
+    // Intercept /snippet command and inject snippet contents into Claude.
+    const snippetCommand = !isCodexSession ? parseSnippetSlashCommand(trimmed) : null
+    if (snippetCommand) {
       clearInput()
       try {
-        const snippets = query
-          ? await host.snippet.search(query)
+        const snippets = snippetCommand.searchQuery
+          ? await host.snippet.search(snippetCommand.searchQuery)
           : await host.snippet.getByWorkspace(workspaceId)
-        const snippetsJsonPath = '~/Library/Application Support/better-agent-terminal/snippets.json'
-        const snippetList = snippets.length === 0
-          ? 'No snippets exist yet.'
-          : snippets.map((s: { id: number; title: string; workspaceId?: string }) => `- [${s.id}] ${s.title}${s.workspaceId ? ' (workspace)' : ''}`).join('\n')
-        const contextPrompt = [
-          `[BAT Snippets Context]`,
-          `Snippets file: ${snippetsJsonPath}`,
-          `JSON structure: { "snippets": [{ id, title, content, format ("plaintext"|"markdown"), category?, tags?, workspaceId?, isFavorite, createdAt, updatedAt }], "nextId": N }`,
-          workspaceId ? `Current workspaceId: "${workspaceId}"` : '',
-          ``,
-          `${snippets.length} snippet(s)${query ? ` matching "${query}"` : ''}:`,
-          snippetList,
-          ``,
-          `Use Read tool to see full content. Use Write/Edit tool to create/update/delete snippets in the JSON file.`,
-          `Set workspaceId on a snippet to scope it to a specific workspace, or omit for global visibility.`,
-          query ? '' : `How would you like to work with your snippets?`,
-        ].filter(Boolean).join('\n')
+        const contextPrompt = buildSnippetContextPrompt(snippets as SnippetForContext[], snippetCommand, workspaceId)
         // Show clean user message
         const userMsgId = `user-${Date.now()}`
         setMessages(prev => [...prev, {
@@ -2090,11 +2090,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           { name: 'clear', description: 'Reset session (same as /new)', argumentHint: '' },
           { name: 'model', description: 'Select model', argumentHint: '' },
           { name: 'abort', description: 'Force stop current operation immediately', argumentHint: '' },
+          { name: 'worker', description: 'Inspect or control worker processes', argumentHint: '<name|all> [status|start|stop|restart|reload|clear]' },
         ]
       : [
           { name: 'new', description: 'Reset session (clear conversation)', argumentHint: '' },
           { name: 'clear', description: 'Reset session (same as /new)', argumentHint: '' },
           { name: 'snippet', description: 'Show snippets to Claude for management', argumentHint: '' },
+          { name: 'worker', description: 'Inspect or control worker processes', argumentHint: '<name|all> [status|start|stop|restart|reload|clear]' },
           { name: 'resume', description: 'Resume a previous session', argumentHint: '' },
           { name: 'model', description: 'Select model', argumentHint: '' },
           { name: 'compact', description: 'Manually compact conversation context', argumentHint: '[instructions]' },

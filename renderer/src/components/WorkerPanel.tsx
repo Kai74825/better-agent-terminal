@@ -1,10 +1,12 @@
 import { host, isTauri } from '../host-api'
-import { useEffect, useRef, useState, memo, useCallback } from 'react'
+import { useEffect, useRef, useState, memo, useCallback, type WheelEvent as ReactWheelEvent } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { settingsStore } from '../stores/settings-store'
+import { workspaceStore } from '../stores/workspace-store'
+import type { WorkerCommandRequest, WorkerCommandResult } from '../utils/worker-command'
 import '@xterm/xterm/css/xterm.css'
 
 const dlog = (...args: unknown[]) => host.debug.log(...args)
@@ -155,6 +157,7 @@ interface WorkerPanelProps {
 export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath, cwd, isActive }: WorkerPanelProps) {
   const processCwd = getProcfileWorkingDirectory(procfilePath, cwd)
   const containerRef = useRef<HTMLDivElement>(null)
+  const processListRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const doResizeRef = useRef<(() => void) | null>(null)
@@ -266,6 +269,16 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     }
     reRenderTerminal(entriesRef.current, map)
   }, [flushToDisk, reRenderTerminal])
+
+  const handleProcessListWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    const list = processListRef.current
+    if (!list || list.scrollWidth <= list.clientWidth) return
+
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+    if (delta === 0) return
+    event.preventDefault()
+    list.scrollLeft += delta
+  }, [])
 
   const clearLog = useCallback(async () => {
     if (flushTimerRef.current) {
@@ -472,6 +485,147 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
       await startProcess(p)
     }
   }, [reloadProcfile, startProcess, writeOutput, terminalId])
+
+  const workerStatusSnapshot = useCallback(() => (
+    processesRef.current.map(proc => ({
+      name: proc.name,
+      status: proc.status,
+      command: proc.command,
+    }))
+  ), [])
+
+  const findWorkerProcess = useCallback((target: string) => {
+    const normalized = target.trim().toLowerCase()
+    if (!normalized || normalized === 'all') return null
+    const processes = processesRef.current
+    return processes.find(proc => proc.name.toLowerCase() === normalized)
+      || processes.find(proc => proc.name.toLowerCase().includes(normalized))
+      || null
+  }, [])
+
+  const matchesProcfileTarget = useCallback((target: string) => {
+    const normalized = target.trim().toLowerCase()
+    if (!normalized || normalized === 'all') return true
+    const filename = procfilePath.split(/[\\/]/).pop()?.toLowerCase() || ''
+    return filename === normalized || filename.includes(normalized) || procfilePath.toLowerCase().includes(normalized)
+  }, [procfilePath])
+
+  const executeWorkerCommand = useCallback(async (request: WorkerCommandRequest): Promise<WorkerCommandResult | null> => {
+    const terminal = workspaceStore.getState().terminals.find(t => t.id === terminalId)
+    if (request.workspaceId && terminal?.workspaceId !== request.workspaceId) return null
+
+    const target = request.target || 'all'
+    const isAll = target.toLowerCase() === 'all'
+    const procfileName = procfilePath.split(/[\\/]/).pop() || 'Procfile'
+    const targetProc = isAll ? null : findWorkerProcess(target)
+    const targetsThisPanel = isAll || Boolean(targetProc) || matchesProcfileTarget(target)
+
+    if (request.action === 'status') {
+      const statuses = workerStatusSnapshot()
+      if (!isAll && !targetProc && !matchesProcfileTarget(target)) return null
+      return {
+        requestId: request.requestId,
+        terminalId,
+        procfilePath,
+        handled: true,
+        statuses: targetProc ? statuses.filter(proc => proc.name === targetProc.name) : statuses,
+        message: `Worker status from ${procfileName}.`,
+      }
+    }
+
+    if (request.action === 'reload') {
+      if (!targetsThisPanel) return null
+      await reloadProcfile()
+      return {
+        requestId: request.requestId,
+        terminalId,
+        procfilePath,
+        handled: true,
+        statuses: workerStatusSnapshot(),
+        message: `Reloaded ${procfileName}.`,
+      }
+    }
+
+    if (request.action === 'clear') {
+      if (!targetsThisPanel) return null
+      await clearLog()
+      return {
+        requestId: request.requestId,
+        terminalId,
+        procfilePath,
+        handled: true,
+        message: `Cleared worker log for ${procfileName}.`,
+      }
+    }
+
+    if (isAll) {
+      if (request.action === 'start') await startAll()
+      else if (request.action === 'stop') await stopAll()
+      else if (request.action === 'restart') await restartAll()
+      return {
+        requestId: request.requestId,
+        terminalId,
+        procfilePath,
+        handled: true,
+        statuses: workerStatusSnapshot(),
+        message: `${request.action} all requested for ${procfileName}.`,
+      }
+    }
+
+    const proc = targetProc
+    if (!proc) return null
+    if (request.action === 'start') {
+      if (proc.status === 'running' || proc.status === 'starting') {
+        return {
+          requestId: request.requestId,
+          terminalId,
+          procfilePath,
+          handled: true,
+          statuses: workerStatusSnapshot(),
+          message: `${proc.name} is already ${proc.status}.`,
+        }
+      }
+      await reloadProcfile()
+      const fresh = findWorkerProcess(target)
+      if (fresh) await startProcess(fresh)
+    } else if (request.action === 'stop') {
+      await stopProcess(proc)
+    } else if (request.action === 'restart') {
+      await restartProcess(proc)
+    }
+    return {
+      requestId: request.requestId,
+      terminalId,
+      procfilePath,
+      handled: true,
+      statuses: workerStatusSnapshot(),
+      message: `${request.action} requested for ${proc.name}.`,
+    }
+  }, [clearLog, findWorkerProcess, matchesProcfileTarget, procfilePath, reloadProcfile, restartAll, restartProcess, startAll, startProcess, stopAll, stopProcess, terminalId, workerStatusSnapshot])
+
+  useEffect(() => {
+    const onWorkerCommand = (event: Event) => {
+      const request = (event as CustomEvent<WorkerCommandRequest>).detail
+      if (!request?.requestId) return
+      void executeWorkerCommand(request).then(result => {
+        if (!result) return
+        window.dispatchEvent(new CustomEvent('bat-worker-command-result', { detail: result }))
+      }).catch(error => {
+        window.dispatchEvent(new CustomEvent('bat-worker-command-result', {
+          detail: {
+            requestId: request.requestId,
+            terminalId,
+            procfilePath,
+            handled: true,
+            message: '',
+            error: error instanceof Error ? error.message : String(error),
+          } satisfies WorkerCommandResult,
+        }))
+      })
+    }
+    window.addEventListener('bat-worker-command', onWorkerCommand as EventListener)
+    return () => window.removeEventListener('bat-worker-command', onWorkerCommand as EventListener)
+  }, [executeWorkerCommand, procfilePath, terminalId])
 
   // Main init effect: create xterm, parse Procfile, start processes
   useEffect(() => {
@@ -760,59 +914,61 @@ export const WorkerPanel = memo(function WorkerPanel({ terminalId, procfilePath,
     <div className="worker-panel">
       {processes.length > 0 && (
         <div className="worker-process-bar">
-          <div className="worker-process-list">
-            {processes.map(proc => {
-              const isVisible = logVisible[proc.name] !== false
-              return (
-                <div
-                  key={proc.ptyId}
-                  className={`worker-process-card${spotlightService !== null && spotlightService !== proc.name ? ' worker-card-dimmed' : ''}${spotlightService === proc.name ? ' worker-card-spotlight' : ''}`}
-                >
-                  <span className={`worker-status-dot worker-status-${proc.status}`} />
-                  <span
-                    className="worker-process-name"
-                    style={{ color: proc.color, cursor: 'pointer' }}
-                    onClick={() => toggleSpotlight(proc.name)}
-                    title={spotlightService === proc.name ? 'Exit spotlight' : `Spotlight: ${proc.name}`}
+          <div className="worker-process-scroll" aria-label="Worker processes">
+            <div className="worker-process-list" ref={processListRef} onWheel={handleProcessListWheel}>
+              {processes.map(proc => {
+                const isVisible = logVisible[proc.name] !== false
+                return (
+                  <div
+                    key={proc.ptyId}
+                    className={`worker-process-card${spotlightService !== null && spotlightService !== proc.name ? ' worker-card-dimmed' : ''}${spotlightService === proc.name ? ' worker-card-spotlight' : ''}`}
                   >
-                    {proc.name}
-                  </span>
-                  <div className="worker-process-actions">
-                    <button
-                      className={`worker-btn worker-btn-log ${isVisible ? 'active' : ''}`}
-                      onClick={() => toggleLogVisible(proc.name)}
-                      title={isVisible ? 'Hide log' : 'Show log'}
+                    <span className={`worker-status-dot worker-status-${proc.status}`} />
+                    <span
+                      className="worker-process-name"
+                      style={{ color: proc.color, cursor: 'pointer' }}
+                      onClick={() => toggleSpotlight(proc.name)}
+                      title={spotlightService === proc.name ? 'Exit spotlight' : `Spotlight: ${proc.name}`}
                     >
-                      {isVisible ? '◉' : '○'}
-                    </button>
-                    <button
-                      className={`worker-btn worker-btn-auto ${proc.autoStart ? 'active' : ''}`}
-                      onClick={() => toggleAutoStart(proc.name)}
-                      title={proc.autoStart ? 'Auto-start ON (click to disable)' : 'Auto-start OFF (click to enable)'}
-                    >
-                      {proc.autoStart ? '⚡' : '💤'}
-                    </button>
-                    {(proc.status === 'stopped' || proc.status === 'crashed') && (
-                      <button className="worker-btn" onClick={async () => {
-                        await reloadProcfile()
-                        const fresh = processesRef.current.find(p => p.name === proc.name)
-                        if (fresh) startProcess(fresh)
-                      }} title="Start">
-                        ▶
+                      {proc.name}
+                    </span>
+                    <div className="worker-process-actions">
+                      <button
+                        className={`worker-btn worker-btn-log ${isVisible ? 'active' : ''}`}
+                        onClick={() => toggleLogVisible(proc.name)}
+                        title={isVisible ? 'Hide log' : 'Show log'}
+                      >
+                        {isVisible ? '◉' : '○'}
                       </button>
-                    )}
-                    {(proc.status === 'running' || proc.status === 'starting') && (
-                      <button className="worker-btn" onClick={() => stopProcess(proc)} title="Stop">
-                        ■
+                      <button
+                        className={`worker-btn worker-btn-auto ${proc.autoStart ? 'active' : ''}`}
+                        onClick={() => toggleAutoStart(proc.name)}
+                        title={proc.autoStart ? 'Auto-start ON (click to disable)' : 'Auto-start OFF (click to enable)'}
+                      >
+                        {proc.autoStart ? '⚡' : '💤'}
                       </button>
-                    )}
-                    <button className="worker-btn" onClick={() => restartProcess(proc)} title="Restart">
-                      ⟳
-                    </button>
+                      {(proc.status === 'stopped' || proc.status === 'crashed') && (
+                        <button className="worker-btn" onClick={async () => {
+                          await reloadProcfile()
+                          const fresh = processesRef.current.find(p => p.name === proc.name)
+                          if (fresh) startProcess(fresh)
+                        }} title="Start">
+                          ▶
+                        </button>
+                      )}
+                      {(proc.status === 'running' || proc.status === 'starting') && (
+                        <button className="worker-btn" onClick={() => stopProcess(proc)} title="Stop">
+                          ■
+                        </button>
+                      )}
+                      <button className="worker-btn" onClick={() => restartProcess(proc)} title="Restart">
+                        ⟳
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
           <div className="worker-global-actions">
             <button className="worker-btn" onClick={startAll} title="Start All">▶ All</button>

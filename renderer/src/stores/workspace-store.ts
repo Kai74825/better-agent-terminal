@@ -432,20 +432,20 @@ class WorkspaceStore {
 
   reorderTerminals(terminalIds: string[]): void {
     const terminalMap = new Map(this.state.terminals.map(t => [t.id, t]))
-    const reordered = terminalIds
+    const reorderedSubset = terminalIds
       .map(id => terminalMap.get(id))
       .filter((t): t is TerminalInstance => t !== undefined)
+    const reorderedIds = new Set(reorderedSubset.map(t => t.id))
+    let nextReorderedIndex = 0
 
-    // Append any terminals not in the provided list (e.g. from other workspaces)
-    for (const t of this.state.terminals) {
-      if (!terminalIds.includes(t.id)) {
-        reordered.push(t)
-      }
-    }
+    const terminals = this.state.terminals.map(t => {
+      if (!reorderedIds.has(t.id)) return t
+      return reorderedSubset[nextReorderedIndex++] ?? t
+    })
 
     this.state = {
       ...this.state,
-      terminals: reordered
+      terminals
     }
 
     this.notify()

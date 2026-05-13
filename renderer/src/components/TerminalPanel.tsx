@@ -10,6 +10,17 @@ import type { AgentPresetId } from '../types/agent-presets'
 import '@xterm/xterm/css/xterm.css'
 
 const dlog = (...args: unknown[]) => host.debug.log(...args)
+const IME_SAFE_EDIT_KEYS = new Set([
+  'Backspace',
+  'Delete',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'Home',
+  'End',
+  'Escape',
+])
 
 interface TerminalPanelProps {
   terminalId: string
@@ -394,8 +405,10 @@ export const TerminalPanel = memo(function TerminalPanel({ terminalId, onClose, 
       // to prevent CAPS LOCK etc. from committing partial input
       if (imeComposing || event.isComposing) {
         // keyCode 229 = IME composition event, let it through
-        // Everything else (CAPS LOCK, modifiers, etc.) should be blocked
-        return event.keyCode === 229
+        // Editing/navigation keys must still reach xterm so Backspace can
+        // delete composing text and recover if compositionend was missed.
+        // Everything else (CAPS LOCK, modifiers, etc.) should be blocked.
+        return event.keyCode === 229 || IME_SAFE_EDIT_KEYS.has(event.key)
       }
 
       // Shift+Enter for newline (multiline input)

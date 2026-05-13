@@ -247,11 +247,13 @@
   right: -2px;
 }
 
-.thumbnail-drag-wrapper[draggable="true"] {
+.thumbnail-drag-wrapper.sortable {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.thumbnail-drag-wrapper[draggable="true"]:active {
+.thumbnail-drag-wrapper.sortable:active {
   cursor: grabbing;
 }
 
@@ -439,7 +441,56 @@
   overflow-x: auto;
   overflow-y: hidden;
   min-width: 0;
+  width: 100%;
+  padding: 0 14px 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(224, 153, 86, 0.72) rgba(255, 255, 255, 0.08);
+}
+
+.worker-process-scroll {
+  position: relative;
+  min-width: 0;
   flex: 1 1 auto;
+}
+
+.worker-process-scroll::before,
+.worker-process-scroll::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 6px;
+  width: 18px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.worker-process-scroll::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--bg-tertiary), transparent);
+}
+
+.worker-process-scroll::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--bg-tertiary), transparent);
+}
+
+.worker-process-list::-webkit-scrollbar {
+  height: 9px;
+}
+
+.worker-process-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+}
+
+.worker-process-list::-webkit-scrollbar-thumb {
+  background: rgba(224, 153, 86, 0.72);
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+}
+
+.worker-process-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(224, 153, 86, 0.95);
 }
 
 .worker-process-card {
