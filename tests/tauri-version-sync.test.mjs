@@ -7,7 +7,13 @@ const tauriConfig = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.j
 assert.equal(
   tauriConfig.version,
   packageJson.version,
-  'src-tauri/tauri.conf.json version must match package.json before preview release',
+  'src-tauri/tauri.conf.json version must match package.json',
+)
+
+assert.equal(
+  packageJson.version,
+  '0.0.1-dev',
+  'checked-in package.json version must stay at the local development version; CI injects release versions from tags',
 )
 
 assert.equal(

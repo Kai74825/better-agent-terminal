@@ -3,49 +3,53 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const repoRoot = path.join(__dirname, '..');
+const DEV_VERSION = '0.0.1-dev';
 
-// Get version from git tag, environment variable, or generate one
+function normalizeVersion(value) {
+  return String(value || '').trim().replace(/^v/, '');
+}
+
+function shouldUseGitTagVersion() {
+  return process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
+}
+
+// Get release version from CI/tag context. Local builds stay on DEV_VERSION.
 function getVersion() {
   // 1. Check for VERSION environment variable (set by CI)
   if (process.env.VERSION) {
-    const version = process.env.VERSION.replace(/^v/, '');
+    const version = normalizeVersion(process.env.VERSION);
     console.log(`Using version from VERSION env: ${version}`);
     return version;
   }
 
-  // 2. Try to get version from git tag
-  try {
-    const tag = execSync('git describe --tags --exact-match 2>/dev/null || git describe --tags 2>/dev/null', {
-      encoding: 'utf8',
-      cwd: path.join(__dirname, '..')
-    }).trim();
-
-    if (tag) {
-      const version = tag.replace(/^v/, '').split('-')[0];
-      console.log(`Using version from git tag: ${version}`);
+  // 2. CI tag builds may run without VERSION in local workflow tests.
+  // Local builds intentionally stay on the committed development version.
+  if (shouldUseGitTagVersion()) {
+    if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME) {
+      const version = normalizeVersion(process.env.GITHUB_REF_NAME);
+      console.log(`Using version from GitHub tag ref: ${version}`);
       return version;
     }
-  } catch (e) {
-    // No git tag found, fall through to generated version
+
+    try {
+      const tag = execSync('git describe --tags --exact-match 2>/dev/null', {
+        encoding: 'utf8',
+        cwd: repoRoot
+      }).trim();
+
+      if (tag) {
+        const version = normalizeVersion(tag);
+        console.log(`Using version from exact git tag: ${version}`);
+        return version;
+      }
+    } catch (e) {
+      // No exact tag found, fall through to development version.
+    }
   }
 
-  // 3. Fallback: Generate version based on timestamp
-  return generateTimestampVersion();
-}
-
-// Generate version: 1.yy.mmddhhiiss
-function generateTimestampVersion() {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const hh = String(now.getHours()).padStart(2, '0');
-  const ii = String(now.getMinutes()).padStart(2, '0');
-  const ss = String(now.getSeconds()).padStart(2, '0');
-
-  const version = `1.${yy}.${mm}${dd}${hh}${ii}${ss}`;
-  console.log(`Using generated timestamp version: ${version}`);
-  return version;
+  // 3. Fallback: the repository's checked-in version is always dev.
+  console.log(`Using development version: ${DEV_VERSION}`);
+  return DEV_VERSION;
 }
 
 // Update package.json version
@@ -122,7 +126,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEV_VERSION,
   getVersion,
+  normalizeVersion,
   updatePackageVersion,
   updateTauriVersion,
   updateProjectVersion,
