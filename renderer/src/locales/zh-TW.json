@@ -320,6 +320,7 @@
     "closeCodeAgentConfirm": "確定要關閉 Code Agent 終端嗎？任何正在執行的程序將被終止。",
     "closeWorktreeSession": "關閉 Worktree 工作階段？",
     "closeWorktreeSessionConfirm": "要關閉這個 worktree 工作階段嗎？你也可以一併清理 worktree。",
+    "closeWorktreeSessionMergedConfirm": "這個 worktree 已經合併到來源分支，可以安全關閉。",
     "closeAndCleanWorktree": "關閉並清理 Worktree",
     "closeKeepWorktree": "關閉（保留 Worktree）"
   },

@@ -172,6 +172,40 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     }
   }, [hasGithubRemote, activeTab])
 
+  // Refresh worktree merged-status for the focused terminal when:
+  //   - focus moves to a different terminal
+  //   - the OS window regains focus (user comes back from the host repo)
+  // The status call is cheap (just a few rev-parse/merge-base reads) and
+  // the Rust side caches by sha so repeat calls without git activity are
+  // free. We only call it when the workspace is active and the focused
+  // terminal actually has a worktree.
+  useEffect(() => {
+    if (!isActive) return
+    const terminal = terminals.find(t => t.id === focusedTerminalId)
+    if (!terminal?.worktreePath) return
+
+    let cancelled = false
+    const refresh = () => {
+      host.worktree.status(terminal.id)
+        .then((res: unknown) => {
+          if (cancelled) return
+          const kind = (res as { mergedKind?: string } | null)?.mergedKind
+          if (kind === 'ancestor' || kind === 'patch-equivalent' || kind === 'ahead' || kind === 'diverged' || kind === 'unknown') {
+            workspaceStore.setTerminalWorktreeMergedKind(terminal.id, kind)
+          }
+        })
+        .catch(() => { /* best-effort */ })
+    }
+
+    refresh()
+    const onFocus = () => refresh()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [isActive, focusedTerminalId, terminals])
+
   const handleTabChange = useCallback((tab: WorkspaceTab) => {
     setActiveTab(tab)
     try { localStorage.setItem(TAB_KEY, tab) } catch { /* ignore */ }
@@ -818,14 +852,21 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
         onCollapse={handleThumbnailCollapse}
       />
 
-      {showCloseConfirm && (
-        <CloseConfirmDialog
-          onConfirm={() => handleConfirmClose(false)}
-          onCancel={() => setShowCloseConfirm(null)}
-          isWorktree={!!terminals.find(t => t.id === showCloseConfirm)?.worktreePath}
-          onConfirmAndClean={() => handleConfirmClose(true)}
-        />
-      )}
+      {showCloseConfirm && (() => {
+        const target = terminals.find(t => t.id === showCloseConfirm)
+        const isWorktree = !!target?.worktreePath
+        const mergedKind = target?.worktreeMergedKind
+        const worktreeMerged = mergedKind === 'ancestor' || mergedKind === 'patch-equivalent'
+        return (
+          <CloseConfirmDialog
+            onConfirm={() => handleConfirmClose(false)}
+            onCancel={() => setShowCloseConfirm(null)}
+            isWorktree={isWorktree}
+            worktreeMerged={worktreeMerged}
+            onConfirmAndClean={() => handleConfirmClose(true)}
+          />
+        )
+      })()}
       {showProcfilePicker && (
         <FolderPicker
           initialPath={workspace.folderPath}

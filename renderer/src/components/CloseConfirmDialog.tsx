@@ -4,27 +4,33 @@ interface CloseConfirmDialogProps {
   onConfirm: () => void
   onCancel: () => void
   isWorktree?: boolean
+  worktreeMerged?: boolean
   onConfirmAndClean?: () => void
 }
 
-export function CloseConfirmDialog({ onConfirm, onCancel, isWorktree, onConfirmAndClean }: CloseConfirmDialogProps) {
+export function CloseConfirmDialog({ onConfirm, onCancel, isWorktree, worktreeMerged, onConfirmAndClean }: CloseConfirmDialogProps) {
   const { t } = useTranslation()
+
+  const body = !isWorktree
+    ? t('dialogs.closeCodeAgentConfirm')
+    : worktreeMerged
+      ? t('dialogs.closeWorktreeSessionMergedConfirm')
+      : t('dialogs.closeWorktreeSessionConfirm')
 
   return (
     <div className="dialog-overlay" onClick={onCancel}>
       <div className="dialog" onClick={e => e.stopPropagation()}>
         <h3>{isWorktree ? t('dialogs.closeWorktreeSession') : t('dialogs.closeCodeAgent')}</h3>
-        <p>
-          {isWorktree
-            ? t('dialogs.closeWorktreeSessionConfirm')
-            : t('dialogs.closeCodeAgentConfirm')}
-        </p>
+        <p>{body}</p>
         <div className="dialog-actions">
           <button className="dialog-btn cancel" onClick={onCancel}>
             {t('common.cancel')}
           </button>
           {isWorktree && onConfirmAndClean && (
-            <button className="dialog-btn confirm danger" onClick={onConfirmAndClean}>
+            <button
+              className={`dialog-btn confirm${worktreeMerged ? '' : ' danger'}`}
+              onClick={onConfirmAndClean}
+            >
               {t('dialogs.closeAndCleanWorktree')}
             </button>
           )}

@@ -320,6 +320,7 @@
     "closeCodeAgentConfirm": "Are you sure you want to close the Code Agent terminal? Any running process will be terminated.",
     "closeWorktreeSession": "Close Worktree Session?",
     "closeWorktreeSessionConfirm": "Close this worktree session? You can also clean up the worktree.",
+    "closeWorktreeSessionMergedConfirm": "This worktree is already merged into the source branch. Close it?",
     "closeAndCleanWorktree": "Close & Clean Worktree",
     "closeKeepWorktree": "Close (Keep Worktree)"
   },

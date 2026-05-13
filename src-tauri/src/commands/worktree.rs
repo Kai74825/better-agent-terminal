@@ -35,6 +35,39 @@ struct WorktreeInfo {
     original_cwd: String,
     source_branch: String,
     created_at: u64,
+    // Cache for merged-status lookups. We keep these on WorktreeInfo so the
+    // existing `state.set` / `state.get` round-trip transparently preserves
+    // them. They're skipped during serde because the renderer doesn't need
+    // the cache, only the resolved status from worktree.status.
+    #[serde(skip)]
+    cached_host_head: String,
+    #[serde(skip)]
+    cached_worktree_head: String,
+    #[serde(skip)]
+    cached_merged: Option<MergedKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergedKind {
+    Ancestor,
+    PatchEquivalent,
+    Ahead,
+    Diverged,
+}
+
+impl MergedKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            MergedKind::Ancestor => "ancestor",
+            MergedKind::PatchEquivalent => "patch-equivalent",
+            MergedKind::Ahead => "ahead",
+            MergedKind::Diverged => "diverged",
+        }
+    }
+
+    fn is_merged(self) -> bool {
+        matches!(self, MergedKind::Ancestor | MergedKind::PatchEquivalent)
+    }
 }
 
 impl WorktreeState {
@@ -316,6 +349,9 @@ fn create_worktree_native(
         original_cwd: cwd,
         source_branch,
         created_at: now_ms(),
+        cached_host_head: String::new(),
+        cached_worktree_head: String::new(),
+        cached_merged: None,
     };
     state.set(info.clone());
     if install_pnpm {
@@ -465,6 +501,9 @@ pub fn ensure_worktree_for_session_native(
             original_cwd,
             source_branch: String::new(),
             created_at: 0,
+            cached_host_head: String::new(),
+            cached_worktree_head: String::new(),
+            cached_merged: None,
         };
         state.set(info.clone());
         return Ok(worktree_info_value(info));
@@ -491,6 +530,9 @@ pub fn ensure_worktree_for_session_native(
             original_cwd: cwd,
             source_branch: String::new(),
             created_at: 0,
+            cached_host_head: String::new(),
+            cached_worktree_head: String::new(),
+            cached_merged: None,
         };
         state.set(info.clone());
         return Ok(worktree_info_value(info));
@@ -536,28 +578,113 @@ fn resolve_source_branch(state: &WorktreeState, info: &mut WorktreeInfo) -> Stri
     source_branch
 }
 
+fn rev_parse(git_root: &Path, rev: &str) -> String {
+    run_git(
+        git_root,
+        &["rev-parse", "--verify", "--quiet", rev],
+        DEFAULT_TIMEOUT,
+        1024 * 1024,
+    )
+    .unwrap_or_default()
+}
+
+fn compute_merged_kind(git_root: &Path, source_branch: &str, branch_name: &str) -> MergedKind {
+    // Fast path: ancestor check — worktree HEAD is reachable from source HEAD.
+    // Covers merge --no-ff and fast-forward merges.
+    if run_git_ok(
+        git_root,
+        &["merge-base", "--is-ancestor", branch_name, source_branch],
+    ) {
+        return MergedKind::Ancestor;
+    }
+    // git cherry source branch → lines starting with '-' are patch-equivalent
+    // commits already in source (covers squash / rebase merges where the
+    // commit hash differs but the patch landed). Lines starting with '+' are
+    // commits unique to branch.
+    let cherry = run_git(
+        git_root,
+        &["cherry", source_branch, branch_name],
+        DEFAULT_TIMEOUT,
+        MAX_OUTPUT_BYTES,
+    )
+    .unwrap_or_default();
+    let mut has_unique = false;
+    let mut has_equivalent = false;
+    for line in cherry.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('+') {
+            has_unique = true;
+        } else if trimmed.starts_with('-') {
+            has_equivalent = true;
+        }
+    }
+    if !has_unique && has_equivalent {
+        return MergedKind::PatchEquivalent;
+    }
+    // Branch has unique commits. Distinguish "ahead of source" (source HEAD
+    // is ancestor of branch HEAD) from "diverged".
+    if run_git_ok(
+        git_root,
+        &["merge-base", "--is-ancestor", source_branch, branch_name],
+    ) {
+        MergedKind::Ahead
+    } else {
+        MergedKind::Diverged
+    }
+}
+
 fn worktree_status_native(state: &WorktreeState, session_id: String) -> Value {
     let Some(mut info) = state.get(&session_id) else {
         return Value::Null;
     };
     let source_branch = resolve_source_branch(state, &mut info);
+    let git_root = Path::new(&info.git_root);
     let diff = if source_branch.is_empty() {
         String::new()
     } else {
         let range = format!("{source_branch}...{}", info.branch_name);
         run_git(
-            Path::new(&info.git_root),
+            git_root,
             &["diff", &range],
             DEFAULT_TIMEOUT,
             MAX_OUTPUT_BYTES,
         )
         .unwrap_or_default()
     };
+
+    let mut merged_kind: Option<MergedKind> = None;
+    if !source_branch.is_empty() {
+        let host_head = rev_parse(git_root, &source_branch);
+        let worktree_head = rev_parse(git_root, &info.branch_name);
+        if !host_head.is_empty() && !worktree_head.is_empty() {
+            let cache_hit = info.cached_merged.is_some()
+                && info.cached_host_head == host_head
+                && info.cached_worktree_head == worktree_head;
+            if cache_hit {
+                merged_kind = info.cached_merged;
+            } else {
+                let kind = compute_merged_kind(git_root, &source_branch, &info.branch_name);
+                info.cached_host_head = host_head;
+                info.cached_worktree_head = worktree_head;
+                info.cached_merged = Some(kind);
+                state.set(info.clone());
+                merged_kind = Some(kind);
+            }
+        }
+    }
+
+    let (merged, merged_kind_str) = match merged_kind {
+        Some(kind) => (kind.is_merged(), kind.as_str()),
+        None => (false, "unknown"),
+    };
+
     json!({
         "diff": diff,
         "branchName": info.branch_name,
         "worktreePath": info.worktree_path,
         "sourceBranch": source_branch,
+        "merged": merged,
+        "mergedKind": merged_kind_str,
     })
 }
 
@@ -672,6 +799,9 @@ fn rehydrate_worktree_native(
         original_cwd: cwd,
         source_branch: String::new(),
         created_at: 0,
+        cached_host_head: String::new(),
+        cached_worktree_head: String::new(),
+        cached_merged: None,
     });
     json!({ "success": true })
 }

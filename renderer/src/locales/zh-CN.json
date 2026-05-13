@@ -303,6 +303,7 @@
     "closeCodeAgentConfirm": "确定要关闭 Code Agent 终端吗？任何正在执行的程序将被终止。",
     "closeWorktreeSession": "关闭 Worktree 会话？",
     "closeWorktreeSessionConfirm": "要关闭这个 worktree 会话吗？你也可以同时清理 worktree。",
+    "closeWorktreeSessionMergedConfirm": "这个 worktree 已经合并到源分支，可以安全关闭。",
     "closeAndCleanWorktree": "关闭并清理 Worktree",
     "closeKeepWorktree": "关闭（保留 Worktree）"
   },

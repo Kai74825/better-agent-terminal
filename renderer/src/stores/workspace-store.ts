@@ -201,6 +201,18 @@ class WorkspaceStore {
     this.save()
   }
 
+  setTerminalWorktreeMergedKind(terminalId: string, mergedKind: TerminalInstance['worktreeMergedKind']): void {
+    const current = this.state.terminals.find(t => t.id === terminalId)
+    if (!current || current.worktreeMergedKind === mergedKind) return
+    this.state = {
+      ...this.state,
+      terminals: this.state.terminals.map(t =>
+        t.id === terminalId ? { ...t, worktreeMergedKind: mergedKind } : t
+      )
+    }
+    this.notify()
+  }
+
   setTerminalSessionMeta(terminalId: string, meta: { totalCost: number; inputTokens: number; outputTokens: number; durationMs: number; numTurns: number; contextWindow: number; cacheReadTokens?: number; cacheCreationTokens?: number }): void {
     this.state = {
       ...this.state,

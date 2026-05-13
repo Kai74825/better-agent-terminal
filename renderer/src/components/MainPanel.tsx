@@ -6,6 +6,7 @@ import { ActivityIndicator } from './ActivityIndicator'
 import { PromptBox } from './PromptBox'
 import { getAgentPreset } from '../types/agent-presets'
 import { workspaceStore } from '../stores/workspace-store'
+import { WorktreeMergedChip } from './WorktreeMergedChip'
 
 // Lazy load heavy components
 const ClaudeAgentPanel = lazy(() => import('./ClaudeAgentPanel').then(m => ({ default: m.ClaudeAgentPanel })))
@@ -84,6 +85,9 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
           )}
           {terminal.worktreeBranch && (
             <span className="main-panel-worktree-label">🌳 {terminal.worktreeBranch}</span>
+          )}
+          {terminal.worktreeBranch && terminal.worktreeMergedKind && terminal.worktreeMergedKind !== 'unknown' && (
+            <WorktreeMergedChip kind={terminal.worktreeMergedKind} />
           )}
         </div>
         {isClaudeCode && !isWorker && (
