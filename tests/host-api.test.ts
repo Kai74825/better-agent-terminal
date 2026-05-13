@@ -25,6 +25,10 @@ async function loadFreshAdapter() {
   return import(cacheBust)
 }
 
+function stripBestEffortDebugModeCall<T extends { cmd: string }>(calls: T[]): T[] {
+  return calls.filter(call => call.cmd !== 'debug_is_debug_mode')
+}
+
 async function run() {
   // 1) No window -> getHostKind === 'unknown'
   setWindow(undefined)
@@ -42,6 +46,7 @@ async function run() {
     const invoke: TauriInvoke = async <T>(cmd: string, args?: Record<string, unknown>) => {
       invokeCalls.push({ cmd, args })
       // Mirror Rust return shapes for the commands we care about.
+      if (cmd === 'debug_is_debug_mode') return false as unknown as T
       if (cmd === 'settings_load') return null as unknown as T
       if (cmd === 'settings_save') return undefined as unknown as T
       if (cmd === 'shell_open_external') return undefined as unknown as T
@@ -633,7 +638,9 @@ async function run() {
       && String((call.args as { args: unknown[] }).args[0]).startsWith('[tauri:claude.sendMessage]')
     )
     assert.equal(sendMessageLogs.length, 4, 'sendMessage should log start/end for both calls')
-    const stableInvokeCalls = invokeCalls.filter(call => !sendMessageLogs.includes(call))
+    const stableInvokeCalls = stripBestEffortDebugModeCall(
+      invokeCalls.filter(call => !sendMessageLogs.includes(call))
+    )
 
     assert.deepEqual(stableInvokeCalls, [
       { cmd: 'settings_load', args: undefined },
@@ -885,6 +892,7 @@ async function run() {
     const invokeCalls: string[] = []
     const invoke: TauriInvoke = async <T>(cmd: string) => {
       invokeCalls.push(cmd)
+      if (cmd === 'debug_is_debug_mode') return false as unknown as T
       return null as unknown as T
     }
     // No batAppAPI yet — the shim should install one.
@@ -916,7 +924,7 @@ async function run() {
 
     // Ported settings.load is still routed through invoke.
     await (shimmed as { settings: { load: () => Promise<unknown> } }).settings.load()
-    assert.deepEqual(invokeCalls, ['settings_load'])
+    assert.deepEqual(stripBestEffortDebugModeCall(invokeCalls.map(cmd => ({ cmd }))), [{ cmd: 'settings_load' }])
   }
 
   // 8) installTauriShim() is a no-op when not running under Tauri.
