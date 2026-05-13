@@ -3565,86 +3565,10 @@ async function inProcess() {
     }
   }
 
-  // image.readAsDataUrl — port of electron's `image:read-as-data-url`
-  // and Tauri's `image_read_as_data_url`. 10 MiB cap, ext→MIME map,
-  // path-guard refusal for sensitive paths, base64-encoded data URL.
-  {
-    const { mkdtempSync, writeFileSync, rmSync } = await import('fs')
-    const { join } = await import('path')
-    const { tmpdir } = await import('os')
-    const tmpRoot = mkdtempSync(join(tmpdir(), 'sidecar-img-'))
-    try {
-      // (a) Round-trip a tiny PNG → data:image/png;base64,<...>.
-      const pngBytes = Buffer.from([
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
-      ])
-      const pngPath = join(tmpRoot, 'tiny.png')
-      writeFileSync(pngPath, pngBytes)
-      const reply = await dispatch({ jsonrpc: '2.0', id: 700, method: 'image.readAsDataUrl',
-        params: { path: pngPath } })
-      assert.equal(typeof reply.result, 'string')
-      assert.match(reply.result, /^data:image\/png;base64,/)
-      const payload = reply.result.replace(/^data:image\/png;base64,/, '')
-      const decoded = Buffer.from(payload, 'base64')
-      assert.deepEqual([...decoded], [...pngBytes],
-        'data URL must round-trip back to the original bytes')
-
-      // (b) Bare-string params (Electron-style positional invoke through
-      //     the bridge) also works.
-      const stringReply = await dispatch({ jsonrpc: '2.0', id: 701, method: 'image.readAsDataUrl',
-        params: pngPath })
-      assert.match(stringReply.result, /^data:image\/png;base64,/)
-
-      // (c) Extension → MIME mapping. .jpg/.jpeg → image/jpeg, .gif →
-      //     image/gif, .webp → image/webp, anything else → image/png.
-      for (const [ext, mime] of [['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
-                                  ['gif', 'image/gif'], ['webp', 'image/webp'],
-                                  ['bmp', 'image/png']]) {
-        const p = join(tmpRoot, `t.${ext}`)
-        writeFileSync(p, Buffer.from([0xFF]))
-        const r = await dispatch({ jsonrpc: '2.0', id: 702, method: 'image.readAsDataUrl',
-          params: { path: p } })
-        assert.match(r.result, new RegExp(`^data:${mime.replace('/', '\\/')};base64,`))
-      }
-
-      // (d) Missing path → JSON-RPC error.
-      const noPath = await dispatch({ jsonrpc: '2.0', id: 703, method: 'image.readAsDataUrl',
-        params: {} })
-      assert.match(noPath.error?.message || '', /missing path/)
-
-      // (e) >10 MiB → refused with "Image too large".
-      const bigPath = join(tmpRoot, 'big.png')
-      writeFileSync(bigPath, Buffer.alloc(10 * 1024 * 1024 + 1, 0))
-      const big = await dispatch({ jsonrpc: '2.0', id: 704, method: 'image.readAsDataUrl',
-        params: { path: bigPath } })
-      assert.match(big.error?.message || '', /Image too large/)
-
-      // (f) path-guard refuses sensitive paths. We exercise this with a
-      //     synthetic ~/.ssh/id_rsa-shaped path — it doesn't have to
-      //     exist on disk, the guard short-circuits before stat().
-      const { homedir } = await import('os')
-      const sshKey = join(homedir(), '.ssh', 'id_rsa')
-      const denied = await dispatch({ jsonrpc: '2.0', id: 705, method: 'image.readAsDataUrl',
-        params: { path: sshKey } })
-      assert.match(denied.error?.message || '', /sensitive path/)
-
-      // (g) Non-existent path → fs error surfaces (not a guard error).
-      const ghost = await dispatch({ jsonrpc: '2.0', id: 706, method: 'image.readAsDataUrl',
-        params: { path: join(tmpRoot, 'does-not-exist.png') } })
-      assert.ok(ghost.error?.message, 'expected an error message for missing file')
-      assert.doesNotMatch(ghost.error.message, /sensitive path/)
-
-      // (h) End-to-end via the remote bridge: invokeRemoteHandler with
-      //     'image:read-as-data-url' and `args[0] = {path}` reaches the
-      //     handler through the bridge. Mirrors the renderer→remote
-      //     client→host wire pattern.
-      const protocol = await import('../src/lib/remote-protocol.mjs')
-      const remoteResult = await protocol.invokeRemoteHandler('image:read-as-data-url', [{ path: pngPath }])
-      assert.match(remoteResult, /^data:image\/png;base64,/)
-    } finally {
-      rmSync(tmpRoot, { recursive: true, force: true })
-    }
-  }
+  // image.readAsDataUrl moved to Rust (commands/image.rs + remote_server.rs).
+  // The JS sidecar handler was removed; the renderer routes directly to the
+  // Tauri command and the remote bridge dispatches `image:read-as-data-url`
+  // natively in Rust, so there's nothing left to exercise from this side.
 
   // fs.* — port of the Electron fs:* handlers (readdir/readFile/home/
   // listDirs/mkdir/deletePath/quickLocations/resolvePathLinks). Each

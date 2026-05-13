@@ -57,7 +57,6 @@ const LEGACY_UTILITY_HANDLER_MODULES = [
   './handlers/agent.mjs',
   './handlers/remote-tunnel.mjs',
   './handlers/update.mjs',
-  './handlers/image.mjs',
   './handlers/fs.mjs',
   './handlers/git.mjs',
   './handlers/github.mjs',
