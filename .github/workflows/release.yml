@@ -59,45 +59,59 @@ jobs:
             artifact: release-win
             release_exts: '.exe'
             bundle: nsis
+            prerelease: false
           - os: macos-15-intel
             platform: mac
             artifact: release-mac-x64
             release_exts: '.dmg'
             bundle: dmg
+            prerelease: false
           - os: macos-14
             platform: mac
             artifact: release-mac-arm64
             release_exts: '.dmg'
             bundle: dmg
+            prerelease: true
           - os: ubuntu-22.04
             platform: linux
             artifact: release-linux
             release_exts: '.AppImage'
             bundle: appimage
+            prerelease: false
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    env:
+      BUILD_MATRIX_ENTRY: ${{ !contains(github.ref_name, '-pre') || matrix.prerelease }}
 
     steps:
+      - name: Skip non-prerelease target
+        if: env.BUILD_MATRIX_ENTRY != 'true'
+        run: echo "Skipping ${{ matrix.artifact }} for prerelease tag ${{ github.ref_name }}"
+
       - name: Checkout code
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: actions/checkout@v4
 
       - name: Setup pnpm
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10.33.2
 
       - name: Setup Node.js
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'pnpm'
 
       - name: Setup Rust
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux Tauri dependencies
-        if: matrix.platform == 'linux'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -113,15 +127,18 @@ jobs:
           fi
 
       - name: Setup sccache
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Cache Rust build outputs
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
           cache-on-failure: true
 
       - name: Cache Tauri bundle tools
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -133,22 +150,25 @@ jobs:
             ${{ runner.os }}-tauri-tools-
 
       - name: Install dependencies
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
 
       - name: Extract version from tag
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Update version metadata
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: pnpm run update:release-version
 
       - name: Verify macOS signing secrets
-        if: matrix.platform == 'mac'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -163,7 +183,7 @@ jobs:
           test -n "$APPLE_TEAM_ID" || (echo "Missing APPLE_TEAM_ID secret" && exit 1)
 
       - name: Verify Apple notarization credentials
-        if: matrix.platform == 'mac'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -173,10 +193,11 @@ jobs:
           xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" 2>&1 || true
 
       - name: Prepare Tauri bundle resources
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         run: pnpm run prepare:tauri-bundle:ci
 
       - name: Sign macOS resource binaries
-        if: matrix.platform == 'mac'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -184,6 +205,7 @@ jobs:
         run: bash scripts/sign-macos-resource-binaries.sh
 
       - name: Build Tauri release bundle
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -195,17 +217,18 @@ jobs:
         run: pnpm exec tauri build --bundles ${{ matrix.bundle }}
 
       - name: Smoke test Windows release binary
-        if: matrix.platform == 'win'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'win'
         run: pnpm run test:tauri-launch
 
       - name: Verify Tauri release asset sizes
+        if: env.BUILD_MATRIX_ENTRY == 'true'
         env:
           BAT_RELEASE_PLATFORM: ${{ matrix.platform }}
           BAT_RELEASE_EXTS: ${{ matrix.release_exts }}
         run: node scripts/verify-release-asset-sizes.js src-tauri/target/release/bundle
 
       - name: Upload Windows artifact
-        if: matrix.platform == 'win'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'win'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -213,7 +236,7 @@ jobs:
             src-tauri/target/release/bundle/**/*.exe
 
       - name: Upload macOS artifact
-        if: matrix.platform == 'mac'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -222,7 +245,7 @@ jobs:
             !src-tauri/target/release/bundle/**/rw.*.dmg
 
       - name: Upload Linux artifact
-        if: matrix.platform == 'linux'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
