@@ -156,6 +156,11 @@ const TARGET_OS: &str = "unix";
 #[cfg(target_os = "windows")]
 const TARGET_OS: &str = "windows";
 const OUTPUT_FLUSH_MS: u64 = 8;
+// Cap per emit so a fast producer (e.g. `cat hugefile`) cannot push a
+// single multi-megabyte event into the renderer's event queue. The
+// coalescer flushes early once `pending` crosses this threshold instead
+// of growing until the time deadline.
+const OUTPUT_FRAME_MAX_BYTES: usize = 64 * 1024;
 const WORKER_PTY_SEPARATOR: &str = "__w__";
 
 fn worker_parts_from_pty_id(id: &str) -> Option<(&str, &str)> {
@@ -358,7 +363,17 @@ fn spawn_output_coalescer(
                     break;
                 }
                 match rx.recv_timeout(deadline - now) {
-                    Ok(chunk) => pending.push_str(&chunk),
+                    Ok(chunk) => {
+                        pending.push_str(&chunk);
+                        if pending.len() >= OUTPUT_FRAME_MAX_BYTES {
+                            emit_pty_output(
+                                &app,
+                                worker_buffer.as_ref(),
+                                &id,
+                                std::mem::take(&mut pending),
+                            );
+                        }
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         if !pending.is_empty() {

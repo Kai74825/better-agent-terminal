@@ -20,6 +20,7 @@ import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-n
 import { displayNameForClaudeSelection } from '../utils/claude-model-presets'
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../utils/codex-models'
 import { buildSnippetContextPrompt, parseSnippetSlashCommand, type SnippetForContext } from '../utils/snippet-command'
+import { createToolRenderCache, getOrComputeToolRender, pruneToolRenderCache } from '../utils/tool-result-cache'
 import { useRafBatchedString } from '../utils/use-raf-batched-string'
 import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { normalizePendingAskUser } from './AskUserQuestion.helpers'
@@ -124,6 +125,16 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const isWorktreeSession = terminal?.agentPreset === 'codex-agent-worktree'
   const normalizedAgentParams = normalizeAgentParams(terminal?.agentPreset, terminal?.agentParams)
   const [messages, setMessages] = useState<MessageItem[]>([])
+  // Per-tool render-helper cache. Avoids rerunning regex/split over large
+  // tool outputs on every streaming token re-render. Pruned on session
+  // change / message clear so it never holds stale entries.
+  const toolRenderCacheRef = useRef(createToolRenderCache<{
+    outText: string
+    isLongOutput: boolean
+    outPreviewLines: string[]
+    reminders: string[]
+    errors: string[]
+  }>())
   const inputValueRef = useRef('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [isInterrupted, setIsInterrupted] = useState(false)
@@ -640,6 +651,15 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       })
       .finally(() => { archivingRef.current = false })
   }, [messages.length, sessionId])
+
+  // Drop tool-render cache entries whose tool ids are no longer in messages.
+  useEffect(() => {
+    const liveIds = new Set<string>()
+    for (const m of messages) {
+      if ('toolName' in m) liveIds.add(m.id)
+    }
+    pruneToolRenderCache(toolRenderCacheRef.current, liveIds)
+  }, [messages])
 
   // Load more archived messages when scrolling to top
   const loadMoreArchived = useCallback(async () => {
@@ -3277,15 +3297,27 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
                 </span>
               </div>
               {item.result && (() => {
-                const raw = typeof item.result === 'string' ? item.result : String(item.result)
-                const normalizedRaw = parseContentBlocks(raw)
-                const { content: outText, reminders, errors } = splitSystemReminders(normalizedRaw)
+                const { outText, isLongOutput, outPreviewLines, reminders, errors } = getOrComputeToolRender(
+                  toolRenderCacheRef.current,
+                  item.id,
+                  item.result,
+                  () => {
+                    const raw = typeof item.result === 'string' ? item.result : String(item.result)
+                    const normalizedRaw = parseContentBlocks(raw)
+                    const split = splitSystemReminders(normalizedRaw)
+                    return {
+                      outText: split.content,
+                      isLongOutput: split.content.split(/\r?\n/).length > 8 || split.content.length > 900,
+                      outPreviewLines: buildCollapsedOutputPreview(split.content),
+                      reminders: split.reminders,
+                      errors: split.errors,
+                    }
+                  },
+                )
                 // Collapse by default for read-only tools; collapse all if setting enabled
                 const isReadOnlyTool = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'].includes(item.toolName)
-                const isLongOutput = outText.split(/\r?\n/).length > 8 || outText.length > 900
                 const shouldCollapse = isReadOnlyTool || item.toolName === 'Bash' || isLongOutput || settingsStore.getSettings().collapseToolOutputs
                 const isOutExpanded = expandedTools.has(outBlockId)
-                const outPreviewLines = buildCollapsedOutputPreview(outText)
                 return (
                   <>
                     {errors.length > 0 && errors.map((err, i) => (
