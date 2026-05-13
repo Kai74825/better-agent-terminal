@@ -20,6 +20,7 @@ import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-n
 import { displayNameForClaudeSelection } from '../utils/claude-model-presets'
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../utils/codex-models'
 import { buildSnippetContextPrompt, parseSnippetSlashCommand, type SnippetForContext } from '../utils/snippet-command'
+import { useRafBatchedString } from '../utils/use-raf-batched-string'
 import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { normalizePendingAskUser } from './AskUserQuestion.helpers'
 import { buildCollapsedOutputPreview, formatContentSize, formatElapsed, formatFullTimestamp, formatTimestamp, parseContentBlocks, shouldAutoContinueAfterTurnEnd, shouldShowTimeDivider, splitSystemReminders, toolDescription, toolInputContent, toolInputSummary, truncateMiddle } from './CodexAgentPanel.helpers'
@@ -127,8 +128,12 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const [isStreaming, setIsStreaming] = useState(false)
   const [isInterrupted, setIsInterrupted] = useState(false)
   const lastEscRef = useRef(0)
-  const [streamingText, setStreamingText] = useState('')
-  const [streamingThinking, setStreamingThinking] = useState('')
+  const streamingTextStore = useRafBatchedString('')
+  const streamingThinkingStore = useRafBatchedString('')
+  const streamingText = streamingTextStore.value
+  const streamingThinking = streamingThinkingStore.value
+  const setStreamingText = streamingTextStore.reset
+  const setStreamingThinking = streamingThinkingStore.reset
   const [showThinking, setShowThinking] = useState(false)
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set())
   const [autoExpandThinking, setAutoExpandThinking] = useState(false)
@@ -738,47 +743,46 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         }
         // Deduplicate by id; for user messages also dedup by content+timestamp proximity
         // (the sender already adds the message locally, backend broadcasts it for other windows)
-        setStreamingThinking(prevThinking => {
-          const finalMsg = (!message.thinking && prevThinking && message.role === 'assistant')
-            ? { ...message, thinking: prevThinking }
-            : message
-          setMessages(prev => {
-            const interruptedContinuation = finalMsg.role === 'user'
-              ? extractInterruptedContinuation(finalMsg.content)
-              : null
-            const nextPrev = interruptedContinuation
-              ? prev.filter(m => !(
-                !isToolCall(m) &&
-                (m as ClaudeMessage).role === 'user' &&
-                (m as ClaudeMessage).content === interruptedContinuation &&
-                Math.abs((m as ClaudeMessage).timestamp - finalMsg.timestamp) < 10000
-              ))
-              : prev
-            if (nextPrev.some(m => m.id === finalMsg.id)) return nextPrev
-            // Dedup user messages: if a local user message with same content exists within 5s, skip
-            if (finalMsg.role === 'user' && nextPrev.some(m =>
-              !isToolCall(m) && (m as ClaudeMessage).role === 'user' &&
-              (m as ClaudeMessage).content === finalMsg.content &&
-              Math.abs((m as ClaudeMessage).timestamp - finalMsg.timestamp) < 5000
-            )) return nextPrev
-            if (finalMsg.role === 'assistant' && finalMsg.content.trim()) {
-              const last = nextPrev[nextPrev.length - 1]
-              if (last && !isToolCall(last) && (last as ClaudeMessage).role === 'assistant') {
-                const lastMsg = last as ClaudeMessage
-                const merged: ClaudeMessage = {
-                  ...lastMsg,
-                  content: `${lastMsg.content.trimEnd()}\n\n${finalMsg.content.trimStart()}`,
-                  thinking: [lastMsg.thinking, finalMsg.thinking].filter(Boolean).join('\n\n') || undefined,
-                  timestamp: finalMsg.timestamp,
-                }
-                return [...nextPrev.slice(0, -1), merged]
+        const prevThinking = streamingThinkingStore.peek()
+        const finalMsg = (!message.thinking && prevThinking && message.role === 'assistant')
+          ? { ...message, thinking: prevThinking }
+          : message
+        setMessages(prev => {
+          const interruptedContinuation = finalMsg.role === 'user'
+            ? extractInterruptedContinuation(finalMsg.content)
+            : null
+          const nextPrev = interruptedContinuation
+            ? prev.filter(m => !(
+              !isToolCall(m) &&
+              (m as ClaudeMessage).role === 'user' &&
+              (m as ClaudeMessage).content === interruptedContinuation &&
+              Math.abs((m as ClaudeMessage).timestamp - finalMsg.timestamp) < 10000
+            ))
+            : prev
+          if (nextPrev.some(m => m.id === finalMsg.id)) return nextPrev
+          // Dedup user messages: if a local user message with same content exists within 5s, skip
+          if (finalMsg.role === 'user' && nextPrev.some(m =>
+            !isToolCall(m) && (m as ClaudeMessage).role === 'user' &&
+            (m as ClaudeMessage).content === finalMsg.content &&
+            Math.abs((m as ClaudeMessage).timestamp - finalMsg.timestamp) < 5000
+          )) return nextPrev
+          if (finalMsg.role === 'assistant' && finalMsg.content.trim()) {
+            const last = nextPrev[nextPrev.length - 1]
+            if (last && !isToolCall(last) && (last as ClaudeMessage).role === 'assistant') {
+              const lastMsg = last as ClaudeMessage
+              const merged: ClaudeMessage = {
+                ...lastMsg,
+                content: `${lastMsg.content.trimEnd()}\n\n${finalMsg.content.trimStart()}`,
+                thinking: [lastMsg.thinking, finalMsg.thinking].filter(Boolean).join('\n\n') || undefined,
+                timestamp: finalMsg.timestamp,
               }
+              return [...nextPrev.slice(0, -1), merged]
             }
-            return [...nextPrev, finalMsg]
-          })
-          return ''
+          }
+          return [...nextPrev, finalMsg]
         })
-        setStreamingText('')
+        streamingThinkingStore.reset('')
+        streamingTextStore.reset('')
       }),
 
       api.onToolUse((sid: string, tool: unknown) => {
@@ -948,8 +952,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
             })
           }
         } else {
-          if (d.text) setStreamingText(prev => prev + d.text)
-          if (d.thinking) setStreamingThinking(prev => prev + d.thinking)
+          if (d.text) streamingTextStore.append(d.text)
+          if (d.thinking) streamingThinkingStore.append(d.thinking)
         }
       }),
 
