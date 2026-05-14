@@ -193,6 +193,28 @@ fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn active_webview_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let windows = app.webview_windows();
+    windows
+        .values()
+        .find(|window| window.is_focused().unwrap_or(false))
+        .cloned()
+        .or_else(|| app.get_webview_window("main"))
+        .or_else(|| windows.values().next().cloned())
+}
+
+pub(crate) fn app_new_window_for_active(app: &AppHandle) -> Option<String> {
+    let window = active_webview_window(app)?;
+    Some(app_new_window(app.clone(), window))
+}
+
+pub(crate) fn app_focus_next_window_from_active(app: &AppHandle) -> bool {
+    let Some(window) = active_webview_window(app) else {
+        return false;
+    };
+    app_focus_next_window(app.clone(), window)
+}
+
 pub fn attach_window_lifecycle(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     let window_id = window.label().to_string();
