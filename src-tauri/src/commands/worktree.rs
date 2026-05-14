@@ -395,7 +395,8 @@ fn spawn_pnpm_install_for_worktree(
     git_root: PathBuf,
     worktree_path: PathBuf,
 ) {
-    if !worktree_path.join("pnpm-lock.yaml").is_file() {
+    let install_dirs = find_pnpm_install_dirs(&worktree_path);
+    if install_dirs.is_empty() {
         worktree_debug_log(
             app.as_ref(),
             format!(
@@ -410,92 +411,135 @@ fn spawn_pnpm_install_for_worktree(
         let store_dir = git_root.join(".bat-cache").join("pnpm-store");
         let _ = fs::create_dir_all(&store_dir);
         let pnpm_bin = resolve_pnpm_binary().unwrap_or_else(|| PathBuf::from("pnpm"));
-        if let Some(app) = app.as_ref() {
-            log_tauri(
-                app,
-                &format!(
-                    "[worktree] starting background pnpm install cwd={} store={} pnpm={}",
-                    worktree_path.display(),
-                    store_dir.display(),
-                    pnpm_bin.display()
-                ),
-            );
-            worktree_debug_log(
-                Some(app),
-                format!(
-                    "[worktree] pnpm install debug cwd={} pnpm={} path={}",
-                    worktree_path.display(),
-                    pnpm_bin.display(),
-                    std::env::var("PATH").unwrap_or_default()
-                ),
-            );
-        }
-
-        let mut pnpm_cmd = Command::new(&pnpm_bin);
-        pnpm_cmd
-            .args([
-                "install",
-                "--frozen-lockfile",
-                "--prefer-offline",
-                "--store-dir",
-            ])
-            .arg(&store_dir)
-            .arg("--config.enable-global-virtual-store=true")
-            .current_dir(&worktree_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_console_window(&mut pnpm_cmd);
-        let output = pnpm_cmd.output();
-
-        match output {
-            Ok(output) if output.status.success() => {
-                if let Some(app) = app.as_ref() {
-                    log_tauri(
-                        app,
-                        &format!(
-                            "[worktree] background pnpm install completed cwd={}",
-                            worktree_path.display()
-                        ),
-                    );
-                }
+        for install_dir in install_dirs {
+            if let Some(app) = app.as_ref() {
+                log_tauri(
+                    app,
+                    &format!(
+                        "[worktree] starting background pnpm install cwd={} store={} pnpm={}",
+                        install_dir.display(),
+                        store_dir.display(),
+                        pnpm_bin.display()
+                    ),
+                );
+                worktree_debug_log(
+                    Some(app),
+                    format!(
+                        "[worktree] pnpm install debug cwd={} pnpm={} path={}",
+                        install_dir.display(),
+                        pnpm_bin.display(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                );
             }
-            Ok(output) => {
-                if let Some(app) = app.as_ref() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let detail = stderr
-                        .trim()
-                        .lines()
-                        .last()
-                        .or_else(|| stdout.trim().lines().last());
-                    log_tauri(
-                        app,
-                        &format!(
-                            "[worktree] background pnpm install failed cwd={} status={}{}",
-                            worktree_path.display(),
-                            output.status,
-                            detail
-                                .map(|line| format!(" detail={line}"))
-                                .unwrap_or_default(),
-                        ),
-                    );
+
+            let mut pnpm_cmd = Command::new(&pnpm_bin);
+            pnpm_cmd
+                .args([
+                    "install",
+                    "--frozen-lockfile",
+                    "--prefer-offline",
+                    "--store-dir",
+                ])
+                .arg(&store_dir)
+                .arg("--config.enable-global-virtual-store=true")
+                .current_dir(&install_dir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            hide_console_window(&mut pnpm_cmd);
+            let output = pnpm_cmd.output();
+
+            match output {
+                Ok(output) if output.status.success() => {
+                    if let Some(app) = app.as_ref() {
+                        log_tauri(
+                            app,
+                            &format!(
+                                "[worktree] background pnpm install completed cwd={}",
+                                install_dir.display()
+                            ),
+                        );
+                    }
                 }
-            }
-            Err(err) => {
-                if let Some(app) = app.as_ref() {
-                    log_tauri(
-                        app,
-                        &format!(
-                            "[worktree] failed to start background pnpm install cwd={} pnpm={} error={err}",
-                            worktree_path.display(),
-                            pnpm_bin.display()
-                        ),
-                    );
+                Ok(output) => {
+                    if let Some(app) = app.as_ref() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let detail = stderr
+                            .trim()
+                            .lines()
+                            .last()
+                            .or_else(|| stdout.trim().lines().last());
+                        log_tauri(
+                            app,
+                            &format!(
+                                "[worktree] background pnpm install failed cwd={} status={}{}",
+                                install_dir.display(),
+                                output.status,
+                                detail
+                                    .map(|line| format!(" detail={line}"))
+                                    .unwrap_or_default(),
+                            ),
+                        );
+                    }
+                }
+                Err(err) => {
+                    if let Some(app) = app.as_ref() {
+                        log_tauri(
+                            app,
+                            &format!(
+                                "[worktree] failed to start background pnpm install cwd={} pnpm={} error={err}",
+                                install_dir.display(),
+                                pnpm_bin.display()
+                            ),
+                        );
+                    }
+                    break;
                 }
             }
         }
     });
+}
+
+fn find_pnpm_install_dirs(worktree_path: &Path) -> Vec<PathBuf> {
+    fn should_skip_dir(name: &str) -> bool {
+        matches!(
+            name,
+            ".git" | ".bat-cache" | ".bat-worktrees" | "node_modules"
+        )
+    }
+
+    fn visit(dir: &Path, install_dirs: &mut Vec<PathBuf>) {
+        if dir.join("pnpm-lock.yaml").is_file() {
+            install_dirs.push(dir.to_path_buf());
+        }
+
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut child_dirs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if entry.file_name().to_str().is_some_and(should_skip_dir) {
+                continue;
+            }
+            child_dirs.push(path);
+        }
+        child_dirs.sort();
+        for child in child_dirs {
+            visit(&child, install_dirs);
+        }
+    }
+
+    let mut install_dirs = Vec::new();
+    if worktree_path.is_dir() {
+        visit(worktree_path, &mut install_dirs);
+    }
+    install_dirs
 }
 
 fn resolve_pnpm_binary() -> Option<PathBuf> {
@@ -1094,6 +1138,44 @@ mod tests {
         let root = worktree_git_root_from_path("C:/repo/.bat-worktrees/abc")
             .expect("root from worktree path");
         assert!(root.ends_with(Path::new("C:/repo")));
+    }
+
+    #[test]
+    fn pnpm_install_dirs_include_nested_lockfiles() {
+        let base = std::env::temp_dir().join(format!("bat-pnpm-dirs-{}", now_ms()));
+        let frontend = base.join("frontend");
+        let docs = base.join("docs");
+        fs::create_dir_all(&frontend).expect("create frontend dir");
+        fs::create_dir_all(&docs).expect("create docs dir");
+        fs::write(base.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n")
+            .expect("write root lockfile");
+        fs::write(frontend.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n")
+            .expect("write frontend lockfile");
+
+        let install_dirs = find_pnpm_install_dirs(&base);
+
+        assert_eq!(install_dirs, vec![base.clone(), frontend]);
+        fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn pnpm_install_dirs_skip_generated_cache_dirs() {
+        let base = std::env::temp_dir().join(format!("bat-pnpm-skip-{}", now_ms()));
+        let frontend = base.join("frontend");
+        fs::create_dir_all(&frontend).expect("create frontend dir");
+        for generated_dir in [".git", ".bat-cache", ".bat-worktrees", "node_modules"] {
+            let dir = base.join(generated_dir).join("pkg");
+            fs::create_dir_all(&dir).expect("create generated dir");
+            fs::write(dir.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n")
+                .expect("write generated lockfile");
+        }
+        fs::write(frontend.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n")
+            .expect("write frontend lockfile");
+
+        let install_dirs = find_pnpm_install_dirs(&base);
+
+        assert_eq!(install_dirs, vec![frontend]);
+        fs::remove_dir_all(base).ok();
     }
 
     #[test]
