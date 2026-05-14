@@ -315,6 +315,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const archivingRef = useRef(false)
   const VISIBLE_LIMIT = 200
   const ARCHIVE_TRIGGER = 300 // archive when exceeding this
+  const INITIAL_ARCHIVE_LOAD = 200
   const LOAD_BATCH = 50
   const historyLoadedRef = useRef(false)
   const inputHistoryRef = useRef<string[]>([])
@@ -322,6 +323,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const inputDraftRef = useRef('')
   const pendingPromptSentRef = useRef(false)
   const messageCountRef = useRef(0)
+  const autoLoadedArchiveSessionRef = useRef<string | null>(null)
 
   useEffect(() => {
     const sandboxMode = normalizedAgentParams?.sandboxMode
@@ -554,6 +556,54 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   // Combine archived + live messages for rendering and scanning
   const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
   messageCountRef.current = allMessages.length
+  const archiveDlog = useCallback((message: string) => {
+    if (host.debug.isDebugMode === true) host.debug.log(message)
+  }, [])
+
+  useEffect(() => {
+    archiveDlog(
+      `[Codex:${sessionId.slice(0, 8)}] render messages live=${messages.length} archived=${loadedArchive.length} all=${allMessages.length} hasMore=${hasMoreArchived} loadingMore=${isLoadingMore}`
+    )
+  }, [allMessages.length, archiveDlog, hasMoreArchived, isLoadingMore, loadedArchive.length, messages.length, sessionId])
+
+  // Show enough recent archived context by default while still keeping older
+  // archive pages opt-in through the load-more button.
+  useEffect(() => {
+    if (autoLoadedArchiveSessionRef.current === sessionId) return
+    autoLoadedArchiveSessionRef.current = sessionId
+    let cancelled = false
+    archiveDlog(
+      `[Codex:${sessionId.slice(0, 8)}] auto-load archived start limit=${INITIAL_ARCHIVE_LOAD} live=${messages.length} loaded=${loadedArchive.length}`
+    )
+    setIsLoadingMore(true)
+    host.claude.loadArchived(sessionId, 0, INITIAL_ARCHIVE_LOAD)
+      .then((result: { messages: unknown[]; total: number; hasMore: boolean }) => {
+        if (cancelled) return
+        const archived = (result.messages || []) as MessageItem[]
+        archiveDlog(
+          `[Codex:${sessionId.slice(0, 8)}] auto-load archived result messages=${archived.length} total=${result.total || 0} hasMore=${result.hasMore} live=${messages.length}`
+        )
+        archivedCountRef.current = result.total || archived.length
+        loadedFromArchiveRef.current = archived.length
+        setLoadedArchive(archived)
+        setHasMoreArchived(result.hasMore)
+      })
+      .catch((err) => {
+        archiveDlog(
+          `[Codex:${sessionId.slice(0, 8)}] auto-load archived failed: ${err instanceof Error ? err.message : String(err)}`
+        )
+        if (!cancelled) setHasMoreArchived(false)
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingMore(false)
+      })
+    return () => {
+      cancelled = true
+      if (autoLoadedArchiveSessionRef.current === sessionId) {
+        autoLoadedArchiveSessionRef.current = null
+      }
+    }
+  }, [archiveDlog, sessionId])
 
   // Active tasks (running Task/Agent tool calls) for the indicator bar
   const activeTasks = useMemo(() => {
@@ -1128,11 +1178,18 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }
         }
         const historyItems = mainItems
-        setLoadedArchive([])
-        archivedCountRef.current = 0
-        loadedFromArchiveRef.current = 0
-        setHasMoreArchived(false)
-        host.claude.clearArchive(sessionId).catch(() => {})
+        archiveDlog(
+          `${tag} onHistory reset archive items=${historyItems.length} loadedArchive=${loadedArchive.length} archivedCount=${archivedCountRef.current} loadedFromArchive=${loadedFromArchiveRef.current}`
+        )
+        if (historyItems.length > 0 || loadedFromArchiveRef.current === 0) {
+          setLoadedArchive([])
+          archivedCountRef.current = 0
+          loadedFromArchiveRef.current = 0
+          setHasMoreArchived(false)
+          host.claude.clearArchive(sessionId).catch(() => {})
+        } else {
+          archiveDlog(`${tag} onHistory empty; keeping auto-loaded archive`)
+        }
         setStreamingText('')
         setStreamingThinking('')
 
