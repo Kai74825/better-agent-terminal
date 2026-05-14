@@ -19,6 +19,7 @@ export function NotificationBell() {
   const [entries, setEntries] = useState<NotificationEntry[]>(notificationStore.getEntries())
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const latestUnreadShortcut = 'Ctrl+Tab'
 
   useEffect(() => {
     notificationStore.init()
@@ -50,11 +51,17 @@ export function NotificationBell() {
       <button
         className="settings-btn"
         onClick={() => setOpen(o => !o)}
-        title={t('notifications.title')}
-        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, position: 'relative' }}
+        title={`${t('notifications.title')} (${latestUnreadShortcut})`}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}
       >
         <span style={{ fontSize: 14 }}>🔔</span>
         <span>{t('notifications.title')}</span>
+        <span
+          className="shortcut-hint notification-shortcut-hint"
+          style={{ marginRight: unread > 0 ? 18 : 0 }}
+        >
+          {latestUnreadShortcut}
+        </span>
         {unread > 0 && (
           <span
             style={{

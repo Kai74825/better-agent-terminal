@@ -44,6 +44,8 @@ export function ThumbnailBar({
 }: ThumbnailBarProps) {
   const { t } = useTranslation()
   const label = t('terminal.workspaceSessions')
+  const switchWindowShortcut = host.platform === 'darwin' ? '⌘+`' : 'Ctrl+`'
+  const switchSessionShortcut = 'Alt+`'
   const presetGroups = groupAgentPresetsForMenu(agentPresets)
 
   // All hooks must be declared before any conditional return (React rules of hooks)
@@ -271,7 +273,21 @@ export function ThumbnailBar({
   return (
     <div className="thumbnail-bar" style={style}>
       <div className="thumbnail-bar-header">
-        <span>{label}</span>
+        <div className="thumbnail-bar-title">
+          <span>{label}</span>
+          <span
+            className="shortcut-hint"
+            title={`Switch BAT window: ${switchWindowShortcut}`}
+          >
+            Win {switchWindowShortcut}
+          </span>
+          <span
+            className="shortcut-hint"
+            title={`Switch session: ${switchSessionShortcut} / Shift+${switchSessionShortcut}`}
+          >
+            Sess {switchSessionShortcut}
+          </span>
+        </div>
         <div className="thumbnail-bar-actions">
           {onAddTerminal && (
             <div className="thumbnail-add-wrapper" ref={addMenuRef}>
