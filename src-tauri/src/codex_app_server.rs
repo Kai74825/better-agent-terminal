@@ -992,6 +992,37 @@ fn item_id(item: &Value) -> String {
         .to_string()
 }
 
+fn non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn first_non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find_map(|item| non_empty_string(Some(item))))
+}
+
+fn web_search_input(item: &Value) -> Value {
+    let action = item.get("action");
+    if let Some(query) = non_empty_string(item.get("query"))
+        .or_else(|| action.and_then(|value| non_empty_string(value.get("query"))))
+        .or_else(|| first_non_empty_string(item.get("queries")))
+        .or_else(|| action.and_then(|value| first_non_empty_string(value.get("queries"))))
+    {
+        return json!({ "query": query });
+    }
+    if let Some(url) = non_empty_string(item.get("url"))
+        .or_else(|| action.and_then(|value| non_empty_string(value.get("url"))))
+    {
+        return json!({ "url": url });
+    }
+    json!({})
+}
+
 fn tool_status(item: &Value) -> &'static str {
     match item.get("status").and_then(Value::as_str) {
         Some("failed" | "declined") => "error",
@@ -1518,8 +1549,7 @@ impl CodexAppServerState {
                         format!("thread not found; attempting thread/resume thread={thread_id}"),
                     );
                     {
-                        let mut sessions =
-                            self.inner.sessions.lock().expect("codex sessions lock");
+                        let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
                         if let Some(session) = sessions.get_mut(&session_id) {
                             set_runtime_status(
                                 session,
@@ -2428,7 +2458,7 @@ fn handle_item_started(
                     "id": item_id(item),
                     "sessionId": session_id,
                     "toolName": "WebSearch",
-                    "input": { "query": item.get("query").and_then(Value::as_str).unwrap_or("") },
+                    "input": web_search_input(item),
                     "status": "running",
                     "timestamp": now_millis(),
                 }),
@@ -2831,6 +2861,53 @@ mod tests {
             "vite build\u{1b}[2K\rtransforming...\n\u{1b}[32m✓\u{1b}[0m done",
         );
         assert_eq!(output, "vite build\ntransforming...\n✓ done");
+    }
+
+    #[test]
+    fn codex_web_search_input_reads_nested_action_query() {
+        let input = web_search_input(&json!({
+            "type": "webSearch",
+            "id": "ws_1",
+            "query": "",
+            "action": {
+                "type": "search",
+                "query": "tauri nsis PageReinstall",
+                "queries": ["tauri nsis PageReinstall"]
+            }
+        }));
+        assert_eq!(input, json!({ "query": "tauri nsis PageReinstall" }));
+    }
+
+    #[test]
+    fn codex_web_search_input_falls_back_to_query_list() {
+        let input = web_search_input(&json!({
+            "type": "webSearch",
+            "id": "ws_1",
+            "action": {
+                "type": "search",
+                "queries": ["codex app-server webSearch event shape"]
+            }
+        }));
+        assert_eq!(
+            input,
+            json!({ "query": "codex app-server webSearch event shape" })
+        );
+    }
+
+    #[test]
+    fn codex_web_search_input_reads_open_page_url() {
+        let input = web_search_input(&json!({
+            "type": "webSearch",
+            "id": "ws_1",
+            "action": {
+                "type": "open_page",
+                "url": "https://tauri.app/distribute/windows-installer/"
+            }
+        }));
+        assert_eq!(
+            input,
+            json!({ "url": "https://tauri.app/distribute/windows-installer/" })
+        );
     }
 
     #[test]

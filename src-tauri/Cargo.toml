@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Better Agent Terminal — Tauri shell"
 authors = ["TonyQ CO., LTD."]
 edition = "2021"
+default-run = "better-agent-terminal"
 
 [lib]
 # Tauri 2 ships application code as a library so the desktop binary and
