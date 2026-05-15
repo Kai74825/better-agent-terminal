@@ -12,7 +12,7 @@ const MENU_OPEN_LOGS: &str = "app.open-logs";
 pub(crate) fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let about_metadata = AboutMetadata {
         name: Some(APP_LABEL.to_string()),
-        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        version: Some(app.package_info().version.to_string()),
         authors: Some(vec!["TonyQ CO., LTD.".to_string()]),
         comments: Some("Better Agent Terminal".to_string()),
         ..Default::default()

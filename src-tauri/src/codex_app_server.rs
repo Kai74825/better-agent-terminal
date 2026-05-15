@@ -1167,7 +1167,7 @@ impl CodexAppServerState {
                 "clientInfo": {
                     "name": "better_agent_terminal",
                     "title": "Better Agent Terminal",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": app.package_info().version.to_string()
                 },
                 "capabilities": { "experimentalApi": true }
             }),
