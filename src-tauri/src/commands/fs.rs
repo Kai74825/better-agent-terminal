@@ -180,6 +180,27 @@ pub async fn fs_readdir(dir_path: String) -> Vec<FsEntry> {
         .unwrap_or_default()
 }
 
+#[tauri::command]
+pub async fn fs_is_directory(path: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || fs_is_directory_impl(path))
+        .await
+        .unwrap_or(false)
+}
+
+fn fs_is_directory_impl(path: String) -> bool {
+    let abs = match std::path::absolute(&path) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let abs_str = abs.to_string_lossy().to_string();
+    if is_sensitive_path(&abs_str) {
+        return false;
+    }
+    fs::metadata(&abs)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
 fn fs_readdir_impl(dir_path: String) -> Vec<FsEntry> {
     let abs = match std::path::absolute(&dir_path) {
         Ok(p) => p,
@@ -981,6 +1002,26 @@ mod tests {
         assert!(!names.contains(&".git"));
         // src is a directory, README.md is a file → src first.
         assert_eq!(names[0], "src");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_directory_distinguishes_files_from_directories() {
+        let dir = std::env::temp_dir().join(format!("bat-is-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file.txt");
+        fs::write(&file, b"hi").unwrap();
+
+        assert!(tauri::async_runtime::block_on(fs_is_directory(
+            dir.to_string_lossy().into()
+        )));
+        assert!(!tauri::async_runtime::block_on(fs_is_directory(
+            file.to_string_lossy().into()
+        )));
+        assert!(!tauri::async_runtime::block_on(fs_is_directory(
+            dir.join("missing").to_string_lossy().into()
+        )));
         let _ = fs::remove_dir_all(&dir);
     }
 

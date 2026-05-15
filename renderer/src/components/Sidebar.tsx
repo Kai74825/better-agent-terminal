@@ -192,6 +192,19 @@ export function Sidebar({
     if (!ok) window.alert('Workspace move failed. Try saving both windows, then drag again.')
   }, [])
 
+  const addDroppedWorkspaceFolders = useCallback(async (paths: string[]): Promise<number> => {
+    let added = 0
+    for (const filePath of paths) {
+      const isDirectory = await host.fs.isDirectory(filePath).catch(() => false)
+      if (!isDirectory) continue
+      const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
+      workspaceStore.addWorkspace(name, filePath)
+      added++
+    }
+    if (added > 0) await workspaceStore.save()
+    return added
+  }, [])
+
   useEffect(() => {
     return listenTauriNativeDrop((detail) => {
       if (!isTauriNativeDropInside(detail, workspaceListRef.current)) {
@@ -209,15 +222,9 @@ export function Sidebar({
         window.alert('Remote sessions can only add folders that exist on the host.')
         return
       }
-      let added = 0
-      for (const filePath of detail.paths) {
-        const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
-        workspaceStore.addWorkspace(name, filePath)
-        added++
-      }
-      if (added > 0) workspaceStore.save()
+      void addDroppedWorkspaceFolders(detail.paths)
     })
-  }, [draggedId, isRemoteConnected])
+  }, [addDroppedWorkspaceFolders, draggedId, isRemoteConnected])
 
   // Context menu handler
   const handleContextMenu = useCallback((e: React.MouseEvent, workspaceId: string) => {
@@ -457,8 +464,9 @@ export function Sidebar({
         onDrop={(e) => {
           setExternalDragOver(false)
           if (draggedId) return
+          const dataTransfer = e.dataTransfer
           // Cross-window drop on container (append at end)
-          const crossWindow = parseCrossWindowDrop(e.dataTransfer)
+          const crossWindow = parseCrossWindowDrop(dataTransfer)
           if (crossWindow) {
             e.preventDefault()
             void moveWorkspaceToWindow(
@@ -469,7 +477,7 @@ export function Sidebar({
             return
           }
           e.preventDefault()
-          if (isRemoteConnected && e.dataTransfer.types.includes('Files')) {
+          if (isRemoteConnected && dataTransfer.types.includes('Files')) {
             window.alert('Remote sessions can only add folders that exist on the host.')
             setDragOverId(null)
             setDragPosition(null)
@@ -481,28 +489,27 @@ export function Sidebar({
           // against an already-claimed cache entry and surface a spurious
           // "needs the host to expose paths" alert. Skip the DOM-path
           // workspace addition entirely under Tauri.
-          if (isTauri() && e.dataTransfer.types.includes('Files')) {
+          if (isTauri() && dataTransfer.types.includes('Files')) {
             setDragOverId(null)
             setDragPosition(null)
             return
           }
-          const files = Array.from(e.dataTransfer.files)
-          let added = 0
+          const files = Array.from(dataTransfer.files)
+          const paths: string[] = []
           let pathlessSeen = false
           for (const file of files) {
             const filePath = host.shell.getPathForFile(file)
             if (filePath) {
-              const name = filePath.split(/[/\\]/).filter(Boolean).pop() || 'Workspace'
-              workspaceStore.addWorkspace(name, filePath)
-              added++
+              paths.push(filePath)
             } else {
               pathlessSeen = true
             }
           }
-          if (added > 0) workspaceStore.save()
-          else if (pathlessSeen) {
-            window.alert('Drag-drop of folders to add as workspaces needs the host to expose paths; use the "Add workspace" button instead.')
-          }
+          void addDroppedWorkspaceFolders(paths).then((added) => {
+            if (added === 0 && pathlessSeen) {
+              window.alert('Drag-drop of folders to add as workspaces needs the host to expose paths; use the "Add workspace" button instead.')
+            }
+          })
         }}
       >
         {filteredWorkspaces.map(workspace => (

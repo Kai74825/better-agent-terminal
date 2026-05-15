@@ -399,6 +399,7 @@ function createTauriHost(): BatAppAPI {
           'fs_readdir',
           { dirPath },
         ),
+      isDirectory: (path: string) => getInvoke()<boolean>('fs_is_directory', { path }),
       home: () => getInvoke()<string>('fs_home'),
       listDirs: (dirPath: string, includeHidden: boolean) =>
         getInvoke()<

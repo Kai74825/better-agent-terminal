@@ -139,6 +139,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             fs_cmd::fs_read_file,
             fs_cmd::fs_home,
             fs_cmd::fs_readdir,
+            fs_cmd::fs_is_directory,
             fs_cmd::fs_list_dirs,
             fs_cmd::fs_mkdir,
             fs_cmd::fs_delete_path,
