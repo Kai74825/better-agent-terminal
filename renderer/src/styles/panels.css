@@ -358,10 +358,94 @@
 }
 
 /* Terminal Panel */
+.terminal-panel-shell {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.terminal-viewport-bar {
+  flex: 0 0 auto;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.terminal-viewport-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.terminal-viewport-badge.mobile {
+  color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 55%, transparent);
+}
+
+.terminal-viewport-action {
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.terminal-viewport-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.terminal-viewport-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.terminal-panel-stage {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: auto;
+}
+
+.terminal-panel-shell.mobile-layout .terminal-panel-stage {
+  justify-content: center;
+  padding: 12px;
+}
+
 .terminal-panel {
   height: 100%;
   width: 100%;
+  min-width: 0;
   contain: layout style;
+}
+
+.terminal-panel-shell.mobile-layout .terminal-panel {
+  max-width: 100%;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary);
 }
 
 .terminal-panel .xterm {
@@ -428,6 +512,11 @@
 }
 
 .dialog-btn.cancel {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.dialog-btn.secondary {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }

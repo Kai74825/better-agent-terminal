@@ -20,13 +20,14 @@ use crate::commands::settings::resolve_shell_path;
 use crate::commands::worker_buffer::{append_worker_log_lines, WorkerBufferState};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Debug, Serialize)]
@@ -76,6 +77,7 @@ pub struct PtySession {
     child: Box<dyn Child + Send + Sync>,
     cwd: String,
     kind: String,
+    viewport: TerminalViewportState,
 }
 
 #[derive(Clone)]
@@ -172,6 +174,113 @@ const OUTPUT_FRAME_MAX_BYTES: usize = 64 * 1024;
 const WORKER_PTY_SEPARATOR: &str = "__w__";
 const DEFAULT_PTY_COLS: u16 = 100;
 const DEFAULT_PTY_ROWS: u16 = 30;
+pub const MOBILE_TERMINAL_COLS: u16 = 56;
+pub const MOBILE_TERMINAL_ROWS: u16 = 24;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalViewportMode {
+    Desktop,
+    Mobile,
+}
+
+impl Default for TerminalViewportMode {
+    fn default() -> Self {
+        Self::Desktop
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalViewportSource {
+    Desktop,
+    Mobile,
+}
+
+impl Default for TerminalViewportSource {
+    fn default() -> Self {
+        Self::Desktop
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalViewportState {
+    pub mode: TerminalViewportMode,
+    pub cols: u16,
+    pub rows: u16,
+    pub updated_by: TerminalViewportSource,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SetViewportModeOptions {
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+    #[serde(default)]
+    pub source: TerminalViewportSource,
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn desktop_viewport_state(cols: u16, rows: u16) -> TerminalViewportState {
+    TerminalViewportState {
+        mode: TerminalViewportMode::Desktop,
+        cols,
+        rows,
+        updated_by: TerminalViewportSource::Desktop,
+        updated_at: unix_ms(),
+    }
+}
+
+fn positive_size(value: Option<u16>, fallback: u16) -> u16 {
+    value.filter(|value| *value > 0).unwrap_or(fallback)
+}
+
+fn validate_pty_size(cols: u16, rows: u16) -> Result<(), CommandError> {
+    if cols == 0 || rows == 0 {
+        return Err(CommandError {
+            message: format!("invalid pty size: {cols}x{rows}"),
+        });
+    }
+    Ok(())
+}
+
+fn resize_session(session: &mut PtySession, cols: u16, rows: u16) -> Result<(), CommandError> {
+    validate_pty_size(cols, rows)?;
+    session
+        .master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
+fn emit_viewport_state(app: &AppHandle, id: &str, state: &TerminalViewportState) {
+    crate::event_hub::publish_runtime_event(
+        app,
+        "pty:viewport-state",
+        json!({
+            "id": id,
+            "state": state,
+        }),
+        "rust-pty",
+    );
+}
 
 fn worker_parts_from_pty_id(id: &str) -> Option<(&str, &str)> {
     let (panel_id, process_name) = id.split_once(WORKER_PTY_SEPARATOR)?;
@@ -515,6 +624,7 @@ pub(crate) fn start_pty_session(
                 child,
                 cwd: options.cwd.clone(),
                 kind: options.r#type.clone(),
+                viewport: desktop_viewport_state(cols, rows),
             },
         );
     }
@@ -604,24 +714,195 @@ pub(crate) fn write_pty_session(
 
 #[tauri::command]
 pub fn pty_resize(
+    app: AppHandle,
     state: State<'_, PtyState>,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), CommandError> {
-    state.with_session(&id, |s| {
-        s.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| CommandError {
-                message: e.to_string(),
-            })?;
-        Ok(())
-    })
+    resize_pty_session_from_desktop(&app, &state, &id, cols, rows).map(|_| ())
+}
+
+pub(crate) fn get_pty_viewport_state(
+    state: &PtyState,
+    id: &str,
+) -> Result<TerminalViewportState, CommandError> {
+    let map = state.inner.lock().map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
+    map.get(id)
+        .map(|session| session.viewport.clone())
+        .ok_or_else(|| CommandError {
+            message: format!("pty session {id} not found"),
+        })
+}
+
+fn set_pty_viewport_size_for_source(
+    app: &AppHandle,
+    state: &PtyState,
+    id: &str,
+    cols: u16,
+    rows: u16,
+    source: TerminalViewportSource,
+) -> Result<(TerminalViewportState, bool), CommandError> {
+    validate_pty_size(cols, rows)?;
+    let (viewport, applied) = state.with_session(id, |session| {
+        if session.viewport.mode == TerminalViewportMode::Desktop
+            && source == TerminalViewportSource::Mobile
+        {
+            return Ok((session.viewport.clone(), false));
+        }
+
+        session.viewport.cols = cols;
+        session.viewport.rows = rows;
+        session.viewport.updated_by = source;
+        session.viewport.updated_at = unix_ms();
+        let next = session.viewport.clone();
+        resize_session(session, cols, rows)?;
+        Ok((next, true))
+    })?;
+    if applied {
+        emit_viewport_state(app, id, &viewport);
+    }
+    Ok((viewport, applied))
+}
+
+pub(crate) fn resize_pty_session_from_desktop(
+    app: &AppHandle,
+    state: &PtyState,
+    id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<bool, CommandError> {
+    let (_, applied) = set_pty_viewport_size_for_source(
+        app,
+        state,
+        id,
+        cols,
+        rows,
+        TerminalViewportSource::Desktop,
+    )?;
+    Ok(applied)
+}
+
+pub(crate) fn resize_pty_session_from_mobile_view(
+    app: &AppHandle,
+    state: &PtyState,
+    id: &str,
+    cols: u16,
+    rows: u16,
+) -> Result<bool, CommandError> {
+    let (_, applied) = set_pty_viewport_size_for_source(
+        app,
+        state,
+        id,
+        cols,
+        rows,
+        TerminalViewportSource::Mobile,
+    )?;
+    Ok(applied)
+}
+
+pub(crate) fn set_pty_viewport_mode(
+    app: &AppHandle,
+    state: &PtyState,
+    id: &str,
+    mode: TerminalViewportMode,
+    options: Option<SetViewportModeOptions>,
+) -> Result<TerminalViewportState, CommandError> {
+    let opts = options.unwrap_or_default();
+    let next = state.with_session(id, |session| {
+        let now = unix_ms();
+        match mode {
+            TerminalViewportMode::Mobile => {
+                let cols = positive_size(opts.cols, MOBILE_TERMINAL_COLS);
+                let rows = positive_size(opts.rows, MOBILE_TERMINAL_ROWS);
+                validate_pty_size(cols, rows)?;
+                session.viewport = TerminalViewportState {
+                    mode,
+                    cols,
+                    rows,
+                    updated_by: opts.source,
+                    updated_at: now,
+                };
+                let next = session.viewport.clone();
+                resize_session(session, cols, rows)?;
+                Ok(next)
+            }
+            TerminalViewportMode::Desktop => {
+                let cols = if opts.source == TerminalViewportSource::Desktop {
+                    positive_size(opts.cols, session.viewport.cols)
+                } else {
+                    session.viewport.cols
+                };
+                let rows = if opts.source == TerminalViewportSource::Desktop {
+                    positive_size(opts.rows, session.viewport.rows)
+                } else {
+                    session.viewport.rows
+                };
+                validate_pty_size(cols, rows)?;
+                let resize_now = opts.source == TerminalViewportSource::Desktop
+                    && (opts.cols.is_some() || opts.rows.is_some());
+                session.viewport = TerminalViewportState {
+                    mode,
+                    cols,
+                    rows,
+                    updated_by: opts.source,
+                    updated_at: now,
+                };
+                let next = session.viewport.clone();
+                if resize_now {
+                    resize_session(session, cols, rows)?;
+                }
+                Ok(next)
+            }
+        }
+    })?;
+    emit_viewport_state(app, id, &next);
+    Ok(next)
+}
+
+pub(crate) fn set_pty_viewport_size(
+    app: &AppHandle,
+    state: &PtyState,
+    id: &str,
+    cols: u16,
+    rows: u16,
+    source: TerminalViewportSource,
+) -> Result<TerminalViewportState, CommandError> {
+    let (viewport, _) = set_pty_viewport_size_for_source(app, state, id, cols, rows, source)?;
+    Ok(viewport)
+}
+
+#[tauri::command]
+pub fn pty_get_viewport_state(
+    state: State<'_, PtyState>,
+    id: String,
+) -> Result<TerminalViewportState, CommandError> {
+    get_pty_viewport_state(&state, &id)
+}
+
+#[tauri::command]
+pub fn pty_set_viewport_mode(
+    app: AppHandle,
+    state: State<'_, PtyState>,
+    id: String,
+    mode: TerminalViewportMode,
+    options: Option<SetViewportModeOptions>,
+) -> Result<TerminalViewportState, CommandError> {
+    set_pty_viewport_mode(&app, &state, &id, mode, options)
+}
+
+#[tauri::command]
+pub fn pty_set_viewport_size(
+    app: AppHandle,
+    state: State<'_, PtyState>,
+    id: String,
+    cols: u16,
+    rows: u16,
+    source: TerminalViewportSource,
+) -> Result<TerminalViewportState, CommandError> {
+    set_pty_viewport_size(&app, &state, &id, cols, rows, source)
 }
 
 #[tauri::command]
@@ -662,7 +943,7 @@ fn pty_restart_impl(
     cwd: String,
     shell: Option<String>,
 ) -> Result<bool, CommandError> {
-    let kind = {
+    let (kind, viewport) = {
         let mut map = handle.lock().map_err(|e| CommandError {
             message: e.to_string(),
         })?;
@@ -670,29 +951,38 @@ fn pty_restart_impl(
             return Ok(false);
         };
         let kind = session.kind.clone();
+        let viewport = session.viewport.clone();
         let _ = session.child.kill();
-        kind
+        (kind, viewport)
     };
 
     start_pty_session(
         &app,
-        handle,
+        Arc::clone(&handle),
         None,
         CreatePtyOptions {
-            id,
+            id: id.clone(),
             cwd,
             r#type: kind,
             shell,
             command: None,
             args: None,
-            cols: None,
-            rows: None,
+            cols: Some(viewport.cols),
+            rows: Some(viewport.rows),
             agent_preset: None,
             custom_env: None,
             per_terminal_history: None,
             history_key: None,
         },
     )?;
+    {
+        let mut map = handle.lock().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
+        if let Some(session) = map.get_mut(&id) {
+            session.viewport = viewport;
+        }
+    }
     Ok(true)
 }
 
@@ -794,6 +1084,22 @@ mod tests {
         };
         assert!(history_file_name(&opts).ends_with("_history"));
         assert_ne!(history_file_name(&opts), "term-1_history");
+    }
+
+    #[test]
+    fn viewport_state_defaults_to_desktop_layout() {
+        let state = desktop_viewport_state(120, 40);
+        assert_eq!(state.mode, TerminalViewportMode::Desktop);
+        assert_eq!(state.cols, 120);
+        assert_eq!(state.rows, 40);
+        assert_eq!(state.updated_by, TerminalViewportSource::Desktop);
+    }
+
+    #[test]
+    fn viewport_size_rejects_zero_dimensions() {
+        assert!(validate_pty_size(56, 24).is_ok());
+        assert!(validate_pty_size(0, 24).is_err());
+        assert!(validate_pty_size(56, 0).is_err());
     }
 
     #[test]

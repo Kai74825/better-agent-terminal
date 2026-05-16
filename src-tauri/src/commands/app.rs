@@ -10,9 +10,12 @@ use crate::app_data;
 use crate::log_file::append_line;
 use crate::window_registry;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct OpenNewInstanceResult {
@@ -24,10 +27,72 @@ pub struct OpenNewInstanceResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileWindowCloseRequest {
+    pub window_id: String,
+    pub profile_id: String,
+    pub window_index: u32,
+    pub window_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileWindowCloseAction {
+    Temporary,
+    RemoveFromProfile,
+    Cancel,
+}
+
 static ACTIVE_PROFILE_RESTORE_DONE: OnceLock<Mutex<bool>> = OnceLock::new();
+static PROFILE_CLOSE_PROMPTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static PROFILE_CLOSE_ALLOWED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn active_profile_restore_done() -> &'static Mutex<bool> {
     ACTIVE_PROFILE_RESTORE_DONE.get_or_init(|| Mutex::new(false))
+}
+
+fn profile_close_prompts() -> &'static Mutex<HashSet<String>> {
+    PROFILE_CLOSE_PROMPTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn profile_close_allowed() -> &'static Mutex<HashSet<String>> {
+    PROFILE_CLOSE_ALLOWED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn mark_profile_close_prompt_pending(window_id: &str) -> bool {
+    profile_close_prompts()
+        .lock()
+        .unwrap()
+        .insert(window_id.to_string())
+}
+
+fn clear_profile_close_prompt_pending(window_id: &str) {
+    profile_close_prompts().lock().unwrap().remove(window_id);
+}
+
+fn allow_profile_window_close(window_id: &str) {
+    profile_close_allowed()
+        .lock()
+        .unwrap()
+        .insert(window_id.to_string());
+}
+
+fn take_profile_window_close_allowed(window_id: &str) -> bool {
+    profile_close_allowed().lock().unwrap().remove(window_id)
+}
+
+fn clear_profile_window_close_state(window_id: &str) {
+    clear_profile_close_prompt_pending(window_id);
+    profile_close_allowed().lock().unwrap().remove(window_id);
+}
+
+fn parse_profile_window_close_action(value: &str) -> Option<ProfileWindowCloseAction> {
+    match value {
+        "temporary" => Some(ProfileWindowCloseAction::Temporary),
+        "removeFromProfile" => Some(ProfileWindowCloseAction::RemoveFromProfile),
+        "cancel" => Some(ProfileWindowCloseAction::Cancel),
+        _ => None,
+    }
 }
 
 fn active_profiles_to_restore(
@@ -215,11 +280,50 @@ pub(crate) fn app_focus_next_window_from_active(app: &AppHandle) -> bool {
     app_focus_next_window(app.clone(), window)
 }
 
+fn profile_window_close_request(
+    app: &AppHandle,
+    window_id: &str,
+) -> Option<ProfileWindowCloseRequest> {
+    let profile_id = window_registry::profile_id_for_window(app, window_id)?;
+    let window_count = window_registry::live_profile_window_count(app, &profile_id);
+    if window_count <= 1 {
+        return None;
+    }
+    let window_index = window_registry::window_index(app, window_id);
+    if window_index <= 1 {
+        return None;
+    }
+    Some(ProfileWindowCloseRequest {
+        window_id: window_id.to_string(),
+        profile_id,
+        window_index,
+        window_count,
+    })
+}
+
+fn request_profile_window_close_decision(app: &AppHandle, window_id: &str) {
+    let Some(request) = profile_window_close_request(app, window_id) else {
+        return;
+    };
+    if !mark_profile_close_prompt_pending(window_id) {
+        return;
+    }
+    let _ = app.emit_to(window_id, "app:profile-window-close-requested", request);
+}
+
 pub fn attach_window_lifecycle(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     let window_id = window.label().to_string();
     window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Focused(true)) {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            if take_profile_window_close_allowed(&window_id) {
+                return;
+            }
+            if profile_window_close_request(&app, &window_id).is_some() {
+                api.prevent_close();
+                request_profile_window_close_decision(&app, &window_id);
+            }
+        } else if matches!(event, WindowEvent::Focused(true)) {
             window_registry::mark_window_active(&app, &window_id);
         } else if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
             if let Some(window) = app.get_webview_window(&window_id) {
@@ -236,6 +340,7 @@ pub fn attach_window_lifecycle(window: &WebviewWindow) {
             }
         } else if matches!(event, WindowEvent::Destroyed) {
             log_tauri(&app, &format!("[window] destroyed label={window_id}"));
+            clear_profile_window_close_state(&window_id);
             if let Some(profile_id) = window_registry::profile_id_for_window(&app, &window_id) {
                 if !window_registry::has_other_live_profile_windows(&app, &profile_id, &window_id) {
                     let _ = profile_cmd::deactivate_profile_id(&app, &profile_id);
@@ -294,6 +399,27 @@ pub fn app_get_window_profile(app: AppHandle, window: WebviewWindow) -> Option<S
 #[tauri::command]
 pub fn app_set_title(window: WebviewWindow, title: String) -> Result<(), String> {
     window.set_title(&title).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn app_resolve_profile_window_close(
+    app: AppHandle,
+    window: WebviewWindow,
+    action: String,
+) -> bool {
+    let Some(action) = parse_profile_window_close_action(&action) else {
+        return false;
+    };
+    let window_id = window.label().to_string();
+    clear_profile_close_prompt_pending(&window_id);
+    if action == ProfileWindowCloseAction::Cancel {
+        return false;
+    }
+    if action == ProfileWindowCloseAction::RemoveFromProfile {
+        let _ = window_registry::remove_profile_window_entry(&app, &window_id);
+    }
+    allow_profile_window_close(&window_id);
+    window.close().is_ok()
 }
 
 #[tauri::command]
@@ -423,6 +549,41 @@ mod tests {
         assert!(json.contains("\"alreadyOpen\":false"), "got: {json}");
         assert!(json.contains("\"windowIds\":[\"w1\"]"), "got: {json}");
         assert!(!json.contains("already_open"), "snake_case leaked: {json}");
+    }
+
+    #[test]
+    fn profile_window_close_request_serializes_camel_case() {
+        let request = ProfileWindowCloseRequest {
+            window_id: "profile-default-1".into(),
+            profile_id: "default".into(),
+            window_index: 2,
+            window_count: 3,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(
+            json.contains("\"windowId\":\"profile-default-1\""),
+            "got: {json}"
+        );
+        assert!(json.contains("\"profileId\":\"default\""), "got: {json}");
+        assert!(json.contains("\"windowIndex\":2"), "got: {json}");
+        assert!(json.contains("\"windowCount\":3"), "got: {json}");
+    }
+
+    #[test]
+    fn parse_profile_window_close_action_accepts_expected_values() {
+        assert_eq!(
+            parse_profile_window_close_action("temporary"),
+            Some(ProfileWindowCloseAction::Temporary)
+        );
+        assert_eq!(
+            parse_profile_window_close_action("removeFromProfile"),
+            Some(ProfileWindowCloseAction::RemoveFromProfile)
+        );
+        assert_eq!(
+            parse_profile_window_close_action("cancel"),
+            Some(ProfileWindowCloseAction::Cancel)
+        );
+        assert_eq!(parse_profile_window_close_action("remove"), None);
     }
 
     #[test]

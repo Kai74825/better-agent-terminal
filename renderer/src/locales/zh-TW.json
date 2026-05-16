@@ -311,6 +311,10 @@
     "addTerminalOrAgent": "新增終端或 Agent",
     "terminalLabel": "終端",
     "worktreeTerminalLabel": "Terminal (worktree)",
+    "desktopLayout": "桌面版面",
+    "mobileLayout": "手機版面",
+    "useDesktopLayout": "使用桌面版面",
+    "useMobileLayout": "使用手機版面",
     "expandThumbnails": "展開縮圖",
     "collapsePanel": "收合面板"
   },
@@ -322,7 +326,11 @@
     "closeWorktreeSessionConfirm": "要關閉這個 worktree 工作階段嗎？你也可以一併清理 worktree。",
     "closeWorktreeSessionMergedConfirm": "這個 worktree 已經合併到來源分支，可以安全關閉。",
     "closeAndCleanWorktree": "關閉並清理 Worktree",
-    "closeKeepWorktree": "關閉（保留 Worktree）"
+    "closeKeepWorktree": "關閉（保留 Worktree）",
+    "closeProfileWindow": "關閉 Profile 視窗？",
+    "closeProfileWindowConfirm": "{{profile}} 目前有 {{count}} 個開啟中的視窗。要如何處理第 {{index}} 個視窗？",
+    "temporarilyCloseWindow": "暫時關閉視窗",
+    "removeWindowFromProfile": "從 Profile 移除"
   },
 
   "snippets": {

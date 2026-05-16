@@ -14,6 +14,7 @@ import { MarkdownPreviewPanel } from './components/MarkdownPreviewPanel'
 import { WorkspaceEnvDialog } from './components/WorkspaceEnvDialog'
 import { ResizeHandle } from './components/ResizeHandle'
 import { ProfilePanel } from './components/ProfilePanel'
+import { ProfileWindowCloseDialog } from './components/ProfileWindowCloseDialog'
 import { FolderPicker } from './components/FolderPicker'
 import { consumeKeyboardShortcut, isBackquoteShortcutEvent } from './utils/keyboard-shortcuts'
 import type { AppState, EnvVariable, TerminalInstance } from './types'
@@ -38,6 +39,13 @@ const MIN_SNIPPET_WIDTH = 180
 const MAX_SNIPPET_WIDTH = 500
 
 type WindowAuthInfo = { email: string; subscriptionType?: string }
+type ProfileWindowCloseAction = 'temporary' | 'removeFromProfile' | 'cancel'
+type ProfileWindowCloseRequest = {
+  windowId: string
+  profileId: string
+  windowIndex: number
+  windowCount: number
+}
 
 function normalizeWindowAuthInfo(info: unknown): WindowAuthInfo | null {
   if (!info || typeof info !== 'object') return null
@@ -135,6 +143,7 @@ export default function App() {
   const [remoteClientConnected, setRemoteClientConnected] = useState(false)
   const isRemoteConnected = activeProfileIsRemote && remoteClientConnected
   const [appNotification, setAppNotification] = useState<string | null>(null)
+  const [profileWindowCloseRequest, setProfileWindowCloseRequest] = useState<ProfileWindowCloseRequest | null>(null)
   const [envDialogWorkspaceId, setEnvDialogWorkspaceId] = useState<string | null>(null)
   // Right sidebar tabs
   const [showSnippetSidebar] = useState(true)
@@ -177,6 +186,15 @@ export default function App() {
       cancelStart()
       if (interval) clearInterval(interval)
       window.removeEventListener('claude-account-switched', onAccountSwitch)
+    }
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = host.app.onProfileWindowCloseRequested?.((request: ProfileWindowCloseRequest) => {
+      setProfileWindowCloseRequest(request)
+    })
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
     }
   }, [])
   useEffect(() => {
@@ -677,6 +695,18 @@ export default function App() {
     setShowProfiles(false)
   }, [t])
 
+  const resolveProfileWindowClose = useCallback(async (action: ProfileWindowCloseAction) => {
+    setProfileWindowCloseRequest(null)
+    try {
+      await host.app.resolveProfileWindowClose(action)
+    } catch (err) {
+      await host.debug.log('[App] resolveProfileWindowClose failed', {
+        action,
+        error: err instanceof Error ? err.message : String(err),
+      }).catch(() => {})
+    }
+  }, [])
+
   // Get the workspace for env dialog
   const envDialogWorkspace = envDialogWorkspaceId
     ? state.workspaces.find(w => w.id === envDialogWorkspaceId)
@@ -935,6 +965,15 @@ export default function App() {
           onRemove={(key: string) => workspaceStore.removeWorkspaceEnvVar(envDialogWorkspaceId!, key)}
           onUpdate={(key: string, updates: Partial<EnvVariable>) => workspaceStore.updateWorkspaceEnvVar(envDialogWorkspaceId!, key, updates)}
           onClose={() => setEnvDialogWorkspaceId(null)}
+        />
+      )}
+      {profileWindowCloseRequest && (
+        <ProfileWindowCloseDialog
+          request={profileWindowCloseRequest}
+          profileName={activeProfileName.replace(/:\d+$/, '')}
+          onTemporaryClose={() => resolveProfileWindowClose('temporary')}
+          onRemoveFromProfile={() => resolveProfileWindowClose('removeFromProfile')}
+          onCancel={() => resolveProfileWindowClose('cancel')}
         />
       )}
       {appNotification && (

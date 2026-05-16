@@ -438,6 +438,16 @@ fn remove_profile_window_entries(entries: &mut Vec<WindowEntry>, profile_id: &st
     entries.retain(|entry| entry.profile_id != profile_id || entry.detached_workspace_id.is_some());
 }
 
+fn remove_profile_window_entry_from_entries(
+    entries: &mut Vec<WindowEntry>,
+    window_id: &str,
+) -> Option<String> {
+    let index = entries
+        .iter()
+        .position(|entry| entry.id == window_id && entry.detached_workspace_id.is_none())?;
+    Some(entries.remove(index).profile_id)
+}
+
 fn make_window_id(profile_id: &str, index: usize) -> String {
     let safe = profile_id
         .chars()
@@ -526,6 +536,27 @@ pub fn has_other_live_profile_windows(
             && entry.detached_workspace_id.is_none()
             && live_window_ids.contains(&entry.id)
     })
+}
+
+pub fn live_profile_window_count(app: &AppHandle, profile_id: &str) -> usize {
+    let live_window_ids = app
+        .webview_windows()
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.profile_id == profile_id
+                && entry.detached_workspace_id.is_none()
+                && live_window_ids.contains(&entry.id)
+        })
+        .count()
 }
 
 pub fn window_bounds(app: &AppHandle, window_id: &str) -> Option<(f64, f64, f64, f64)> {
@@ -928,6 +959,19 @@ pub fn create_empty_entry_for_profile(app: &AppHandle, profile_id: &str) -> Wind
     entry
 }
 
+pub fn remove_profile_window_entry(app: &AppHandle, window_id: &str) -> Option<String> {
+    let state = app.state::<WindowRegistryState>();
+    let mut entries = state.entries.lock().unwrap();
+    if entries.is_empty() {
+        *entries = load_entries(app);
+    }
+    let profile_id = remove_profile_window_entry_from_entries(&mut entries, window_id)?;
+    persist_entries(app, &entries);
+    let windows = profile_windows(&entries, &profile_id);
+    write_profile_snapshot(app, &profile_id, &windows);
+    Some(profile_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,6 +1047,55 @@ mod tests {
             .map(|entry| entry.id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["detached-a", "profile-b-1"]);
+    }
+
+    #[test]
+    fn remove_profile_window_entry_removes_one_regular_window() {
+        let mut entries = vec![
+            WindowEntry {
+                id: "w1".into(),
+                profile_id: "a".into(),
+                snapshot: snapshot_from_workspace_value(json!({
+                    "workspaces": [{"id": "ws1"}],
+                    "terminals": [{"id": "t1", "workspaceId": "ws1"}],
+                })),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 1,
+            },
+            WindowEntry {
+                id: "w2".into(),
+                profile_id: "a".into(),
+                snapshot: snapshot_from_workspace_value(json!({
+                    "workspaces": [{"id": "ws2"}],
+                    "terminals": [{"id": "t2", "workspaceId": "ws2"}],
+                })),
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 2,
+            },
+            WindowEntry {
+                id: "d1".into(),
+                profile_id: "a".into(),
+                snapshot: empty_snapshot(),
+                detached_workspace_id: Some("ws-detached".into()),
+                detached_parent_window_id: Some("w1".into()),
+                last_active_at: 3,
+            },
+        ];
+
+        assert_eq!(
+            remove_profile_window_entry_from_entries(&mut entries, "w1").as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["w2", "d1"]
+        );
+        assert_eq!(profile_windows(&entries, "a").len(), 1);
     }
 
     #[test]

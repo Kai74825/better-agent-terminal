@@ -78,6 +78,33 @@ async function run() {
       if (cmd === 'pty_create') return 'term-1' as unknown as T
       if (cmd === 'pty_write') return undefined as unknown as T
       if (cmd === 'pty_resize') return undefined as unknown as T
+      if (cmd === 'pty_get_viewport_state') {
+        return {
+          mode: 'desktop',
+          cols: 120,
+          rows: 32,
+          updatedBy: 'desktop',
+          updatedAt: 1,
+        } as unknown as T
+      }
+      if (cmd === 'pty_set_viewport_mode') {
+        return {
+          mode: args?.mode,
+          cols: args?.mode === 'mobile' ? 56 : 120,
+          rows: args?.mode === 'mobile' ? 24 : 32,
+          updatedBy: 'desktop',
+          updatedAt: 2,
+        } as unknown as T
+      }
+      if (cmd === 'pty_set_viewport_size') {
+        return {
+          mode: 'mobile',
+          cols: args?.cols,
+          rows: args?.rows,
+          updatedBy: args?.source,
+          updatedAt: 3,
+        } as unknown as T
+      }
       if (cmd === 'pty_kill') return undefined as unknown as T
       if (cmd === 'pty_restart') return true as unknown as T
       if (cmd === 'pty_get_cwd') return '/x' as unknown as T
@@ -113,6 +140,7 @@ async function run() {
       if (cmd === 'app_focus_next_window') return false as unknown as T
       if (cmd === 'app_open_new_instance') return { alreadyOpen: true } as unknown as T
       if (cmd === 'app_restore_active_profiles') return ['profile-y'] as unknown as T
+      if (cmd === 'app_resolve_profile_window_close') return true as unknown as T
       if (cmd === 'app_set_dock_badge') return undefined as unknown as T
       if (cmd === 'notification_list') return [] as unknown as T
       if (cmd === 'notification_mark_read') return true as unknown as T
@@ -313,6 +341,31 @@ async function run() {
     assert.equal(ptyId, 'term-1')
     await mod.host.pty.write('term-1', 'echo hi\n')
     await mod.host.pty.resize('term-1', 120, 32)
+    assert.deepEqual(await mod.host.pty.getViewportState('term-1'), {
+      mode: 'desktop',
+      cols: 120,
+      rows: 32,
+      updatedBy: 'desktop',
+      updatedAt: 1,
+    })
+    assert.deepEqual(await mod.host.pty.setViewportMode('term-1', 'mobile', {
+      cols: 56,
+      rows: 24,
+      source: 'desktop',
+    }), {
+      mode: 'mobile',
+      cols: 56,
+      rows: 24,
+      updatedBy: 'desktop',
+      updatedAt: 2,
+    })
+    assert.deepEqual(await mod.host.pty.setViewportSize('term-1', 48, 24, 'mobile'), {
+      mode: 'mobile',
+      cols: 48,
+      rows: 24,
+      updatedBy: 'mobile',
+      updatedAt: 3,
+    })
     await mod.host.pty.kill('term-1')
     assert.equal(await mod.host.pty.restart('term-1', '/x', '/bin/zsh'), true)
     assert.equal(await mod.host.pty.getCwd('term-1'), '/x')
@@ -376,6 +429,10 @@ async function run() {
     const newInst = await mod.host.app.openNewInstance('profile-x')
     assert.deepEqual(newInst, { alreadyOpen: true })
     assert.deepEqual(await mod.host.app.restoreActiveProfiles('profile-x'), ['profile-y'])
+    assert.equal(await mod.host.app.resolveProfileWindowClose('temporary'), true)
+    const unsubProfileWindowClose = mod.host.app.onProfileWindowCloseRequested(() => {})
+    assert.equal(typeof unsubProfileWindowClose, 'function')
+    unsubProfileWindowClose()
     await mod.host.app.setDockBadge(7)
 
     // notification.* — in-memory store on the Rust side.
@@ -610,6 +667,9 @@ async function run() {
       'image_save_data_url',
       'clipboard_save_image',
       'clipboard_write_image',
+      'pty_get_viewport_state',
+      'pty_set_viewport_mode',
+      'pty_set_viewport_size',
       'pty_restart',
       'pty_get_cwd',
       'debug_open_logs_folder',
@@ -660,6 +720,19 @@ async function run() {
       { cmd: 'pty_create', args: { options: { id: 'term-1', cwd: '/x', type: 'terminal' } } },
       { cmd: 'pty_write', args: { id: 'term-1', data: 'echo hi\n' } },
       { cmd: 'pty_resize', args: { id: 'term-1', cols: 120, rows: 32 } },
+      { cmd: 'pty_get_viewport_state', args: { id: 'term-1' } },
+      {
+        cmd: 'pty_set_viewport_mode',
+        args: {
+          id: 'term-1',
+          mode: 'mobile',
+          options: { cols: 56, rows: 24, source: 'desktop' },
+        },
+      },
+      {
+        cmd: 'pty_set_viewport_size',
+        args: { id: 'term-1', cols: 48, rows: 24, source: 'mobile' },
+      },
       { cmd: 'pty_kill', args: { id: 'term-1' } },
       { cmd: 'pty_restart', args: { id: 'term-1', cwd: '/x', shell: '/bin/zsh' } },
       { cmd: 'pty_get_cwd', args: { id: 'term-1' } },
@@ -698,6 +771,7 @@ async function run() {
       { cmd: 'app_focus_next_window', args: undefined },
       { cmd: 'app_open_new_instance', args: { profileId: 'profile-x' } },
       { cmd: 'app_restore_active_profiles', args: { currentProfileId: 'profile-x' } },
+      { cmd: 'app_resolve_profile_window_close', args: { action: 'temporary' } },
       { cmd: 'app_set_dock_badge', args: { count: 7 } },
       { cmd: 'notification_list', args: undefined },
       { cmd: 'notification_mark_read', args: { id: 'n1' } },

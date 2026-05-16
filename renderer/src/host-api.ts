@@ -301,6 +301,21 @@ export function resolveClaudeEventSecondArg(
 
 type PtyOutputPayload = { id: string; data: string }
 type PtyExitPayload = { id: string; exitCode: number }
+export type TerminalViewportMode = 'desktop' | 'mobile'
+export type TerminalViewportSource = 'desktop' | 'mobile'
+export type TerminalViewportState = {
+  mode: TerminalViewportMode
+  cols: number
+  rows: number
+  updatedBy: TerminalViewportSource
+  updatedAt: number
+}
+export type SetViewportModeOptions = {
+  cols?: number
+  rows?: number
+  source: TerminalViewportSource
+}
+type PtyViewportStatePayload = { id: string; state: TerminalViewportState }
 type SidecarMetricPayload = {
   phase: string
   method?: string
@@ -320,6 +335,13 @@ type NotificationEntry = {
   timestamp: number
   read: boolean
   agentKind?: 'claude' | 'codex'
+}
+type ProfileWindowCloseAction = 'temporary' | 'removeFromProfile' | 'cancel'
+type ProfileWindowCloseRequest = {
+  windowId: string
+  profileId: string
+  windowIndex: number
+  windowCount: number
 }
 
 function createTauriHost(): BatAppAPI {
@@ -582,6 +604,10 @@ function createTauriHost(): BatAppAPI {
       getLaunchProfile: () => getInvoke()<string | null>('app_get_launch_profile'),
       getWindowProfile: () => getInvoke()<string | null>('app_get_window_profile'),
       setTitle: (title: string) => getInvoke()<void>('app_set_title', { title }),
+      resolveProfileWindowClose: (action: ProfileWindowCloseAction) =>
+        getInvoke()<boolean>('app_resolve_profile_window_close', { action }),
+      onProfileWindowCloseRequested: (callback: (request: ProfileWindowCloseRequest) => void) =>
+        listenAdapter<ProfileWindowCloseRequest>('app:profile-window-close-requested', callback),
       newWindow: () => getInvoke()<string>('app_new_window'),
       focusNextWindow: () => getInvoke()<boolean>('app_focus_next_window'),
       openNewInstance: (profileId: string) =>
@@ -1078,6 +1104,24 @@ function createTauriHost(): BatAppAPI {
       write: (id: string, data: string) => getInvoke()<void>('pty_write', { id, data }),
       resize: (id: string, cols: number, rows: number) =>
         getInvoke()<void>('pty_resize', { id, cols, rows }),
+      getViewportState: (id: string) =>
+        getInvoke()<TerminalViewportState>('pty_get_viewport_state', { id }),
+      setViewportMode: (
+        id: string,
+        mode: TerminalViewportMode,
+        options?: SetViewportModeOptions,
+      ) => getInvoke()<TerminalViewportState>('pty_set_viewport_mode', { id, mode, options }),
+      setViewportSize: (
+        id: string,
+        cols: number,
+        rows: number,
+        source: TerminalViewportSource,
+      ) => getInvoke()<TerminalViewportState>('pty_set_viewport_size', {
+        id,
+        cols,
+        rows,
+        source,
+      }),
       kill: (id: string) => getInvoke()<void>('pty_kill', { id }),
       restart: (id: string, cwd: string, shell?: string) =>
         getInvoke()<boolean>('pty_restart', { id, cwd, shell }),
@@ -1086,6 +1130,11 @@ function createTauriHost(): BatAppAPI {
         listenAdapter<PtyOutputPayload>('pty:output', p => callback(p.id, p.data)),
       onExit: (callback: (id: string, exitCode: number) => void) =>
         listenAdapter<PtyExitPayload>('pty:exit', p => callback(p.id, p.exitCode)),
+      onViewportState: (callback: (id: string, state: TerminalViewportState) => void) =>
+        listenAdapter<PtyViewportStatePayload>(
+          'pty:viewport-state',
+          p => callback(p.id, p.state),
+        ),
     },
   }
 

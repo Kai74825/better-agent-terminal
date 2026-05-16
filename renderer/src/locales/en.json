@@ -311,6 +311,10 @@
     "addTerminalOrAgent": "Add Terminal or Agent",
     "terminalLabel": "Terminal",
     "worktreeTerminalLabel": "Terminal (worktree)",
+    "desktopLayout": "Desktop Layout",
+    "mobileLayout": "Mobile Layout",
+    "useDesktopLayout": "Use Desktop Layout",
+    "useMobileLayout": "Use Mobile Layout",
     "expandThumbnails": "Expand Thumbnails",
     "collapsePanel": "Collapse Panel"
   },
@@ -322,7 +326,11 @@
     "closeWorktreeSessionConfirm": "Close this worktree session? You can also clean up the worktree.",
     "closeWorktreeSessionMergedConfirm": "This worktree is already merged into the source branch. Close it?",
     "closeAndCleanWorktree": "Close & Clean Worktree",
-    "closeKeepWorktree": "Close (Keep Worktree)"
+    "closeKeepWorktree": "Close (Keep Worktree)",
+    "closeProfileWindow": "Close Profile Window?",
+    "closeProfileWindowConfirm": "{{profile}} has {{count}} open windows. What should happen to window {{index}}?",
+    "temporarilyCloseWindow": "Temporarily Close",
+    "removeWindowFromProfile": "Remove from Profile"
   },
 
   "snippets": {

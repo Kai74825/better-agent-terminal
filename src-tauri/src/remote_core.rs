@@ -64,6 +64,9 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "pty:create" => Some(&["options"]),
         "pty:write" => Some(&["id", "data"]),
         "pty:resize" => Some(&["id", "cols", "rows"]),
+        "pty:get-viewport-state" => Some(&["id"]),
+        "pty:set-viewport-mode" => Some(&["id", "mode", "options"]),
+        "pty:set-viewport-size" => Some(&["id", "cols", "rows", "source"]),
         "pty:kill" | "pty:get-cwd" => Some(&["id"]),
         "pty:restart" => Some(&["id", "cwd", "shell"]),
         "claude:send-message" => Some(&[
@@ -236,6 +239,7 @@ pub fn event_params_to_legacy_v1_args(channel: &str, params: &Value) -> Vec<Valu
     match channel {
         "pty:output" => vec![params["id"].clone(), params["data"].clone()],
         "pty:exit" => vec![params["id"].clone(), params["exitCode"].clone()],
+        "pty:viewport-state" => vec![params["id"].clone(), params["state"].clone()],
         "claude:session-reset" => vec![params["sessionId"].clone()],
         "claude:message" => vec![params["sessionId"].clone(), params["message"].clone()],
         "claude:tool-use" => vec![params["sessionId"].clone(), params["toolCall"].clone()],
@@ -277,6 +281,10 @@ pub fn legacy_v1_event_args_to_params(channel: &str, args: &[Value]) -> Value {
         "pty:exit" => json!({
             "id": args.first().cloned().unwrap_or(Value::Null),
             "exitCode": args.get(1).cloned().unwrap_or(Value::Null),
+        }),
+        "pty:viewport-state" => json!({
+            "id": args.first().cloned().unwrap_or(Value::Null),
+            "state": args.get(1).cloned().unwrap_or(Value::Null),
         }),
         "claude:session-reset" => json!({
             "sessionId": args.first().cloned().unwrap_or(Value::Null),
@@ -326,6 +334,7 @@ pub fn is_proxied_remote_event(channel: &str) -> bool {
         channel,
         "pty:output"
             | "pty:exit"
+            | "pty:viewport-state"
             | "claude:message"
             | "claude:tool-use"
             | "claude:tool-result"
@@ -430,6 +439,32 @@ mod tests {
             legacy_v1_args_to_params("pty:resize", &[json!("term-1"), json!(120), json!(36)]),
             json!({ "id": "term-1", "cols": 120, "rows": 36 })
         );
+        assert_eq!(
+            legacy_v1_args_to_params("pty:get-viewport-state", &[json!("term-1")]),
+            json!({ "id": "term-1" })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params(
+                "pty:set-viewport-mode",
+                &[
+                    json!("term-1"),
+                    json!("mobile"),
+                    json!({ "cols": 56, "rows": 24, "source": "mobile" })
+                ]
+            ),
+            json!({
+                "id": "term-1",
+                "mode": "mobile",
+                "options": { "cols": 56, "rows": 24, "source": "mobile" }
+            })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params(
+                "pty:set-viewport-size",
+                &[json!("term-1"), json!(56), json!(24), json!("mobile")]
+            ),
+            json!({ "id": "term-1", "cols": 56, "rows": 24, "source": "mobile" })
+        );
     }
 
     #[test]
@@ -476,6 +511,19 @@ mod tests {
         );
         assert_eq!(
             event_params_to_legacy_v1_args(
+                "pty:viewport-state",
+                &json!({
+                    "id": "term-1",
+                    "state": { "mode": "mobile", "cols": 56, "rows": 24 }
+                }),
+            ),
+            vec![
+                json!("term-1"),
+                json!({ "mode": "mobile", "cols": 56, "rows": 24 })
+            ]
+        );
+        assert_eq!(
+            event_params_to_legacy_v1_args(
                 "claude:history",
                 &json!({ "sessionId": "s1", "items": [{ "role": "user" }] }),
             ),
@@ -502,6 +550,19 @@ mod tests {
                 &[json!("s1"), json!({ "role": "assistant" })],
             ),
             json!({ "sessionId": "s1", "message": { "role": "assistant" } })
+        );
+        assert_eq!(
+            legacy_v1_event_args_to_params(
+                "pty:viewport-state",
+                &[
+                    json!("term-1"),
+                    json!({ "mode": "desktop", "cols": 120, "rows": 36 })
+                ],
+            ),
+            json!({
+                "id": "term-1",
+                "state": { "mode": "desktop", "cols": 120, "rows": 36 }
+            })
         );
         assert_eq!(
             legacy_v1_event_args_to_params("workspace:reload", &[json!("{\"workspaces\":[]}")]),

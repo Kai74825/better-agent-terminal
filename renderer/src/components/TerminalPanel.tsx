@@ -1,5 +1,6 @@
-import { host } from '../host-api'
-import { useEffect, useRef, useState, memo } from 'react'
+import { host, type TerminalViewportState } from '../host-api'
+import { useEffect, useRef, useState, memo, type CSSProperties } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Terminal, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -10,6 +11,15 @@ import type { AgentPresetId } from '../types/agent-presets'
 import '@xterm/xterm/css/xterm.css'
 
 const dlog = (...args: unknown[]) => host.debug.log(...args)
+const MOBILE_TERMINAL_COLS = 56
+const MOBILE_TERMINAL_ROWS = 24
+const DEFAULT_VIEWPORT_STATE: TerminalViewportState = {
+  mode: 'desktop',
+  cols: 100,
+  rows: 30,
+  updatedBy: 'desktop',
+  updatedAt: 0,
+}
 const IME_SAFE_EDIT_KEYS = new Set([
   'Backspace',
   'Delete',
@@ -63,6 +73,7 @@ export const TerminalPanel = memo(function TerminalPanel({
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [terminalReady, setTerminalReady] = useState(false)
+  const [viewportState, setViewportState] = useState<TerminalViewportState>(DEFAULT_VIEWPORT_STATE)
   const hasBeenFocusedRef = useRef(false)
   const isActiveRef = useRef(isActive)
   const doResizeRef = useRef<(() => void) | null>(null)
@@ -70,6 +81,8 @@ export const TerminalPanel = memo(function TerminalPanel({
   const isClaudeCliTerminal = isClaudeCliPreset(agentPreset)
   const ptyReadyRef = useRef(ptyReady)
   const onReadySizeRef = useRef(onReadySize)
+  const viewportStateRef = useRef(viewportState)
+  const { t } = useTranslation()
 
   // Keep isActiveRef in sync with isActive prop
   useEffect(() => {
@@ -86,6 +99,55 @@ export const TerminalPanel = memo(function TerminalPanel({
   useEffect(() => {
     onReadySizeRef.current = onReadySize
   }, [onReadySize])
+
+  useEffect(() => {
+    viewportStateRef.current = viewportState
+  }, [viewportState])
+
+  useEffect(() => {
+    setViewportState(DEFAULT_VIEWPORT_STATE)
+  }, [terminalId])
+
+  useEffect(() => {
+    return host.pty.onViewportState((id: string, state: TerminalViewportState) => {
+      if (id !== terminalId) return
+      setViewportState(state)
+    })
+  }, [terminalId])
+
+  useEffect(() => {
+    if (!ptyReady) return
+    let cancelled = false
+    host.pty.getViewportState(terminalId)
+      .then((state: TerminalViewportState) => {
+        if (!cancelled) setViewportState(state)
+      })
+      .catch(() => {
+        // PTY startup can lag behind the panel mount; desktop is the runtime default.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ptyReady, terminalId])
+
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    if (viewportState.mode === 'mobile') {
+      const cols = viewportState.cols > 0 ? viewportState.cols : MOBILE_TERMINAL_COLS
+      const rows = viewportState.rows > 0 ? viewportState.rows : MOBILE_TERMINAL_ROWS
+      if (terminal.cols !== cols || terminal.rows !== rows) {
+        terminal.resize(cols, rows)
+      }
+      requestAnimationFrame(() => {
+        terminal.refresh(0, Math.max(0, terminal.rows - 1))
+      })
+      return
+    }
+    if (isActiveRef.current) {
+      requestAnimationFrame(() => doResizeRef.current?.())
+    }
+  }, [viewportState.mode, viewportState.cols, viewportState.rows])
 
   const pasteAbortRef = useRef<{ cancelled: boolean } | null>(null)
 
@@ -353,6 +415,15 @@ export const TerminalPanel = memo(function TerminalPanel({
     let lastSentCols = 0
     let lastSentRows = 0
     const doResize = () => {
+      const viewport = viewportStateRef.current
+      if (viewport.mode === 'mobile') {
+        const cols = viewport.cols > 0 ? viewport.cols : MOBILE_TERMINAL_COLS
+        const rows = viewport.rows > 0 ? viewport.rows : MOBILE_TERMINAL_ROWS
+        if (terminal.cols !== cols || terminal.rows !== rows) {
+          terminal.resize(cols, rows)
+        }
+        return
+      }
       fitAddon.fit()
       const { cols, rows } = terminal
       if (ptyReadyRef.current && (cols !== lastSentCols || rows !== lastSentRows)) {
@@ -600,28 +671,78 @@ export const TerminalPanel = memo(function TerminalPanel({
     }
   }, [terminalId])
 
+  const handleViewportModeToggle = async () => {
+    if (!ptyReadyRef.current) return
+    const current = viewportStateRef.current
+    try {
+      if (current.mode === 'mobile') {
+        const next = await host.pty.setViewportMode(terminalId, 'desktop', { source: 'desktop' })
+        setViewportState(next)
+        requestAnimationFrame(() => doResizeRef.current?.())
+        return
+      }
+
+      const next = await host.pty.setViewportMode(terminalId, 'mobile', {
+        cols: MOBILE_TERMINAL_COLS,
+        rows: MOBILE_TERMINAL_ROWS,
+        source: 'desktop',
+      })
+      setViewportState(next)
+      const terminal = terminalRef.current
+      if (terminal) {
+        terminal.resize(next.cols || MOBILE_TERMINAL_COLS, next.rows || MOBILE_TERMINAL_ROWS)
+        terminal.refresh(0, Math.max(0, terminal.rows - 1))
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      void host.debug.log(`[TerminalPanel] viewport mode switch failed terminal=${terminalId}: ${message}`)
+    }
+  }
+
+  const isMobileLayout = viewportState.mode === 'mobile'
+  const mobilePanelStyle: CSSProperties | undefined = isMobileLayout
+    ? { width: `min(calc(${viewportState.cols || MOBILE_TERMINAL_COLS}ch + 24px), 100%)` }
+    : undefined
+
   return (
-    <div ref={containerRef} className="terminal-panel">
-      {contextMenu && (
-        <div
-          className="context-menu"
-          style={{
-            position: 'fixed',
-            left: contextMenu.x,
-            top: contextMenu.y,
-            zIndex: 1000
-          }}
+    <div className={`terminal-panel-shell ${isMobileLayout ? 'mobile-layout' : 'desktop-layout'}`}>
+      <div className="terminal-viewport-bar">
+        <span className={`terminal-viewport-badge ${isMobileLayout ? 'mobile' : 'desktop'}`}>
+          {isMobileLayout ? t('terminal.mobileLayout') : t('terminal.desktopLayout')}
+        </span>
+        <button
+          type="button"
+          className="terminal-viewport-action"
+          onClick={handleViewportModeToggle}
+          disabled={!ptyReady}
         >
-          {contextMenu.hasSelection && (
-            <button onClick={handleCopy} className="context-menu-item">
-              複製
-            </button>
+          {isMobileLayout ? t('terminal.useDesktopLayout') : t('terminal.useMobileLayout')}
+        </button>
+      </div>
+      <div className="terminal-panel-stage">
+        <div ref={containerRef} className="terminal-panel" style={mobilePanelStyle}>
+          {contextMenu && (
+            <div
+              className="context-menu"
+              style={{
+                position: 'fixed',
+                left: contextMenu.x,
+                top: contextMenu.y,
+                zIndex: 1000
+              }}
+            >
+              {contextMenu.hasSelection && (
+                <button onClick={handleCopy} className="context-menu-item">
+                  複製
+                </button>
+              )}
+              <button onClick={handlePaste} className="context-menu-item">
+                貼上
+              </button>
+            </div>
           )}
-          <button onClick={handlePaste} className="context-menu-item">
-            貼上
-          </button>
         </div>
-      )}
+      </div>
     </div>
   )
 })

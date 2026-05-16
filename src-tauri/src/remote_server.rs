@@ -931,9 +931,53 @@ fn invoke_rust_for_remote(
         "pty:resize" => string_param(params, "id", channel).and_then(|id| {
             u16_param(params, "cols", channel).and_then(|cols| {
                 u16_param(params, "rows", channel).and_then(|rows| {
-                    pty_cmd::pty_resize(app.state::<pty_cmd::PtyState>(), id, cols, rows)
-                        .map(|_| Value::Bool(true))
+                    let state = app.state::<pty_cmd::PtyState>();
+                    pty_cmd::resize_pty_session_from_mobile_view(app, &state, &id, cols, rows)
+                        .map(Value::Bool)
                         .map_err(|err| format!("{err:?}"))
+                })
+            })
+        }),
+        "pty:get-viewport-state" => string_param(params, "id", channel).and_then(|id| {
+            let state = app.state::<pty_cmd::PtyState>();
+            pty_cmd::get_pty_viewport_state(&state, &id)
+                .map_err(|err| format!("{err:?}"))
+                .and_then(|state| to_json_value(channel, state))
+        }),
+        "pty:set-viewport-mode" => string_param(params, "id", channel).and_then(|id| {
+            let mode_value = params
+                .get("mode")
+                .cloned()
+                .ok_or_else(|| format!("{channel}: missing mode"))?;
+            let mode =
+                deserialize_param::<pty_cmd::TerminalViewportMode>(mode_value, channel, "mode")?;
+            let options = match params.get("options").cloned() {
+                Some(Value::Null) | None => None,
+                Some(value) => Some(deserialize_param::<pty_cmd::SetViewportModeOptions>(
+                    value, channel, "options",
+                )?),
+            };
+            let state = app.state::<pty_cmd::PtyState>();
+            pty_cmd::set_pty_viewport_mode(app, &state, &id, mode, options)
+                .map_err(|err| format!("{err:?}"))
+                .and_then(|state| to_json_value(channel, state))
+        }),
+        "pty:set-viewport-size" => string_param(params, "id", channel).and_then(|id| {
+            u16_param(params, "cols", channel).and_then(|cols| {
+                u16_param(params, "rows", channel).and_then(|rows| {
+                    let source_value = params
+                        .get("source")
+                        .cloned()
+                        .ok_or_else(|| format!("{channel}: missing source"))?;
+                    let source = deserialize_param::<pty_cmd::TerminalViewportSource>(
+                        source_value,
+                        channel,
+                        "source",
+                    )?;
+                    let state = app.state::<pty_cmd::PtyState>();
+                    pty_cmd::set_pty_viewport_size(app, &state, &id, cols, rows, source)
+                        .map_err(|err| format!("{err:?}"))
+                        .and_then(|state| to_json_value(channel, state))
                 })
             })
         }),
