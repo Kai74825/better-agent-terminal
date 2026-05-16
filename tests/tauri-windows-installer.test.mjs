@@ -21,6 +21,20 @@ assert.match(
   /LOCALAPPDATA\\BetterAgentTerminal/,
   'Tauri NSIS hook should only rewrite the Tauri default directory',
 )
+assert.match(
+  template,
+  /StrCpy \$INSTDIR "\$LOCALAPPDATA\\Programs\\\$\{PRODUCTNAME\}"/,
+  'Tauri NSIS template should default current-user installs to Electron Builder location',
+)
+assert.match(
+  template,
+  /Call RestorePreviousInstallLocation[\s\S]*\$INSTDIR == "\$LOCALAPPDATA\\\$\{PRODUCTNAME\}"[\s\S]*StrCpy \$INSTDIR "\$LOCALAPPDATA\\Programs\\\$\{PRODUCTNAME\}"/,
+  'Tauri NSIS template should migrate the earlier Tauri default install location',
+)
+assert.ok(
+  template.indexOf('!insertmacro NSIS_HOOK_PREINSTALL') < template.indexOf('SetOutPath $INSTDIR'),
+  'preinstall hook must run before SetOutPath so redirected install dirs affect extraction',
+)
 assert.doesNotMatch(
   template,
   /^\s*Page custom PageReinstall PageLeaveReinstall/m,
