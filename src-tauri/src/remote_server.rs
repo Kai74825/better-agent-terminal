@@ -1,3 +1,4 @@
+use crate::codex_app_server::{should_handle_codex, CodexAppServerState};
 use crate::commands::{
     agent as agent_cmd, fs as fs_cmd, git as git_cmd, github as github_cmd, image as image_cmd,
     profile as profile_cmd, pty as pty_cmd, settings as settings_cmd, snippet as snippet_cmd,
@@ -855,6 +856,20 @@ fn string_vec_param(params: &Value, key: &str, method: &str) -> Result<Vec<Strin
         .collect())
 }
 
+fn optional_string_vec_param(params: &Value, key: &str) -> Vec<String> {
+    params
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn deserialize_param<T: DeserializeOwned>(
     value: Value,
     method: &str,
@@ -878,6 +893,74 @@ fn invoke_rust_for_remote(
 ) -> Option<Result<Value, String>> {
     let result = match channel {
         "agent:list-presets" => Ok(agent_cmd::agent_preset_ids()),
+        "claude:start-session" => {
+            let options = params.get("options").cloned().unwrap_or(Value::Null);
+            let maybe_options = Some(options.clone());
+            if !should_handle_codex(&maybe_options) {
+                return None;
+            }
+            string_param(params, "sessionId", channel).and_then(|session_id| {
+                let codex = app.state::<CodexAppServerState>().inner().clone();
+                codex
+                    .start_session(app, session_id, maybe_options)
+                    .map_err(bridge_error_message)
+            })
+        }
+        "claude:resume-session" => {
+            let options = params.get("options").cloned().unwrap_or(Value::Null);
+            let maybe_options = Some(options.clone());
+            if !should_handle_codex(&maybe_options) {
+                return None;
+            }
+            string_param(params, "sessionId", channel).and_then(|session_id| {
+                string_param(params, "sdkSessionId", channel).and_then(|sdk_session_id| {
+                    let codex = app.state::<CodexAppServerState>().inner().clone();
+                    codex
+                        .resume_session(app, session_id, sdk_session_id, maybe_options)
+                        .map_err(bridge_error_message)
+                })
+            })
+        }
+        "claude:send-message" => {
+            let session_id = match string_param(params, "sessionId", channel) {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let codex = app.state::<CodexAppServerState>().inner().clone();
+            if !codex.is_owned(&session_id) {
+                return None;
+            }
+            string_param(params, "prompt", channel).and_then(|prompt| {
+                let images = optional_string_vec_param(params, "images");
+                codex
+                    .send_message(app, session_id, prompt, images)
+                    .map_err(bridge_error_message)
+            })
+        }
+        "claude:abort-session" => {
+            let session_id = match string_param(params, "sessionId", channel) {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let codex = app.state::<CodexAppServerState>().inner().clone();
+            if !codex.is_owned(&session_id) {
+                return None;
+            }
+            codex
+                .abort_session(app, session_id)
+                .map_err(bridge_error_message)
+        }
+        "claude:stop-session" => {
+            let session_id = match string_param(params, "sessionId", channel) {
+                Ok(value) => value,
+                Err(err) => return Some(Err(err)),
+            };
+            let codex = app.state::<CodexAppServerState>().inner().clone();
+            if !codex.is_owned(&session_id) {
+                return None;
+            }
+            Ok(codex.stop_session(session_id))
+        }
         "settings:load" => tauri::async_runtime::block_on(settings_cmd::settings_load(app.clone()))
             .map_err(|err| err.to_string())
             .and_then(|value| to_json_value(channel, value)),
