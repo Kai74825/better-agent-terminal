@@ -1,8 +1,11 @@
+use crate::account_store;
+use crate::app_data;
 use crate::codex_app_server::{should_handle_codex, CodexAppServerState};
 use crate::commands::{
-    agent as agent_cmd, fs as fs_cmd, git as git_cmd, github as github_cmd, image as image_cmd,
-    profile as profile_cmd, pty as pty_cmd, settings as settings_cmd, snippet as snippet_cmd,
-    worker_buffer::WorkerBufferState, worktree as worktree_cmd,
+    agent as agent_cmd, claude as claude_cmd, fs as fs_cmd, git as git_cmd, github as github_cmd,
+    image as image_cmd, notification as notification_cmd, profile as profile_cmd, pty as pty_cmd,
+    settings as settings_cmd, snippet as snippet_cmd, worker_buffer::WorkerBufferState,
+    worktree as worktree_cmd,
 };
 use crate::electron_safe_storage::{
     read_secret_json, read_secret_string, write_secret_json, write_secret_string, SecretJsonRead,
@@ -836,9 +839,19 @@ fn i64_param(params: &Value, key: &str, method: &str) -> Result<i64, String> {
         .ok_or_else(|| format!("{method}: missing {key}"))
 }
 
+fn u32_param(params: &Value, key: &str, method: &str) -> Result<u32, String> {
+    let value = i64_param(params, key, method)?;
+    u32::try_from(value).map_err(|_| format!("{method}: invalid {key}"))
+}
+
 fn u16_param(params: &Value, key: &str, method: &str) -> Result<u16, String> {
     let value = i64_param(params, key, method)?;
     u16::try_from(value).map_err(|_| format!("{method}: invalid {key}"))
+}
+
+fn remote_app_data_dir(app: &AppHandle, method: &str) -> Result<std::path::PathBuf, String> {
+    app_data::app_data_dir(app)
+        .map_err(|err| format!("{method}: could not resolve app data dir: {err}"))
 }
 
 fn bool_param(params: &Value, key: &str, default: bool) -> bool {
@@ -965,48 +978,71 @@ fn invoke_rust_for_remote(
             };
             route.map(|(codex, session_id)| codex.stop_session(session_id))
         }
-        "claude:get-supported-models" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|(codex, _)| codex.supported_models())
-        }
+        "claude:get-supported-models" => match codex_for_remote_session(app, channel, params) {
+            Some(route) => route.map(|(codex, _)| codex.supported_models()),
+            None => Ok(claude_cmd::claude_builtin_models_native()),
+        },
         "claude:get-supported-commands" | "claude:get-supported-agents" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|_| json!([]))
+            match codex_for_remote_session(app, channel, params) {
+                Some(route) => route.map(|_| json!([])),
+                None => string_param(params, "sessionId", channel).and_then(|session_id| {
+                    let Some(session) =
+                        notification_cmd::get_agent_session_snapshot(app, &session_id)
+                    else {
+                        return Ok(json!([]));
+                    };
+                    if channel == "claude:get-supported-commands" {
+                        serde_json::to_value(claude_cmd::supported_commands_native(Path::new(
+                            &session.cwd,
+                        )))
+                        .map_err(|err| format!("{channel} serialization failed: {err}"))
+                    } else {
+                        serde_json::to_value(claude_cmd::supported_agents_native(Path::new(
+                            &session.cwd,
+                        )))
+                        .map_err(|err| format!("{channel} serialization failed: {err}"))
+                    }
+                }),
+            }
         }
-        "claude:get-account-info" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|_| Value::Null)
-        }
-        "claude:get-session-state" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|(codex, session_id)| {
+        "claude:get-account-info" => match codex_for_remote_session(app, channel, params) {
+            Some(route) => route.map(|_| Value::Null),
+            None => Ok(claude_cmd::account_info_from_auth_status(
+                &claude_cmd::fetch_auth_status_native(app),
+            )),
+        },
+        "claude:get-session-state" => match codex_for_remote_session(app, channel, params) {
+            Some(route) => route.map(|(codex, session_id)| {
                 codex.get_session_state(&session_id).unwrap_or(Value::Null)
-            })
-        }
-        "claude:get-session-meta" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|(codex, session_id)| {
+            }),
+            None => string_param(params, "sessionId", channel).map(|session_id| {
+                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                    .map(|session| claude_cmd::session_state_from_notification_snapshot(&session))
+                    .unwrap_or(Value::Null)
+            }),
+        },
+        "claude:get-session-meta" => match codex_for_remote_session(app, channel, params) {
+            Some(route) => route.map(|(codex, session_id)| {
                 codex.get_session_meta(&session_id).unwrap_or(Value::Null)
-            })
-        }
-        "claude:get-context-usage" => {
-            let Some(route) = codex_for_remote_session(app, channel, params) else {
-                return None;
-            };
-            route.map(|(codex, session_id)| {
+            }),
+            None => string_param(params, "sessionId", channel).map(|session_id| {
+                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                    .map(|session| claude_cmd::session_meta_from_notification_snapshot(&session))
+                    .unwrap_or(Value::Null)
+            }),
+        },
+        "claude:get-context-usage" => match codex_for_remote_session(app, channel, params) {
+            Some(route) => route.map(|(codex, session_id)| {
                 codex.get_context_usage(&session_id).unwrap_or(Value::Null)
-            })
-        }
+            }),
+            None => string_param(params, "sessionId", channel).map(|session_id| {
+                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                    .and_then(|session| {
+                        claude_cmd::context_usage_from_notification_snapshot(&session)
+                    })
+                    .unwrap_or(Value::Null)
+            }),
+        },
         "claude:set-auto-continue" | "claude:set-permission-mode" => {
             let Some(route) = codex_for_remote_session(app, channel, params) else {
                 return None;
@@ -1119,6 +1155,126 @@ fn invoke_rust_for_remote(
             };
             route.map(|_| json!(false))
         }
+        "claude:auth-status" => Ok(claude_cmd::fetch_auth_status_native(app)),
+        "claude:account-list" => remote_app_data_dir(app, channel).and_then(|data_dir| {
+            serde_json::to_value(account_store::read_index(&data_dir))
+                .map_err(|err| format!("{channel} serialization failed: {err}"))
+        }),
+        "claude:account-switch" => {
+            string_param(params, "accountId", channel).and_then(|account_id| {
+                let data_dir = remote_app_data_dir(app, channel)?;
+                account_store::switch_account(&data_dir, &account_id)
+                    .map(Value::Bool)
+                    .map_err(|err| err.to_string())
+            })
+        }
+        "claude:account-remove" => {
+            string_param(params, "accountId", channel).and_then(|account_id| {
+                let data_dir = remote_app_data_dir(app, channel)?;
+                account_store::remove_account(&data_dir, &account_id)
+                    .map(Value::Bool)
+                    .map_err(|err| err.to_string())
+            })
+        }
+        "claude:account-mark-warning-shown" => {
+            remote_app_data_dir(app, channel).and_then(|data_dir| {
+                account_store::mark_warning_shown(&data_dir)
+                    .map(|_| Value::Bool(true))
+                    .map_err(|err| err.to_string())
+            })
+        }
+        "claude:get-cli-path" => Ok(Value::String(claude_cmd::resolve_claude_cli_path(app))),
+        "claude:prepare-cli-session" => {
+            string_param(params, "terminalId", channel).and_then(|terminal_id| {
+                string_param(params, "workspaceId", channel).and_then(|workspace_id| {
+                    string_param(params, "cwd", channel).and_then(|cwd| {
+                        string_param(params, "agentPreset", channel).and_then(|agent_preset| {
+                            let current_session_id =
+                                optional_string_param(params, "currentSessionId");
+                            claude_cmd::prepare_cli_session_native(
+                                app,
+                                terminal_id,
+                                workspace_id,
+                                cwd,
+                                agent_preset,
+                                current_session_id,
+                            )
+                            .map_err(bridge_error_message)
+                        })
+                    })
+                })
+            })
+        }
+        "claude:list-sessions" => string_param(params, "cwd", channel).and_then(|cwd| {
+            let agent_kind = optional_string_param(params, "agentKind");
+            serde_json::to_value(claude_cmd::list_sessions_native(
+                &cwd,
+                agent_kind.as_deref(),
+            ))
+            .map_err(|err| format!("{channel} serialization failed: {err}"))
+        }),
+        "claude:archive-messages" => {
+            string_param(params, "sessionId", channel).and_then(|session_id| {
+                let messages = params.get("messages").cloned().unwrap_or(Value::Null);
+                let data_dir = remote_app_data_dir(app, channel)?;
+                claude_cmd::archive_messages_in_dir(&data_dir, &session_id, &messages)
+                    .map(|value| json!(value))
+                    .map_err(|err| err.to_string())
+            })
+        }
+        "claude:load-archived" => {
+            string_param(params, "sessionId", channel).and_then(|session_id| {
+                u32_param(params, "offset", channel).and_then(|offset| {
+                    u32_param(params, "limit", channel).and_then(|limit| {
+                        let data_dir = remote_app_data_dir(app, channel)?;
+                        Ok(claude_cmd::load_archived_from_dir(
+                            &data_dir,
+                            &session_id,
+                            offset,
+                            limit,
+                        ))
+                    })
+                })
+            })
+        }
+        "claude:clear-archive" => {
+            string_param(params, "sessionId", channel).and_then(|session_id| {
+                let data_dir = remote_app_data_dir(app, channel)?;
+                Ok(json!(claude_cmd::clear_archive_in_dir(
+                    &data_dir,
+                    &session_id
+                )))
+            })
+        }
+        "claude:scan-skills" => string_param(params, "cwd", channel).and_then(|cwd| {
+            serde_json::to_value(claude_cmd::scan_skills_native(Path::new(&cwd)))
+                .map_err(|err| format!("{channel} serialization failed: {err}"))
+        }),
+        "claude:check-mcp-json-status" => string_param(params, "cwd", channel)
+            .map(|cwd| claude_cmd::check_mcp_json_status_native(Path::new(&cwd))),
+        "claude:enable-all-project-mcp" => string_param(params, "cwd", channel).and_then(|cwd| {
+            claude_cmd::enable_all_project_mcp_native(Path::new(&cwd)).map_err(bridge_error_message)
+        }),
+        "claude:get-worktree-status" => {
+            string_param(params, "sessionId", channel).map(|session_id| {
+                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                    .and_then(|session| {
+                        claude_cmd::worktree_status_from_notification_snapshot(&session)
+                    })
+                    .unwrap_or(Value::Null)
+            })
+        }
+        "claude:cleanup-worktree" => string_param(params, "sessionId", channel).map(|session_id| {
+            let delete_branch = bool_param(params, "deleteBranch", true);
+            if let Some(session) = notification_cmd::get_agent_session_snapshot(app, &session_id) {
+                if claude_cmd::cleanup_worktree_from_notification_snapshot(&session, delete_branch)
+                {
+                    notification_cmd::clear_agent_session_worktree(app, &session_id);
+                    return json!(true);
+                }
+            }
+            json!(false)
+        }),
         "settings:load" => tauri::async_runtime::block_on(settings_cmd::settings_load(app.clone()))
             .map_err(|err| err.to_string())
             .and_then(|value| to_json_value(channel, value)),

@@ -241,7 +241,7 @@ fn find_claude_cli_on_path(
     })
 }
 
-fn resolve_claude_cli_path(app: &AppHandle) -> String {
+pub(crate) fn resolve_claude_cli_path(app: &AppHandle) -> String {
     if let Ok(override_path) = std::env::var("BAT_SIDECAR_CLAUDE_BIN") {
         if !override_path.trim().is_empty() {
             return override_path;
@@ -329,13 +329,13 @@ fn parse_auth_status_stdout(stdout: &str) -> Value {
     serde_json::from_str::<Value>(stdout).unwrap_or(Value::Null)
 }
 
-fn fetch_auth_status_native(app: &AppHandle) -> Value {
+pub(crate) fn fetch_auth_status_native(app: &AppHandle) -> Value {
     run_claude_cli_native(app, &["auth", "status"], AUTH_STATUS_TIMEOUT)
         .map(|stdout| parse_auth_status_stdout(&stdout))
         .unwrap_or(Value::Null)
 }
 
-fn account_info_from_auth_status(value: &Value) -> Value {
+pub(crate) fn account_info_from_auth_status(value: &Value) -> Value {
     let email = value.get("email").and_then(Value::as_str);
     let subscription_type = value.get("subscriptionType").and_then(Value::as_str);
     if email.is_none() && subscription_type.is_none() {
@@ -354,14 +354,14 @@ fn account_info_from_auth_status(value: &Value) -> Value {
     Value::Object(info)
 }
 
-fn auth_login_native(app: &AppHandle) -> Value {
+pub(crate) fn auth_login_native(app: &AppHandle) -> Value {
     match run_claude_cli_native(app, &["auth", "login"], AUTH_LOGIN_TIMEOUT) {
         Ok(_) => json!({ "success": true }),
         Err(err) => json!({ "success": false, "error": err }),
     }
 }
 
-fn auth_logout_native(app: &AppHandle) -> Value {
+pub(crate) fn auth_logout_native(app: &AppHandle) -> Value {
     match run_claude_cli_native(app, &["auth", "logout"], AUTH_STATUS_TIMEOUT) {
         Ok(_) => json!({ "success": true }),
         Err(err) => json!({ "success": false, "error": err }),
@@ -370,7 +370,7 @@ fn auth_logout_native(app: &AppHandle) -> Value {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct SkillScanEntry {
+pub(crate) struct SkillScanEntry {
     name: String,
     description: String,
     scope: String,
@@ -379,7 +379,7 @@ struct SkillScanEntry {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SessionListEntry {
+pub(crate) struct SessionListEntry {
     sdk_session_id: String,
     timestamp: u128,
     preview: String,
@@ -407,7 +407,7 @@ struct ClaudeCliSessionEvent {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct ClaudeCliPrepareSessionResult {
+pub(crate) struct ClaudeCliPrepareSessionResult {
     session_id: String,
     launch_mode: String,
     settings_path: String,
@@ -420,7 +420,7 @@ struct ClaudeCliPrepareSessionResult {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct SlashCommandEntry {
+pub(crate) struct SlashCommandEntry {
     name: String,
     description: String,
     argument_hint: String,
@@ -428,7 +428,7 @@ struct SlashCommandEntry {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct AgentScanEntry {
+pub(crate) struct AgentScanEntry {
     name: String,
     description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -766,6 +766,59 @@ fn write_claude_cli_hook_assets(
     Ok((settings_path, events_path, hook_script_path, node_path_text))
 }
 
+pub(crate) fn prepare_cli_session_native(
+    app: &AppHandle,
+    terminal_id: String,
+    workspace_id: String,
+    cwd: String,
+    agent_preset: String,
+    current_session_id: Option<String>,
+) -> Result<Value, BridgeError> {
+    let (settings_path, events_path, hook_script_path, node_path) =
+        write_claude_cli_hook_assets(app, &terminal_id, &workspace_id, &cwd, &agent_preset)?;
+    let (mut session_id, mut source) = choose_claude_cli_session(
+        &events_path,
+        &terminal_id,
+        &workspace_id,
+        &cwd,
+        &agent_preset,
+        current_session_id.as_deref(),
+    );
+    let selected_event = if source == "terminal-event" {
+        read_latest_claude_cli_event(&events_path, |event| event.terminal_id == terminal_id)
+    } else if source == "workspace-event" {
+        read_latest_claude_cli_event(&events_path, |event| {
+            event.workspace_id == workspace_id
+                && event.agent_preset == agent_preset
+                && event.cwd == cwd
+        })
+    } else {
+        None
+    };
+    let can_resume = source != "new"
+        && (claude_history_file_exists(&cwd, &session_id)
+            || claude_cli_event_transcript_exists(selected_event.as_ref()));
+    let launch_mode = if can_resume {
+        "resume"
+    } else {
+        if !is_uuid_like(&session_id) {
+            session_id = generate_uuid_v4();
+            source = "new".into();
+        }
+        "session"
+    };
+    Ok(serde_json::to_value(ClaudeCliPrepareSessionResult {
+        session_id,
+        launch_mode: launch_mode.into(),
+        settings_path: settings_path.to_string_lossy().to_string(),
+        events_path: events_path.to_string_lossy().to_string(),
+        hook_script_path: hook_script_path.to_string_lossy().to_string(),
+        cli_path: resolve_claude_cli_path(app),
+        node_path,
+        source,
+    })?)
+}
+
 fn preview_text_from_claude_content(content: &Value) -> Option<String> {
     if let Some(text) = content.as_str() {
         return Some(text.chars().take(PREVIEW_CHARS).collect());
@@ -1005,7 +1058,7 @@ fn list_codex_sessions_in_root(root: &Path, cwd: &str) -> Vec<SessionListEntry> 
     results
 }
 
-fn list_sessions_native(cwd: &str, agent_kind: Option<&str>) -> Vec<SessionListEntry> {
+pub(crate) fn list_sessions_native(cwd: &str, agent_kind: Option<&str>) -> Vec<SessionListEntry> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
@@ -1018,7 +1071,7 @@ fn list_sessions_native(cwd: &str, agent_kind: Option<&str>) -> Vec<SessionListE
     list_claude_sessions_in_projects(cwd, &home.join(".claude").join("projects"))
 }
 
-fn claude_builtin_models_native() -> Value {
+pub(crate) fn claude_builtin_models_native() -> Value {
     json!([
         {
             "value": "claude-opus-4-7:auto-compact-200k",
@@ -1085,7 +1138,7 @@ fn claude_context_window_for_model(model: Option<&str>) -> u64 {
     }
 }
 
-fn session_meta_from_notification_snapshot(
+pub(crate) fn session_meta_from_notification_snapshot(
     session: &notification_cmd::AgentNotificationSession,
 ) -> Value {
     if let Some(meta) = session.latest_meta.as_ref() {
@@ -1117,7 +1170,7 @@ fn session_meta_from_notification_snapshot(
     })
 }
 
-fn session_state_from_notification_snapshot(
+pub(crate) fn session_state_from_notification_snapshot(
     session: &notification_cmd::AgentNotificationSession,
 ) -> Value {
     json!({
@@ -1148,7 +1201,7 @@ fn value_u64(value: &Value, key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn context_usage_from_notification_snapshot(
+pub(crate) fn context_usage_from_notification_snapshot(
     session: &notification_cmd::AgentNotificationSession,
 ) -> Option<Value> {
     let meta = session.latest_meta.as_ref()?;
@@ -1270,7 +1323,7 @@ fn run_git_status_in_dir(cwd: &Path, args: &[&str], timeout: Duration) -> bool {
     }
 }
 
-fn worktree_status_from_notification_snapshot(
+pub(crate) fn worktree_status_from_notification_snapshot(
     session: &notification_cmd::AgentNotificationSession,
 ) -> Option<Value> {
     let worktree_path = session.worktree_path.as_deref()?;
@@ -1309,7 +1362,7 @@ fn worktree_status_from_notification_snapshot(
     }))
 }
 
-fn cleanup_worktree_from_notification_snapshot(
+pub(crate) fn cleanup_worktree_from_notification_snapshot(
     session: &notification_cmd::AgentNotificationSession,
     delete_branch: bool,
 ) -> bool {
@@ -1342,7 +1395,7 @@ fn cleanup_worktree_from_notification_snapshot(
     true
 }
 
-fn supported_commands_native(cwd: &Path) -> Vec<SlashCommandEntry> {
+pub(crate) fn supported_commands_native(cwd: &Path) -> Vec<SlashCommandEntry> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut push_unique = |entry: SkillScanEntry| {
@@ -1393,7 +1446,7 @@ fn scan_agents_dir(dir: &Path) -> Vec<AgentScanEntry> {
         .collect()
 }
 
-fn supported_agents_native(cwd: &Path) -> Vec<AgentScanEntry> {
+pub(crate) fn supported_agents_native(cwd: &Path) -> Vec<AgentScanEntry> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut push_unique = |entry: AgentScanEntry| {
@@ -1500,7 +1553,7 @@ fn scan_skills_dir(dir: &Path, scope: &str) -> Vec<SkillScanEntry> {
         .collect()
 }
 
-fn scan_skills_native(cwd: &Path) -> Vec<SkillScanEntry> {
+pub(crate) fn scan_skills_native(cwd: &Path) -> Vec<SkillScanEntry> {
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push_unique = |entry: SkillScanEntry| {
@@ -1563,7 +1616,7 @@ fn mcp_settings_approves(settings: Option<&Value>, server_names: &[String]) -> b
     })
 }
 
-fn check_mcp_json_status_native(cwd: &Path) -> Value {
+pub(crate) fn check_mcp_json_status_native(cwd: &Path) -> Value {
     if cwd.as_os_str().is_empty() {
         return json!({ "exists": false, "approved": false, "servers": [] });
     }
@@ -1583,7 +1636,7 @@ fn check_mcp_json_status_native(cwd: &Path) -> Value {
     json!({ "exists": true, "approved": approved, "servers": servers })
 }
 
-fn enable_all_project_mcp_native(cwd: &Path) -> Result<Value, BridgeError> {
+pub(crate) fn enable_all_project_mcp_native(cwd: &Path) -> Result<Value, BridgeError> {
     if cwd.as_os_str().is_empty() {
         return Err(BridgeError {
             message: "claude.enableAllProjectMcp: missing cwd".into(),
@@ -1637,7 +1690,7 @@ fn archive_file_path(data_dir: &Path, session_id: &str) -> PathBuf {
         .join(format!("{safe}.jsonl"))
 }
 
-fn archive_messages_in_dir(
+pub(crate) fn archive_messages_in_dir(
     data_dir: &Path,
     session_id: &str,
     messages: &Value,
@@ -1662,7 +1715,12 @@ fn archive_messages_in_dir(
     Ok(true)
 }
 
-fn load_archived_from_dir(data_dir: &Path, session_id: &str, offset: u32, limit: u32) -> Value {
+pub(crate) fn load_archived_from_dir(
+    data_dir: &Path,
+    session_id: &str,
+    offset: u32,
+    limit: u32,
+) -> Value {
     if session_id.is_empty() {
         return archive_empty_page();
     }
@@ -1689,7 +1747,7 @@ fn load_archived_from_dir(data_dir: &Path, session_id: &str, offset: u32, limit:
     json!({ "messages": messages, "total": total, "hasMore": start > 0 })
 }
 
-fn clear_archive_in_dir(data_dir: &Path, session_id: &str) -> bool {
+pub(crate) fn clear_archive_in_dir(data_dir: &Path, session_id: &str) -> bool {
     if session_id.is_empty() {
         return false;
     }
@@ -2495,8 +2553,21 @@ pub fn claude_ping(
 #[tauri::command]
 pub async fn claude_auth_status(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:auth-status",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let value = tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&app))
         .await
         .map_err(|err| BridgeError {
@@ -2508,8 +2579,21 @@ pub async fn claude_auth_status(
 #[tauri::command]
 pub async fn claude_account_list(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:account-list",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let app_data_dir = app_data_dir(&app)?;
     let index = account_store::read_index(&app_data_dir);
     Ok(serde_json::to_value(index).unwrap_or(Value::Null))
@@ -2673,11 +2757,29 @@ pub async fn claude_abort_session(
 #[tauri::command]
 pub async fn claude_stop_task(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     task_id: String,
 ) -> Result<bool, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:stop-task",
+        vec![json!(session_id.clone()), json!(task_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result.map(|value| {
+            value
+                .as_bool()
+                .or_else(|| value.get("ok").and_then(Value::as_bool))
+                .unwrap_or(false)
+        });
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .stop_task(session_id, task_id)
         .await
@@ -2793,9 +2895,22 @@ pub async fn claude_account_login_new(
 #[tauri::command]
 pub async fn claude_account_switch(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:account-switch",
+        vec![json!(account_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let app_data_dir = app_data_dir(&app)?;
     let ok = account_store::switch_account(&app_data_dir, &account_id).map_err(account_error)?;
     Ok(Value::Bool(ok))
@@ -2804,9 +2919,22 @@ pub async fn claude_account_switch(
 #[tauri::command]
 pub async fn claude_account_remove(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     account_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:account-remove",
+        vec![json!(account_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let app_data_dir = app_data_dir(&app)?;
     let ok = account_store::remove_account(&app_data_dir, &account_id).map_err(account_error)?;
     Ok(Value::Bool(ok))
@@ -2815,8 +2943,21 @@ pub async fn claude_account_remove(
 #[tauri::command]
 pub async fn claude_account_mark_warning_shown(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:account-mark-warning-shown",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let app_data_dir = app_data_dir(&app)?;
     account_store::mark_warning_shown(&app_data_dir).map_err(account_error)?;
     Ok(Value::Bool(true))
@@ -2827,63 +2968,61 @@ pub async fn claude_account_mark_warning_shown(
 #[tauri::command]
 pub async fn claude_get_cli_path(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-cli-path",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     Ok(Value::String(resolve_claude_cli_path(&app)))
 }
 
 #[tauri::command]
 pub async fn claude_prepare_cli_session(
     app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     terminal_id: String,
     workspace_id: String,
     cwd: String,
     agent_preset: String,
     current_session_id: Option<String>,
 ) -> Result<Value, BridgeError> {
-    let (settings_path, events_path, hook_script_path, node_path) =
-        write_claude_cli_hook_assets(&app, &terminal_id, &workspace_id, &cwd, &agent_preset)?;
-    let (mut session_id, mut source) = choose_claude_cli_session(
-        &events_path,
-        &terminal_id,
-        &workspace_id,
-        &cwd,
-        &agent_preset,
-        current_session_id.as_deref(),
-    );
-    let selected_event = if source == "terminal-event" {
-        read_latest_claude_cli_event(&events_path, |event| event.terminal_id == terminal_id)
-    } else if source == "workspace-event" {
-        read_latest_claude_cli_event(&events_path, |event| {
-            event.workspace_id == workspace_id
-                && event.agent_preset == agent_preset
-                && event.cwd == cwd
-        })
-    } else {
-        None
-    };
-    let can_resume = source != "new"
-        && (claude_history_file_exists(&cwd, &session_id)
-            || claude_cli_event_transcript_exists(selected_event.as_ref()));
-    let launch_mode = if can_resume {
-        "resume"
-    } else {
-        if !is_uuid_like(&session_id) {
-            session_id = generate_uuid_v4();
-            source = "new".into();
-        }
-        "session"
-    };
-    Ok(serde_json::to_value(ClaudeCliPrepareSessionResult {
-        session_id,
-        launch_mode: launch_mode.into(),
-        settings_path: settings_path.to_string_lossy().to_string(),
-        events_path: events_path.to_string_lossy().to_string(),
-        hook_script_path: hook_script_path.to_string_lossy().to_string(),
-        cli_path: resolve_claude_cli_path(&app),
-        node_path,
-        source,
-    })?)
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:prepare-cli-session",
+        vec![
+            json!(terminal_id.clone()),
+            json!(workspace_id.clone()),
+            json!(cwd.clone()),
+            json!(agent_preset.clone()),
+            json!(current_session_id.clone()),
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    prepare_cli_session_native(
+        &app,
+        terminal_id,
+        workspace_id,
+        cwd,
+        agent_preset,
+        current_session_id,
+    )
 }
 
 #[tauri::command]
@@ -2915,20 +3054,46 @@ pub async fn claude_list_sessions(
 #[tauri::command]
 pub async fn claude_get_supported_models(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-supported-models",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     Ok(ClaudeRuntimeRouter::from_states(app, &state, &codex_state).supported_models(&session_id))
 }
 
 #[tauri::command]
 pub async fn claude_get_supported_commands(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-supported-commands",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .supported_commands(session_id)
         .await
@@ -2937,10 +3102,23 @@ pub async fn claude_get_supported_commands(
 #[tauri::command]
 pub async fn claude_get_supported_agents(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-supported-agents",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .supported_agents(session_id)
         .await
@@ -2949,10 +3127,23 @@ pub async fn claude_get_supported_agents(
 #[tauri::command]
 pub async fn claude_get_account_info(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-account-info",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .account_info(session_id)
         .await
@@ -2961,10 +3152,23 @@ pub async fn claude_get_account_info(
 #[tauri::command]
 pub async fn claude_get_session_state(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-session-state",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .session_state(session_id)
         .await
@@ -2973,10 +3177,23 @@ pub async fn claude_get_session_state(
 #[tauri::command]
 pub async fn claude_get_session_meta(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-session-meta",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .session_meta(session_id)
         .await
@@ -2985,10 +3202,23 @@ pub async fn claude_get_session_meta(
 #[tauri::command]
 pub async fn claude_get_context_usage(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-context-usage",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .context_usage(session_id)
         .await
@@ -2997,9 +3227,22 @@ pub async fn claude_get_context_usage(
 #[tauri::command]
 pub async fn claude_get_worktree_status(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-worktree-status",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
         let status = tauri::async_runtime::spawn_blocking(move || {
             worktree_status_from_notification_snapshot(&session)
@@ -3023,10 +3266,23 @@ pub async fn claude_get_worktree_status(
 
 #[tauri::command]
 pub async fn claude_scan_skills(
-    _app: AppHandle,
-    _state: State<'_, SidecarState>,
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:scan-skills",
+        vec![json!(cwd.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let entries = scan_skills_native(Path::new(&cwd));
     Ok(serde_json::to_value(entries).unwrap_or_else(|_| json!([])))
 }
@@ -3034,10 +3290,23 @@ pub async fn claude_scan_skills(
 #[tauri::command]
 pub async fn claude_cleanup_worktree(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:cleanup-worktree",
+        vec![json!(session_id.clone()), json!(delete_branch)],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
         if session.worktree_path.is_some() {
             let native_session = session.clone();
@@ -3094,11 +3363,24 @@ pub async fn claude_cleanup_worktree(
 #[tauri::command]
 pub async fn claude_set_auto_continue(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     opts: Value,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-auto-continue",
+        vec![json!(session_id.clone()), opts.clone()],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .set_auto_continue(session_id, opts)
         .await
@@ -3107,10 +3389,23 @@ pub async fn claude_set_auto_continue(
 #[tauri::command]
 pub async fn claude_get_auto_continue(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:get-auto-continue",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .get_auto_continue(session_id)
         .await
@@ -3119,11 +3414,24 @@ pub async fn claude_get_auto_continue(
 #[tauri::command]
 pub async fn claude_set_permission_mode(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-permission-mode",
+        vec![json!(session_id.clone()), json!(mode.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .set_permission_mode(session_id, mode)
         .await
@@ -3132,11 +3440,24 @@ pub async fn claude_set_permission_mode(
 #[tauri::command]
 pub async fn claude_set_codex_sandbox_mode(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     mode: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-codex-sandbox-mode",
+        vec![json!(session_id.clone()), json!(mode.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .set_codex_sandbox_mode(session_id, mode)
         .await
@@ -3145,11 +3466,24 @@ pub async fn claude_set_codex_sandbox_mode(
 #[tauri::command]
 pub async fn claude_set_codex_approval_policy(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     policy: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-codex-approval-policy",
+        vec![json!(session_id.clone()), json!(policy.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .set_codex_approval_policy(session_id, policy)
         .await
@@ -3158,12 +3492,29 @@ pub async fn claude_set_codex_approval_policy(
 #[tauri::command]
 pub async fn claude_set_model(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     model: String,
     auto_compact_window: Option<i64>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-model",
+        vec![
+            json!(session_id.clone()),
+            json!(model.clone()),
+            json!(auto_compact_window),
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(value) = codex_state.set_model(&app, &session_id, model.clone()) {
         return Ok(value);
     }
@@ -3190,11 +3541,24 @@ pub async fn claude_set_model(
 #[tauri::command]
 pub async fn claude_set_effort(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     effort: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:set-effort",
+        vec![json!(session_id.clone()), json!(effort.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(value) = codex_state.set_effort(&app, &session_id, effort.clone()) {
         return Ok(value);
     }
@@ -3216,10 +3580,23 @@ pub async fn claude_set_effort(
 #[tauri::command]
 pub async fn claude_reset_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:reset-session",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .reset_session(session_id)
         .await
@@ -3228,10 +3605,23 @@ pub async fn claude_reset_session(
 #[tauri::command]
 pub async fn claude_fork_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:fork-session",
+        vec![json!(session_id.clone())],
+        Duration::from_secs(90),
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .fork_session(session_id)
         .await
@@ -3240,10 +3630,23 @@ pub async fn claude_fork_session(
 #[tauri::command]
 pub async fn claude_archive_messages(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     session_id: String,
     messages: Value,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:archive-messages",
+        vec![json!(session_id.clone()), messages.clone()],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let data_dir = app_data_dir(&app)?;
     match archive_messages_in_dir(&data_dir, &session_id, &messages) {
         Ok(value) => Ok(json!(value)),
@@ -3254,11 +3657,24 @@ pub async fn claude_archive_messages(
 #[tauri::command]
 pub async fn claude_load_archived(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     session_id: String,
     offset: u32,
     limit: u32,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:load-archived",
+        vec![json!(session_id.clone()), json!(offset), json!(limit)],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let data_dir = app_data_dir(&app)?;
     Ok(load_archived_from_dir(
         &data_dir,
@@ -3271,9 +3687,22 @@ pub async fn claude_load_archived(
 #[tauri::command]
 pub async fn claude_clear_archive(
     app: AppHandle,
-    _state: State<'_, SidecarState>,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:clear-archive",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     let data_dir = app_data_dir(&app)?;
     Ok(json!(clear_archive_in_dir(&data_dir, &session_id)))
 }
@@ -3281,10 +3710,23 @@ pub async fn claude_clear_archive(
 #[tauri::command]
 pub async fn claude_rest_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:rest-session",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(value) = codex_state.rest_session(&app, &session_id) {
         return Ok(value);
     }
@@ -3304,10 +3746,23 @@ pub async fn claude_rest_session(
 #[tauri::command]
 pub async fn claude_wake_session(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:wake-session",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(value) = codex_state.wake_session(&session_id) {
         return Ok(value);
     }
@@ -3327,10 +3782,23 @@ pub async fn claude_wake_session(
 #[tauri::command]
 pub async fn claude_is_resting(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:is-resting",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     if let Some(value) = codex_state.is_resting(&session_id) {
         return Ok(value);
     }
@@ -3349,11 +3817,24 @@ pub async fn claude_is_resting(
 #[tauri::command]
 pub async fn claude_fetch_subagent_messages(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     agent_tool_use_id: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:fetch-subagent-messages",
+        vec![json!(session_id.clone()), json!(agent_tool_use_id.clone())],
+        Duration::from_secs(30),
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .fetch_subagent_messages(session_id, agent_tool_use_id)
         .await
@@ -3362,11 +3843,24 @@ pub async fn claude_fetch_subagent_messages(
 #[tauri::command]
 pub async fn claude_rewind_to_prompt(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     prompt_index: u32,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:rewind-to-prompt",
+        vec![json!(session_id.clone()), json!(prompt_index)],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .rewind_to_prompt(session_id, prompt_index)
         .await
@@ -3426,12 +3920,29 @@ pub async fn claude_resume_session(
 #[tauri::command]
 pub async fn claude_resolve_permission(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     tool_use_id: String,
     result: Value,
 ) -> Result<Value, BridgeError> {
+    if let Some(remote_result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:resolve-permission",
+        vec![
+            json!(session_id.clone()),
+            json!(tool_use_id.clone()),
+            result.clone(),
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return remote_result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .resolve_permission(session_id, tool_use_id, result)
         .await
@@ -3440,12 +3951,29 @@ pub async fn claude_resolve_permission(
 #[tauri::command]
 pub async fn claude_resolve_ask_user(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, SidecarState>,
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
     tool_use_id: String,
     answers: Value,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:resolve-ask-user",
+        vec![
+            json!(session_id.clone()),
+            json!(tool_use_id.clone()),
+            answers.clone(),
+        ],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .resolve_ask_user(session_id, tool_use_id, answers)
         .await
@@ -3453,19 +3981,45 @@ pub async fn claude_resolve_ask_user(
 
 #[tauri::command]
 pub async fn claude_check_mcp_json_status(
-    _app: AppHandle,
-    _state: State<'_, SidecarState>,
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:check-mcp-json-status",
+        vec![json!(cwd.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     Ok(check_mcp_json_status_native(Path::new(&cwd)))
 }
 
 #[tauri::command]
 pub async fn claude_enable_all_project_mcp(
-    _app: AppHandle,
-    _state: State<'_, SidecarState>,
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     cwd: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "claude:enable-all-project-mcp",
+        vec![json!(cwd.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     enable_all_project_mcp_native(Path::new(&cwd))
 }
 

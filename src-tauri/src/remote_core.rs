@@ -72,6 +72,17 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "pty:set-viewport-size" => Some(&["id", "cols", "rows", "source"]),
         "pty:kill" | "pty:get-cwd" => Some(&["id"]),
         "pty:restart" => Some(&["id", "cwd", "shell"]),
+        "claude:auth-status"
+        | "claude:account-list"
+        | "claude:account-mark-warning-shown"
+        | "claude:get-cli-path" => Some(&[]),
+        "claude:prepare-cli-session" => Some(&[
+            "terminalId",
+            "workspaceId",
+            "cwd",
+            "agentPreset",
+            "currentSessionId",
+        ]),
         "claude:send-message" => Some(&[
             "sessionId",
             "prompt",
@@ -116,6 +127,7 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "claude:load-archived" => Some(&["sessionId", "offset", "limit"]),
         "claude:fetch-subagent-messages" => Some(&["sessionId", "agentToolUseId"]),
         "claude:account-switch" | "claude:account-remove" => Some(&["accountId"]),
+        "claude:check-mcp-json-status" | "claude:enable-all-project-mcp" => Some(&["cwd"]),
         "worktree:create" => Some(&["sessionId", "cwd", "installPnpm"]),
         "worktree:remove" => Some(&["sessionId", "deleteBranch"]),
         "worktree:merge" => Some(&["sessionId", "strategy"]),
@@ -429,6 +441,41 @@ mod tests {
                 "displayPrompt": "hi",
                 "suppressUserEcho": true,
             })
+        );
+    }
+
+    #[test]
+    fn maps_legacy_claude_metadata_args_to_named_params() {
+        assert_eq!(
+            legacy_v1_args_to_params("claude:list-sessions", &[json!("C:/repo"), json!("codex")]),
+            json!({ "cwd": "C:/repo", "agentKind": "codex" })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params(
+                "claude:prepare-cli-session",
+                &[
+                    json!("term-1"),
+                    json!("workspace-1"),
+                    json!("C:/repo"),
+                    json!("claude-agent"),
+                    json!("existing-session"),
+                ],
+            ),
+            json!({
+                "terminalId": "term-1",
+                "workspaceId": "workspace-1",
+                "cwd": "C:/repo",
+                "agentPreset": "claude-agent",
+                "currentSessionId": "existing-session",
+            })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params("claude:scan-skills", &[json!("C:/repo")]),
+            json!({ "cwd": "C:/repo" })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params("claude:account-switch", &[json!("acct-1")]),
+            json!({ "accountId": "acct-1" })
         );
     }
 
