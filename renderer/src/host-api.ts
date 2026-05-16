@@ -1102,6 +1102,7 @@ function createTauriHost(): BatAppAPI {
       create: (options: unknown) =>
         getInvoke()<string>('pty_create', { options: options as Record<string, unknown> }),
       write: (id: string, data: string) => getInvoke()<void>('pty_write', { id, data }),
+      readBuffer: (id: string) => getInvoke()<string>('pty_read_buffer', { id }),
       resize: (id: string, cols: number, rows: number) =>
         getInvoke()<void>('pty_resize', { id, cols, rows }),
       getViewportState: (id: string) =>

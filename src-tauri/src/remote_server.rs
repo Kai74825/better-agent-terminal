@@ -950,6 +950,12 @@ fn invoke_rust_for_remote(
                     .map_err(|err| format!("{err:?}"))
             })
         }),
+        "pty:read-buffer" => string_param(params, "id", channel).and_then(|id| {
+            let state = app.state::<pty_cmd::PtyState>();
+            pty_cmd::read_pty_output_buffer(&state, &id)
+                .map(Value::String)
+                .map_err(|err| format!("{err:?}"))
+        }),
         "pty:resize" => string_param(params, "id", channel).and_then(|id| {
             u16_param(params, "cols", channel).and_then(|cols| {
                 u16_param(params, "rows", channel).and_then(|rows| {

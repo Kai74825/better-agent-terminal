@@ -155,6 +155,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             image_cmd::image_save_data_url,
             pty_cmd::pty_create,
             pty_cmd::pty_write,
+            pty_cmd::pty_read_buffer,
             pty_cmd::pty_resize,
             pty_cmd::pty_get_viewport_state,
             pty_cmd::pty_set_viewport_mode,

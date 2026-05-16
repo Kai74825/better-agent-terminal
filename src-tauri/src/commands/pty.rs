@@ -78,6 +78,8 @@ pub struct PtySession {
     cwd: String,
     kind: String,
     viewport: TerminalViewportState,
+    output_buffer: Vec<String>,
+    output_buffer_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -171,6 +173,7 @@ const OUTPUT_FLUSH_MS: u64 = 8;
 // coalescer flushes early once `pending` crosses this threshold instead
 // of growing until the time deadline.
 const OUTPUT_FRAME_MAX_BYTES: usize = 64 * 1024;
+const OUTPUT_REPLAY_MAX_BYTES: usize = 1024 * 1024;
 const WORKER_PTY_SEPARATOR: &str = "__w__";
 const DEFAULT_PTY_COLS: u16 = 100;
 const DEFAULT_PTY_ROWS: u16 = 30;
@@ -466,12 +469,37 @@ fn persist_worker_output(
     append_worker_log_lines(worker_buffer, panel_id, &(line + "\n"));
 }
 
+fn append_pty_output_buffer(
+    sessions: &Arc<Mutex<HashMap<String, PtySession>>>,
+    id: &str,
+    data: &str,
+) {
+    let Ok(mut map) = sessions.lock() else {
+        return;
+    };
+    let Some(session) = map.get_mut(id) else {
+        return;
+    };
+    session.output_buffer_bytes = session.output_buffer_bytes.saturating_add(data.len());
+    session.output_buffer.push(data.to_string());
+    while session.output_buffer_bytes > OUTPUT_REPLAY_MAX_BYTES {
+        let Some(removed) = session.output_buffer.first() else {
+            session.output_buffer_bytes = 0;
+            break;
+        };
+        session.output_buffer_bytes = session.output_buffer_bytes.saturating_sub(removed.len());
+        session.output_buffer.remove(0);
+    }
+}
+
 fn emit_pty_output(
     app: &AppHandle,
+    sessions: &Arc<Mutex<HashMap<String, PtySession>>>,
     worker_buffer: Option<&Arc<Mutex<HashMap<String, String>>>>,
     id: &str,
     data: String,
 ) {
+    append_pty_output_buffer(sessions, id, &data);
     if let Some(worker_buffer) = worker_buffer {
         persist_worker_output(worker_buffer, id, &data);
     }
@@ -487,12 +515,13 @@ fn emit_pty_output(
 fn spawn_output_coalescer(
     app: AppHandle,
     id: String,
+    sessions: Arc<Mutex<HashMap<String, PtySession>>>,
     worker_buffer: Option<Arc<Mutex<HashMap<String, String>>>>,
 ) -> Sender<String> {
     let (tx, rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
         while let Ok(first) = rx.recv() {
-            emit_pty_output(&app, worker_buffer.as_ref(), &id, first);
+            emit_pty_output(&app, &sessions, worker_buffer.as_ref(), &id, first);
 
             let mut pending = String::new();
             let deadline = Instant::now() + Duration::from_millis(OUTPUT_FLUSH_MS);
@@ -507,6 +536,7 @@ fn spawn_output_coalescer(
                         if pending.len() >= OUTPUT_FRAME_MAX_BYTES {
                             emit_pty_output(
                                 &app,
+                                &sessions,
                                 worker_buffer.as_ref(),
                                 &id,
                                 std::mem::take(&mut pending),
@@ -516,7 +546,7 @@ fn spawn_output_coalescer(
                     Err(mpsc::RecvTimeoutError::Timeout) => break,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         if !pending.is_empty() {
-                            emit_pty_output(&app, worker_buffer.as_ref(), &id, pending);
+                            emit_pty_output(&app, &sessions, worker_buffer.as_ref(), &id, pending);
                         }
                         return;
                     }
@@ -524,7 +554,7 @@ fn spawn_output_coalescer(
             }
 
             if !pending.is_empty() {
-                emit_pty_output(&app, worker_buffer.as_ref(), &id, pending);
+                emit_pty_output(&app, &sessions, worker_buffer.as_ref(), &id, pending);
             }
         }
     });
@@ -585,6 +615,27 @@ pub(crate) fn start_pty_session(
         message: e.to_string(),
     })?;
 
+    // Insert the session before kicking off the exit watcher so the
+    // watcher can find it.
+    {
+        let mut map = map_handle.lock().map_err(|e| CommandError {
+            message: e.to_string(),
+        })?;
+        map.insert(
+            options.id.clone(),
+            PtySession {
+                writer,
+                master: pair.master,
+                child,
+                cwd: options.cwd.clone(),
+                kind: options.r#type.clone(),
+                viewport: desktop_viewport_state(cols, rows),
+                output_buffer: Vec::new(),
+                output_buffer_bytes: 0,
+            },
+        );
+    }
+
     // Reader thread: pump bytes from PTY → coalesced pty:output events.
     // Lossy UTF-8 because xterm.js consumes strings and PTYs can split
     // codepoints across reads; renderer can stitch via terminal state.
@@ -592,6 +643,7 @@ pub(crate) fn start_pty_session(
     let output_tx = spawn_output_coalescer(
         app.clone(),
         id_for_reader.clone(),
+        Arc::clone(&map_handle),
         worker_buffer_handle.clone(),
     );
     std::thread::spawn(move || {
@@ -609,25 +661,6 @@ pub(crate) fn start_pty_session(
             }
         }
     });
-
-    // Insert the session before kicking off the exit watcher so the
-    // watcher can find it.
-    {
-        let mut map = map_handle.lock().map_err(|e| CommandError {
-            message: e.to_string(),
-        })?;
-        map.insert(
-            options.id.clone(),
-            PtySession {
-                writer,
-                master: pair.master,
-                child,
-                cwd: options.cwd.clone(),
-                kind: options.r#type.clone(),
-                viewport: desktop_viewport_state(cols, rows),
-            },
-        );
-    }
 
     // Exit watcher: poll try_wait on the session's child every 100ms,
     // emit pty:exit with the exit code, and remove the session entry.
@@ -710,6 +743,22 @@ pub(crate) fn write_pty_session(
         })?;
         Ok(())
     })
+}
+
+pub(crate) fn read_pty_output_buffer(state: &PtyState, id: &str) -> Result<String, CommandError> {
+    let map = state.inner.lock().map_err(|e| CommandError {
+        message: e.to_string(),
+    })?;
+    map.get(id)
+        .map(|session| session.output_buffer.concat())
+        .ok_or_else(|| CommandError {
+            message: format!("pty session {id} not found"),
+        })
+}
+
+#[tauri::command]
+pub fn pty_read_buffer(state: State<'_, PtyState>, id: String) -> Result<String, CommandError> {
+    read_pty_output_buffer(&state, &id)
 }
 
 #[tauri::command]

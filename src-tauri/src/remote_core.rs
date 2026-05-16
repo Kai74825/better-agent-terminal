@@ -65,6 +65,7 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "image:read-as-data-url" => Some(&["filePath"]),
         "pty:create" => Some(&["options"]),
         "pty:write" => Some(&["id", "data"]),
+        "pty:read-buffer" => Some(&["id"]),
         "pty:resize" => Some(&["id", "cols", "rows"]),
         "pty:get-viewport-state" => Some(&["id"]),
         "pty:set-viewport-mode" => Some(&["id", "mode", "options"]),
