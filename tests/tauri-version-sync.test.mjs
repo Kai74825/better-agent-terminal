@@ -28,8 +28,8 @@ assert.equal(
 
 assert.equal(
   tauriConfig.mainBinaryName,
-  'better-agent-terminal',
-  'Tauri must bundle the GUI binary even when auxiliary binaries such as bat-server exist',
+  'BetterAgentTerminal',
+  'Tauri packaged GUI binary must overwrite the legacy Electron executable',
 )
 
 assert.ok(cargoPackageSection, 'Cargo.toml must contain a [package] section')

@@ -35,6 +35,11 @@ assert.ok(
   template.indexOf('!insertmacro NSIS_HOOK_PREINSTALL') < template.indexOf('SetOutPath $INSTDIR'),
   'preinstall hook must run before SetOutPath so redirected install dirs affect extraction',
 )
+assert.match(
+  template,
+  /Delete "\$INSTDIR\\better-agent-terminal\.exe"/,
+  'Tauri NSIS installer should remove the previous lowercase Tauri executable after switching back to the Electron executable name',
+)
 assert.doesNotMatch(
   template,
   /^\s*Page custom PageReinstall PageLeaveReinstall/m,

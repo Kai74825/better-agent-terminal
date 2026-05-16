@@ -692,6 +692,9 @@ Section Install
   ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
     Delete "$INSTDIR\$OldMainBinaryName"
   ${EndIf}
+  !if "${MAINBINARYNAME}" != "better-agent-terminal"
+    Delete "$INSTDIR\better-agent-terminal.exe"
+  !endif
 
   ; Save current MAINBINARYNAME for future updates
   WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" "${MAINBINARYNAME}.exe"
