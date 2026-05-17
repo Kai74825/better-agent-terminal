@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 #[derive(Debug, Serialize)]
 pub struct CommandError {
@@ -503,12 +503,14 @@ fn emit_pty_output(
     if let Some(worker_buffer) = worker_buffer {
         persist_worker_output(worker_buffer, id, &data);
     }
-    let _ = app.emit(
+    crate::event_hub::publish_runtime_event(
+        app,
         "pty:output",
-        PtyOutputEvent {
+        json!(PtyOutputEvent {
             id: id.to_string(),
             data,
-        },
+        }),
+        "rust-pty",
     );
 }
 
@@ -685,12 +687,14 @@ pub(crate) fn start_pty_session(
             };
             if let Some(s) = status {
                 let code = s.exit_code() as i32;
-                let _ = app_for_exit.emit(
+                crate::event_hub::publish_runtime_event(
+                    &app_for_exit,
                     "pty:exit",
-                    PtyExitEvent {
+                    json!(PtyExitEvent {
                         id: id_for_exit.clone(),
                         exit_code: code,
-                    },
+                    }),
+                    "rust-pty",
                 );
                 if let Ok(mut map) = map_handle.lock() {
                     map.remove(&id_for_exit);
