@@ -1,9 +1,10 @@
 # Tauri 補完計畫
 
-更新日期：2026-05-11
+更新日期：2026-05-17
 
 ## 進度紀錄
 
+- 2026-05-17：補 remote profile 的 Git/GitHub routing。Tauri `git:*` / `github:*` command 會在 remote profile window 下轉發到 remote server Rust bridge，讓 remote workspace 的 Git tab、GitHub PR/Issue list/view/comment 不再讀 client 本機 cwd；remote server 改呼叫 native helper 避免 command wrapper 需要 window context。`git status` 同步改用 `--untracked-files=all`，確保 untracked folder 內檔案會展開列出。
 - 2026-05-16：補 remote profile 的 Claude/Codex metadata/history Rust routing。Tauri remote 視窗的 `listSessions`、archive page/clear、skills/MCP scan、CLI prepare/path、account list/switch/remove、session meta/state/context、worktree status/cleanup 與 Codex/Claude control metadata 會先透過 remote server Rust bridge 處理；本機已 Rust native 的路徑不再因 remote profile 落回 Node sidecar 或 client 本機空狀態，Claude SDK turn streaming 仍保留 sidecar ownership。
 - 2026-05-16：補 remote profile 的 Files/FS routing。Tauri `host.fs.*` command 會在 remote profile window 下轉發到 Rust remote server 的 `fs:*` bridge，涵蓋 Files tab 的 `readdir/readFile/search`、FolderPicker 的 `home/listDirs/quickLocations/mkdir/delete`、path-link resolve 與 watcher；避免 remote workspace 路徑被拿到 client 本機讀取而顯示空白或錯誤。
 - 2026-05-10：開始 M1/P0 補 adapter 斷線。已接上 `fs.resolvePathLinks` 與 `fs.watch/unwatch/onChanged` 的 Tauri 路徑；`fs.resolvePathLinks` 與 `fs.watch/unwatch` 後續已搬到 Rust native，`fs:changed` 事件由 Rust watcher emit 回 renderer。這讓 ChatMarkdown path link resolution 與 FileTree watcher 不再在 Tauri 下 throw/no-op。

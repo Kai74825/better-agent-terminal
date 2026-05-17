@@ -1487,69 +1487,76 @@ fn invoke_rust_for_remote(
         "git:get-github-url" => {
             string_param_any(params, &["folderPath", "cwd"], channel).and_then(|folder_path| {
                 let value =
-                    tauri::async_runtime::block_on(git_cmd::git_get_github_url(folder_path));
+                    tauri::async_runtime::block_on(git_cmd::git_get_github_url_native(folder_path));
                 to_json_value(channel, value)
             })
         }
         "git:branch" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_branch(cwd));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_branch_native(cwd));
             to_json_value(channel, value)
         }),
         "git:log" => string_param(params, "cwd", channel).and_then(|cwd| {
             let count = params.get("count").and_then(Value::as_i64);
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_log(cwd, count));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_log_native(cwd, count));
             to_json_value(channel, value)
         }),
         "git:diff" => string_param(params, "cwd", channel).and_then(|cwd| {
             let commit_hash = optional_string_param(params, "commitHash");
             let file_path = optional_string_param(params, "filePath");
-            let value =
-                tauri::async_runtime::block_on(git_cmd::git_get_diff(cwd, commit_hash, file_path));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_diff_native(
+                cwd,
+                commit_hash,
+                file_path,
+            ));
             to_json_value(channel, value)
         }),
         "git:diff-files" => string_param(params, "cwd", channel).and_then(|cwd| {
             let commit_hash = optional_string_param(params, "commitHash");
-            let value =
-                tauri::async_runtime::block_on(git_cmd::git_get_diff_files(cwd, commit_hash));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_diff_files_native(
+                cwd,
+                commit_hash,
+            ));
             to_json_value(channel, value)
         }),
         "git:getRoot" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_root(cwd));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_root_native(cwd));
             to_json_value(channel, value)
         }),
         "git:status" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_status(cwd));
+            let value = tauri::async_runtime::block_on(git_cmd::git_get_status_native(cwd));
             to_json_value(channel, value)
         }),
         "github:check-cli" => {
-            let value = tauri::async_runtime::block_on(github_cmd::github_check_cli());
+            let value = tauri::async_runtime::block_on(github_cmd::github_check_cli_native());
             to_json_value(channel, value)
         }
         "github:pr-list" => string_param(params, "cwd", channel)
-            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_pr_list(cwd))),
+            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_pr_list_native(cwd))),
         "github:issue-list" => string_param(params, "cwd", channel)
-            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_issue_list(cwd))),
+            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_issue_list_native(cwd))),
         "github:pr-view" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).map(|number| {
-                tauri::async_runtime::block_on(github_cmd::github_pr_view(cwd, number))
+                tauri::async_runtime::block_on(github_cmd::github_pr_view_native(cwd, number))
             })
         }),
         "github:issue-view" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).map(|number| {
-                tauri::async_runtime::block_on(github_cmd::github_issue_view(cwd, number))
+                tauri::async_runtime::block_on(github_cmd::github_issue_view_native(cwd, number))
             })
         }),
         "github:pr-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).and_then(|number| {
                 string_param(params, "body", channel).map(|body| {
-                    tauri::async_runtime::block_on(github_cmd::github_pr_comment(cwd, number, body))
+                    tauri::async_runtime::block_on(github_cmd::github_pr_comment_native(
+                        cwd, number, body,
+                    ))
                 })
             })
         }),
         "github:issue-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).and_then(|number| {
                 string_param(params, "body", channel).map(|body| {
-                    tauri::async_runtime::block_on(github_cmd::github_issue_comment(
+                    tauri::async_runtime::block_on(github_cmd::github_issue_comment_native(
                         cwd, number, body,
                     ))
                 })

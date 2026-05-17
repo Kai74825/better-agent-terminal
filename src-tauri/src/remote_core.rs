@@ -148,6 +148,7 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "fs:mkdir" => Some(&["parentPath", "name"]),
         "fs:delete-path" => Some(&["targetPath"]),
         "fs:resolve-path-links" => Some(&["cwd", "rawPaths"]),
+        "github:check-cli" => Some(&[]),
         "github:pr-list" | "github:issue-list" => Some(&["cwd"]),
         "github:pr-view" | "github:issue-view" => Some(&["cwd", "number"]),
         "github:pr-comment" | "github:issue-comment" => Some(&["cwd", "number", "body"]),

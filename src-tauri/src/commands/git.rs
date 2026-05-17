@@ -17,18 +17,23 @@
 // show". We intentionally do NOT propagate stderr to the caller;
 // a non-repo cwd is a normal state, not an error.
 
+use crate::commands::profile as profile_cmd;
+use crate::remote_client::RustRemoteClientState;
+use crate::subprocess::hide_console_window;
+use crate::window_registry;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-
-use crate::subprocess::hide_console_window;
-use serde::Serialize;
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 // Hard upper bound for log/status/diff output. Mirrors the Electron
 // maxBuffer (5 MiB) so a runaway repo can't OOM the renderer.
 const MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
+const REMOTE_GIT_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct GitLogEntry {
     pub hash: String,
     pub author: String,
@@ -36,10 +41,47 @@ pub struct GitLogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct GitFileEntry {
     pub status: String,
     pub file: String,
+}
+
+fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
+    let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
+        return false;
+    };
+    profile_cmd::profile_get(app.clone(), profile_id)
+        .map(|profile| profile.kind == "remote")
+        .unwrap_or(false)
+}
+
+async fn remote_invoke_for_window(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    channel: &'static str,
+    args: Vec<Value>,
+) -> Option<Result<Value, String>> {
+    if !is_remote_profile_window(app, window) {
+        return None;
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        remote_client.invoke(channel, args, REMOTE_GIT_TIMEOUT)
+    })
+    .await
+    .map_err(|err| format!("remote.invoke {channel} worker failed: {err}"));
+    Some(match result {
+        Ok(value) => value,
+        Err(err) => Err(err),
+    })
+}
+
+fn from_remote_value<T>(value: Value) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(value).map_err(|err| err.to_string())
 }
 
 // Run git with the given args in `cwd`, returning stdout as a UTF-8
@@ -181,7 +223,7 @@ pub fn parse_diff_files(raw: &str) -> Vec<GitFileEntry> {
         .collect()
 }
 
-// Parse `git status --porcelain -uall`: each line begins with two
+// Parse `git status --porcelain --untracked-files=all`: each line begins with two
 // status chars followed by a space and the path. Mirrors the
 // Electron parser (which trims the status field).
 pub fn parse_status(raw: &str) -> Vec<GitFileEntry> {
@@ -245,7 +287,28 @@ pub fn clamp_log_count(count: Option<i64>) -> u32 {
 }
 
 #[tauri::command]
-pub async fn git_get_github_url(folder_path: String) -> Option<String> {
+pub async fn git_get_github_url(
+    app: AppHandle,
+    window: WebviewWindow,
+    folder_path: String,
+) -> Option<String> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "git:get-github-url",
+        vec![json!(folder_path.clone())],
+    )
+    .await
+    {
+        return match result.and_then(from_remote_value) {
+            Ok(value) => value,
+            Err(_) => None,
+        };
+    }
+    git_get_github_url_native(folder_path).await
+}
+
+pub(crate) async fn git_get_github_url_native(folder_path: String) -> Option<String> {
     let raw = run_git_blocking(
         folder_path,
         vec!["remote".into(), "get-url".into(), "origin".into()],
@@ -256,7 +319,19 @@ pub async fn git_get_github_url(folder_path: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn git_get_branch(cwd: String) -> Option<String> {
+pub async fn git_get_branch(app: AppHandle, window: WebviewWindow, cwd: String) -> Option<String> {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "git:branch", vec![json!(cwd.clone())]).await
+    {
+        return match result.and_then(from_remote_value) {
+            Ok(value) => value,
+            Err(_) => None,
+        };
+    }
+    git_get_branch_native(cwd).await
+}
+
+pub(crate) async fn git_get_branch_native(cwd: String) -> Option<String> {
     let raw = run_git_blocking(
         cwd,
         vec!["rev-parse".into(), "--abbrev-ref".into(), "HEAD".into()],
@@ -272,7 +347,28 @@ pub async fn git_get_branch(cwd: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn git_get_log(cwd: String, count: Option<i64>) -> Vec<GitLogEntry> {
+pub async fn git_get_log(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    count: Option<i64>,
+) -> Vec<GitLogEntry> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "git:log",
+        vec![json!(cwd.clone()), json!(count)],
+    )
+    .await
+    {
+        return result
+            .and_then(from_remote_value)
+            .unwrap_or_else(|_| Vec::new());
+    }
+    git_get_log_native(cwd, count).await
+}
+
+pub(crate) async fn git_get_log_native(cwd: String, count: Option<i64>) -> Vec<GitLogEntry> {
     let n = clamp_log_count(count);
     let n_str = n.to_string();
     let args = vec![
@@ -289,6 +385,28 @@ pub async fn git_get_log(cwd: String, count: Option<i64>) -> Vec<GitLogEntry> {
 
 #[tauri::command]
 pub async fn git_get_diff(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    commit_hash: Option<String>,
+    file_path: Option<String>,
+) -> String {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "git:diff",
+        vec![json!(cwd.clone()), json!(commit_hash), json!(file_path)],
+    )
+    .await
+    {
+        return result
+            .and_then(from_remote_value)
+            .unwrap_or_else(|_| String::new());
+    }
+    git_get_diff_native(cwd, commit_hash, file_path).await
+}
+
+pub(crate) async fn git_get_diff_native(
     cwd: String,
     commit_hash: Option<String>,
     file_path: Option<String>,
@@ -300,7 +418,31 @@ pub async fn git_get_diff(
 }
 
 #[tauri::command]
-pub async fn git_get_diff_files(cwd: String, commit_hash: Option<String>) -> Vec<GitFileEntry> {
+pub async fn git_get_diff_files(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    commit_hash: Option<String>,
+) -> Vec<GitFileEntry> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "git:diff-files",
+        vec![json!(cwd.clone()), json!(commit_hash)],
+    )
+    .await
+    {
+        return result
+            .and_then(from_remote_value)
+            .unwrap_or_else(|_| Vec::new());
+    }
+    git_get_diff_files_native(cwd, commit_hash).await
+}
+
+pub(crate) async fn git_get_diff_files_native(
+    cwd: String,
+    commit_hash: Option<String>,
+) -> Vec<GitFileEntry> {
     let argv = build_diff_files_args(commit_hash.as_deref());
     match run_git_blocking(cwd, argv, Duration::from_secs(5)).await {
         Some(raw) => parse_diff_files(&raw),
@@ -309,7 +451,19 @@ pub async fn git_get_diff_files(cwd: String, commit_hash: Option<String>) -> Vec
 }
 
 #[tauri::command]
-pub async fn git_get_root(cwd: String) -> Option<String> {
+pub async fn git_get_root(app: AppHandle, window: WebviewWindow, cwd: String) -> Option<String> {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "git:getRoot", vec![json!(cwd.clone())]).await
+    {
+        return match result.and_then(from_remote_value) {
+            Ok(value) => value,
+            Err(_) => None,
+        };
+    }
+    git_get_root_native(cwd).await
+}
+
+pub(crate) async fn git_get_root_native(cwd: String) -> Option<String> {
     let raw = run_git_blocking(
         cwd,
         vec!["rev-parse".into(), "--show-toplevel".into()],
@@ -325,10 +479,29 @@ pub async fn git_get_root(cwd: String) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn git_get_status(cwd: String) -> Vec<GitFileEntry> {
+pub async fn git_get_status(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+) -> Vec<GitFileEntry> {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "git:status", vec![json!(cwd.clone())]).await
+    {
+        return result
+            .and_then(from_remote_value)
+            .unwrap_or_else(|_| Vec::new());
+    }
+    git_get_status_native(cwd).await
+}
+
+pub(crate) async fn git_get_status_native(cwd: String) -> Vec<GitFileEntry> {
     match run_git_blocking(
         cwd,
-        vec!["status".into(), "--porcelain".into(), "-uall".into()],
+        vec![
+            "status".into(),
+            "--porcelain".into(),
+            "--untracked-files=all".into(),
+        ],
         Duration::from_secs(5),
     )
     .await
@@ -459,6 +632,25 @@ mod tests {
                 status: "MM".into(),
                 file: "both.rs".into()
             }
+        );
+    }
+
+    #[test]
+    fn parse_status_keeps_untracked_folder_files() {
+        let raw = "?? generated/output.txt\n?? generated/nested/file.log\n";
+        let entries = parse_status(raw);
+        assert_eq!(
+            entries,
+            vec![
+                GitFileEntry {
+                    status: "??".into(),
+                    file: "generated/output.txt".into(),
+                },
+                GitFileEntry {
+                    status: "??".into(),
+                    file: "generated/nested/file.log".into(),
+                },
+            ]
         );
     }
 

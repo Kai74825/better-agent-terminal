@@ -16,19 +16,61 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use crate::commands::profile as profile_cmd;
+use crate::remote_client::RustRemoteClientState;
 use crate::subprocess::hide_console_window;
-use serde::Serialize;
-use serde_json::Value;
+use crate::window_registry;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const REMOTE_GITHUB_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CliStatus {
     pub installed: bool,
     pub authenticated: bool,
+}
+
+fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
+    let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
+        return false;
+    };
+    profile_cmd::profile_get(app.clone(), profile_id)
+        .map(|profile| profile.kind == "remote")
+        .unwrap_or(false)
+}
+
+async fn remote_invoke_for_window(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    channel: &'static str,
+    args: Vec<Value>,
+) -> Option<Result<Value, String>> {
+    if !is_remote_profile_window(app, window) {
+        return None;
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        remote_client.invoke(channel, args, REMOTE_GITHUB_TIMEOUT)
+    })
+    .await
+    .map_err(|err| format!("remote.invoke {channel} worker failed: {err}"));
+    Some(match result {
+        Ok(value) => value,
+        Err(err) => Err(err),
+    })
+}
+
+fn from_remote_value<T>(value: Value) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(value).map_err(|err| err.to_string())
 }
 
 // Resolve an absolute `gh` binary path. macOS .app launched from Finder /
@@ -149,7 +191,19 @@ fn json_or_error(result: Result<String, String>) -> Value {
 }
 
 #[tauri::command]
-pub async fn github_check_cli() -> CliStatus {
+pub async fn github_check_cli(app: AppHandle, window: WebviewWindow) -> CliStatus {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "github:check-cli", Vec::new()).await
+    {
+        return result.and_then(from_remote_value).unwrap_or(CliStatus {
+            installed: false,
+            authenticated: false,
+        });
+    }
+    github_check_cli_native().await
+}
+
+pub(crate) async fn github_check_cli_native() -> CliStatus {
     let installed = run_gh_blocking(None, vec!["--version".into()], CHECK_TIMEOUT)
         .await
         .is_ok();
@@ -173,7 +227,16 @@ pub async fn github_check_cli() -> CliStatus {
 }
 
 #[tauri::command]
-pub async fn github_pr_list(cwd: String) -> Value {
+pub async fn github_pr_list(app: AppHandle, window: WebviewWindow, cwd: String) -> Value {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "github:pr-list", vec![json!(cwd.clone())]).await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_pr_list_native(cwd).await
+}
+
+pub(crate) async fn github_pr_list_native(cwd: String) -> Value {
     let args = vec![
         "pr",
         "list",
@@ -189,7 +252,16 @@ pub async fn github_pr_list(cwd: String) -> Value {
 }
 
 #[tauri::command]
-pub async fn github_issue_list(cwd: String) -> Value {
+pub async fn github_issue_list(app: AppHandle, window: WebviewWindow, cwd: String) -> Value {
+    if let Some(result) =
+        remote_invoke_for_window(&app, &window, "github:issue-list", vec![json!(cwd.clone())]).await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_issue_list_native(cwd).await
+}
+
+pub(crate) async fn github_issue_list_native(cwd: String) -> Value {
     let args = vec![
         "issue",
         "list",
@@ -205,7 +277,26 @@ pub async fn github_issue_list(cwd: String) -> Value {
 }
 
 #[tauri::command]
-pub async fn github_pr_view(cwd: String, number: i64) -> Value {
+pub async fn github_pr_view(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    number: i64,
+) -> Value {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "github:pr-view",
+        vec![json!(cwd.clone()), json!(number)],
+    )
+    .await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_pr_view_native(cwd, number).await
+}
+
+pub(crate) async fn github_pr_view_native(cwd: String, number: i64) -> Value {
     let n = number.to_string();
     let args = vec![
         "pr".into(),
@@ -218,7 +309,26 @@ pub async fn github_pr_view(cwd: String, number: i64) -> Value {
 }
 
 #[tauri::command]
-pub async fn github_issue_view(cwd: String, number: i64) -> Value {
+pub async fn github_issue_view(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    number: i64,
+) -> Value {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "github:issue-view",
+        vec![json!(cwd.clone()), json!(number)],
+    )
+    .await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_issue_view_native(cwd, number).await
+}
+
+pub(crate) async fn github_issue_view_native(cwd: String, number: i64) -> Value {
     let n = number.to_string();
     let args = vec![
         "issue".into(),
@@ -231,7 +341,27 @@ pub async fn github_issue_view(cwd: String, number: i64) -> Value {
 }
 
 #[tauri::command]
-pub async fn github_pr_comment(cwd: String, number: i64, body: String) -> Value {
+pub async fn github_pr_comment(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    number: i64,
+    body: String,
+) -> Value {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "github:pr-comment",
+        vec![json!(cwd.clone()), json!(number), json!(body.clone())],
+    )
+    .await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_pr_comment_native(cwd, number, body).await
+}
+
+pub(crate) async fn github_pr_comment_native(cwd: String, number: i64, body: String) -> Value {
     let n = number.to_string();
     let args = vec!["pr".into(), "comment".into(), n, "--body".into(), body];
     match run_gh_blocking(Some(cwd), args, READ_TIMEOUT).await {
@@ -241,7 +371,27 @@ pub async fn github_pr_comment(cwd: String, number: i64, body: String) -> Value 
 }
 
 #[tauri::command]
-pub async fn github_issue_comment(cwd: String, number: i64, body: String) -> Value {
+pub async fn github_issue_comment(
+    app: AppHandle,
+    window: WebviewWindow,
+    cwd: String,
+    number: i64,
+    body: String,
+) -> Value {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "github:issue-comment",
+        vec![json!(cwd.clone()), json!(number), json!(body.clone())],
+    )
+    .await
+    {
+        return result.unwrap_or_else(|err| json!({ "error": err }));
+    }
+    github_issue_comment_native(cwd, number, body).await
+}
+
+pub(crate) async fn github_issue_comment_native(cwd: String, number: i64, body: String) -> Value {
     let n = number.to_string();
     let args = vec!["issue".into(), "comment".into(), n, "--body".into(), body];
     match run_gh_blocking(Some(cwd), args, READ_TIMEOUT).await {
