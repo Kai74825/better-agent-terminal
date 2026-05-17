@@ -168,10 +168,21 @@ fn webview_url_debug(url: &WebviewUrl) -> String {
     }
 }
 
+// macOS keeps `set_focus` from unhiding or unminimizing a window, so a
+// re-open request that lands on an existing window can leave the user
+// staring at the same screen while a banner claims the profile is
+// already open. show()+unminimize()+set_focus() mirrors the order used
+// for notification-driven focus and reliably brings the window forward.
+fn raise_window(win: &WebviewWindow) {
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_focus();
+}
+
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
-        let _ = win.set_focus();
+        raise_window(&win);
         return Ok(());
     }
     let build_app = app.clone();
@@ -206,7 +217,7 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
 fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
-        let _ = win.set_focus();
+        raise_window(&win);
         return Ok(());
     }
     let url = renderer_url("index.html");
@@ -447,7 +458,7 @@ pub fn app_focus_next_window(app: AppHandle, window: WebviewWindow) -> bool {
         .or_else(|| labels.first().cloned());
     if let Some(label) = next {
         if let Some(win) = app.get_webview_window(&label) {
-            let _ = win.set_focus();
+            raise_window(&win);
             return true;
         }
     }
@@ -463,7 +474,7 @@ pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInsta
         .collect::<Vec<_>>();
     if let Some(entry) = live.iter().max_by_key(|entry| entry.last_active_at) {
         if let Some(win) = app.get_webview_window(&entry.id) {
-            let _ = win.set_focus();
+            raise_window(&win);
         }
         return OpenNewInstanceResult {
             already_open: true,
