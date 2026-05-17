@@ -310,7 +310,7 @@ platform native Claude binary 與 Node runtime 仍是體積主體。要把 Tauri
 - `pnpm exec tsc --noEmit --pretty false`
 - `pnpm run compile`
 - `pnpm run test:sidecar`
-- `pnpm run test:tauri-rust`
+- `pnpm run check:tauri-rust`
 - 手動測：FolderPicker、FileTree watch refresh、image save/copy、terminal restart、Claude stop task。
 
 ### M2：macOS performance 與 bundle 瘦身

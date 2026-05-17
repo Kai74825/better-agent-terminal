@@ -162,7 +162,7 @@
   - `node-sidecar/tests/server.test.mjs`：(a) in-process dispatch — ping/authStatus/accountList/unknown method/notification/throwing handler/duplicate registration 等 7 條斷言，(b) end-to-end — `spawn(node, server.mjs)` 跑 stdio 線程化 JSON-RPC，回放 3 條請求並用 `byId` map 對齊（伺服器 dispatch async 不保證 in-order，這是預期行為）。
   - `cargo test`（99 tests）：每個 commands::* 子模組 + 新加 `sidecar::tests`。新增 10 例 sidecar 測試包含：alloc_id 起點 + 增量、PendingTable insert/take/drain、SidecarReply 三種 shape parsing（result / error / event no-id），以及 4 條真正 spawn Node 的 end-to-end：ping round-trip、unknown method 回 -32601、claude.authStatus + claude.accountList stub、8 thread 併發 ping by-id correlation。沒有 node 或 sidecar script 時自動跳過。
 - [x] **Release build verified on Windows** — `pnpm exec tauri build` 產生 ~12 MB exe + ~5 MB MSI + ~3.5 MB NSIS installer，smoke test 通過。Phase 2 加入 sidecar 後 release exe 體積無變動（sidecar 是執行期 spawn 不打進 exe）。
-- [x] npm scripts：`test:host-api`、`test:tauri-launch`、`test:tauri-rust`、`test:sidecar`、`tauri:*`。
+- [x] npm scripts：`test:host-api`、`test:tauri-launch`、`check:tauri-rust`、`test:sidecar`、`tauri:*`。
 
 ### 進行中 / 下一步
 

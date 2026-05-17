@@ -5,6 +5,6 @@
 
 tauri-dev: pnpm run tauri:dev:local -- --stable
 typecheck: pnpm exec tsc --noEmit --pretty false
-tauri-rust-test: pnpm run test:tauri-rust
+tauri-rust-check: pnpm run check:tauri-rust
 sidecar-test: pnpm run test:sidecar
 tauri-build-debug: pnpm run tauri:build:debug
