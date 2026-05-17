@@ -1351,7 +1351,7 @@ impl CodexAppServerState {
             app,
             "claude:resume-loading",
             &session_id,
-            "payload",
+            "loading",
             json!(true),
         );
         let response = connection.request(
@@ -1371,7 +1371,7 @@ impl CodexAppServerState {
                 app,
                 "claude:resume-loading",
                 &session_id,
-                "payload",
+                "loading",
                 json!(false),
             );
             return Err(bridge_error(err));
@@ -1445,14 +1445,14 @@ impl CodexAppServerState {
             app,
             "claude:history",
             &session_id,
-            "payload",
+            "items",
             json!(history_items),
         );
         emit(
             app,
             "claude:resume-loading",
             &session_id,
-            "payload",
+            "loading",
             json!(false),
         );
         Ok(json!({ "ok": true, "sessionId": session_id, "sdkSessionId": sdk_session_id }))

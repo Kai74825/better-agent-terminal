@@ -268,8 +268,22 @@ pub fn event_params_to_legacy_v1_args(channel: &str, params: &Value) -> Vec<Valu
         "claude:error" => vec![params["sessionId"].clone(), params["error"].clone()],
         "claude:status" => vec![params["sessionId"].clone(), params["meta"].clone()],
         "claude:modeChange" => vec![params["sessionId"].clone(), params["mode"].clone()],
-        "claude:history" => vec![params["sessionId"].clone(), params["items"].clone()],
-        "claude:resume-loading" => vec![params["sessionId"].clone(), params["loading"].clone()],
+        "claude:history" => vec![
+            params["sessionId"].clone(),
+            params
+                .get("items")
+                .or_else(|| params.get("payload"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        ],
+        "claude:resume-loading" => vec![
+            params["sessionId"].clone(),
+            params
+                .get("loading")
+                .or_else(|| params.get("payload"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        ],
         "claude:permission-request" | "claude:ask-user" => {
             vec![params["sessionId"].clone(), params["data"].clone()]
         }
@@ -599,10 +613,24 @@ mod tests {
         );
         assert_eq!(
             event_params_to_legacy_v1_args(
+                "claude:history",
+                &json!({ "sessionId": "s1", "payload": [{ "role": "assistant" }] }),
+            ),
+            vec![json!("s1"), json!([{ "role": "assistant" }])]
+        );
+        assert_eq!(
+            event_params_to_legacy_v1_args(
                 "claude:resume-loading",
                 &json!({ "sessionId": "s1", "loading": false }),
             ),
             vec![json!("s1"), json!(false)]
+        );
+        assert_eq!(
+            event_params_to_legacy_v1_args(
+                "claude:resume-loading",
+                &json!({ "sessionId": "s1", "payload": true }),
+            ),
+            vec![json!("s1"), json!(true)]
         );
         assert_eq!(
             event_params_to_legacy_v1_args("workspace:reload", &json!("{\"workspaces\":[]}")),
