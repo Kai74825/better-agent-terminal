@@ -643,15 +643,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   // Combine archived + live messages for rendering and scanning
   const allMessages = useMemo(() => [...loadedArchive, ...messages], [loadedArchive, messages])
   messageCountRef.current = allMessages.length
+  const lastRenderDlogRef = useRef<{ at: number; summary: string }>({ at: 0, summary: '' })
   const archiveDlog = useCallback((message: string) => {
     if (host.debug.isDebugMode === true) host.debug.log(message)
   }, [])
 
   useEffect(() => {
-    archiveDlog(
-      `[Claude:${sessionId.slice(0, 8)}] render messages live=${messages.length} archived=${loadedArchive.length} all=${allMessages.length} hasMore=${hasMoreArchived} loadingMore=${isLoadingMore}`
-    )
-  }, [allMessages.length, archiveDlog, hasMoreArchived, isLoadingMore, loadedArchive.length, messages.length, sessionId])
+    if (host.debug.isDebugMode !== true) return
+    const summary = `live=${messages.length} archived=${loadedArchive.length} all=${allMessages.length} hasMore=${hasMoreArchived} loadingMore=${isLoadingMore}`
+    const now = Date.now()
+    if (summary === lastRenderDlogRef.current.summary) return
+    if (now - lastRenderDlogRef.current.at < 1000) return
+    lastRenderDlogRef.current = { at: now, summary }
+    host.debug.log(`[Claude:${sessionId.slice(0, 8)}] render messages ${summary}`)
+  }, [allMessages.length, hasMoreArchived, isLoadingMore, loadedArchive.length, messages.length, sessionId])
 
   // Show enough recent archived context by default while still keeping older
   // archive pages opt-in through the load-more button.
@@ -697,7 +702,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const activeTasks = useMemo(() => {
     const tasks = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent') && m.status === 'running') as ClaudeToolCall[]
     const allTaskTools = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent')) as ClaudeToolCall[]
-    if (allTaskTools.length > 0) {
+    if (host.debug.isDebugMode === true && allTaskTools.length > 0) {
       host.debug.log(`[renderer] activeTasks: ${tasks.length} running / ${allTaskTools.length} total Task/Agent tools (statuses: ${allTaskTools.map(t => `${t.id?.slice(0,8)}=${t.status}`).join(', ')})`)
     }
     return tasks
@@ -852,11 +857,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
     const unsubs = [
       api.onMessage((sid: string, msg: unknown) => {
-        if (sid !== sessionId) {
-          host.debug.log(`${tag} SKIP onMessage sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
-          return
-        }
-        host.debug.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
+        if (sid !== sessionId) return
+        if (host.debug.isDebugMode === true) host.debug.log(`${tag} onMessage`, (msg as ClaudeMessage).id)
         workspaceStore.updateTerminalActivity(sessionId)
         const message = msg as ClaudeMessage
         if (message.role !== 'user') setSessionMeta(prev => clearRuntimeStatusMeta(prev))
@@ -947,7 +949,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         workspaceStore.updateTerminalActivity(sessionId)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
         const toolCall = tool as ClaudeToolCall
-        host.debug.log(`[renderer] onToolUse name=${toolCall.toolName} id=${toolCall.id?.slice(0, 12)} status=${toolCall.status} parentToolUseId=${toolCall.parentToolUseId || 'none'}`)
+        if (host.debug.isDebugMode === true) {
+          host.debug.log(`[renderer] onToolUse name=${toolCall.toolName} id=${toolCall.id?.slice(0, 12)} status=${toolCall.status} parentToolUseId=${toolCall.parentToolUseId || 'none'}`)
+        }
         // Route subagent tool calls to separate bucket
         if (toolCall.parentToolUseId) {
           const bucket = subagentMessagesRef.current.get(toolCall.parentToolUseId) || []
@@ -982,7 +986,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         if (sid !== sessionId) return
         workspaceStore.updateTerminalActivity(sessionId)
         const { id, ...updates } = result as { id: string; status: string; result?: string; description?: string }
-        if ((updates as { description?: string }).description) {
+        if (host.debug.isDebugMode === true && (updates as { description?: string }).description) {
           host.debug.log(`[renderer] onToolResult description update id=${id} desc=${(updates as { description?: string }).description}`)
         }
         // Check if tool exists in any subagent bucket
@@ -1094,12 +1098,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       }),
 
       api.onStatus((sid: string, meta: unknown) => {
-        const dlog = (...args: unknown[]) => host.debug.log(...args)
-        if (sid !== sessionId) {
-          dlog(`${tag} SKIP onStatus sid=${sid.slice(0, 8)} (mine=${sessionId.slice(0, 8)})`)
-          return
+        if (sid !== sessionId) return
+        if (host.debug.isDebugMode === true) {
+          host.debug.log(`${tag} onStatus sdkSessionId=${((meta as unknown as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
         }
-        dlog(`${tag} onStatus sdkSessionId=${((meta as unknown as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
         const m = meta as unknown as SessionMeta
         setSessionMeta(m)
         // Track cache efficiency history (only push when values change)
@@ -1196,12 +1198,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       }),
 
       api.onHistory((sid: string, items: unknown[]) => {
-        if (sid !== sessionId) {
-          host.debug.log(`${tag} SKIP onHistory sid=${sid.slice(0, 8)} items=${(items as unknown[]).length} (mine=${sessionId.slice(0, 8)})`)
-          return
-        }
-        const dlog2 = (...args: unknown[]) => host.debug.log(...args)
-        dlog2(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
+        if (sid !== sessionId) return
+        archiveDlog(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
         historyLoadedRef.current = true
         setIsResumingHistory(false)
         // Partition history items: main timeline vs subagent buckets
@@ -1275,7 +1273,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             { id: userMsgId, displayContent: prompt },
           )
         } else {
-          dlog2(`${tag} onHistory setting messages (history only, no pending prompt)`)
+          archiveDlog(`${tag} onHistory setting messages (history only, no pending prompt)`)
           setMessages(historyItems)
         }
       }),
@@ -1307,7 +1305,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       host.debug.log(`${tag} unsubscribing IPC events`)
       unsubs.forEach(unsub => unsub())
     }
-  }, [sessionId])
+  }, [sessionId, archiveDlog])
 
   // Start session on mount (guarded against StrictMode double-mount)
   // If a saved sdkSessionId exists (from a previous /resume), auto-resume that session
