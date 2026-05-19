@@ -3896,6 +3896,8 @@ pub async fn claude_resume_session(
             option_field(&options, "codexApprovalPolicy"),
             option_field(&options, "permissionMode"),
             option_field(&options, "effort"),
+            option_field(&options, "workspaceId"),
+            option_field(&options, "workspaceName"),
         ],
         SESSION_TIMEOUT,
     )
