@@ -26,8 +26,10 @@ use crate::remote_client::RustRemoteClientState;
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
 use crate::subprocess::hide_console_window;
 use crate::window_registry;
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -35,6 +37,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 // Long-running calls (startSession can boot the agent SDK, sendMessage may
@@ -218,6 +223,75 @@ fn find_bundled_claude_cli_in_base(
     candidate.is_file().then_some(candidate)
 }
 
+fn compressed_claude_cli_cache_key(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(metadata.len().to_string().as_bytes());
+    hasher.update(modified.to_string().as_bytes());
+    Some(format!("{:x}", hasher.finalize())[..16].to_string())
+}
+
+fn extract_compressed_claude_cli(
+    app: &AppHandle,
+    compressed_path: &Path,
+    target_os: &str,
+) -> Option<PathBuf> {
+    let key = compressed_claude_cli_cache_key(compressed_path)?;
+    let out_dir = app_data_dir(app)
+        .ok()?
+        .join("bin")
+        .join("claude-agent-sdk")
+        .join(key);
+    let out_path = out_dir.join(claude_exe_name(target_os));
+    if out_path.is_file() {
+        #[cfg(unix)]
+        {
+            let _ = fs::set_permissions(&out_path, fs::Permissions::from_mode(0o700));
+        }
+        return Some(out_path);
+    }
+    let bytes = fs::read(compressed_path).ok()?;
+    let mut decoder = GzDecoder::new(&bytes[..]);
+    let mut decoded = Vec::new();
+    decoder.read_to_end(&mut decoded).ok()?;
+    fs::create_dir_all(&out_dir).ok()?;
+    fs::write(&out_path, decoded).ok()?;
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&out_path, fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(out_path)
+}
+
+fn find_packaged_claude_cli_in_base(
+    app: &AppHandle,
+    base_dir: &Path,
+    target_os: &str,
+    arch: &str,
+) -> Option<PathBuf> {
+    if let Some(candidate) = find_bundled_claude_cli_in_base(base_dir, target_os, arch) {
+        return Some(candidate);
+    }
+    let package = claude_sdk_package_name(target_os, arch)?;
+    let compressed_candidate = base_dir
+        .join("node-sidecar")
+        .join("node_modules")
+        .join("@anthropic-ai")
+        .join(package)
+        .join(format!("{}.gz", claude_exe_name(target_os)));
+    compressed_candidate
+        .is_file()
+        .then(|| extract_compressed_claude_cli(app, &compressed_candidate, target_os))
+        .flatten()
+}
+
 fn find_claude_cli_on_path(
     path_env: Option<&str>,
     pathext_env: Option<&str>,
@@ -250,12 +324,12 @@ pub(crate) fn resolve_claude_cli_path(app: &AppHandle) -> String {
     let target_os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     if let Ok(resource_dir) = app.path().resource_dir() {
-        if let Some(candidate) = find_bundled_claude_cli_in_base(&resource_dir, target_os, arch) {
+        if let Some(candidate) = find_packaged_claude_cli_in_base(app, &resource_dir, target_os, arch) {
             return candidate.to_string_lossy().to_string();
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(candidate) = find_bundled_claude_cli_in_base(&cwd, target_os, arch) {
+        if let Some(candidate) = find_packaged_claude_cli_in_base(app, &cwd, target_os, arch) {
             return candidate.to_string_lossy().to_string();
         }
     }

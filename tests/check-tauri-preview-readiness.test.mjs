@@ -56,6 +56,37 @@ try {
   assert.equal(notReady.ok, false)
   assert.ok(notReady.checks.some((check) => check.name === 'resource:../node-sidecar/runtime/' && !check.ok))
 
+  await rm(root, { recursive: true, force: true })
+  await mkdir(join(root, 'src-tauri'), { recursive: true })
+  await mkdir(join(root, 'node-sidecar', 'dist'), { recursive: true })
+  await mkdir(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64'), { recursive: true })
+  await mkdir(join(root, 'codex-runtime', 'path'), { recursive: true })
+  await mkdir(join(root, 'node-sidecar', 'runtime', 'linux-x86_64', 'bin'), { recursive: true })
+  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
+    bundle: {
+      resources: {
+        '../node-sidecar/dist/server.mjs': 'node-sidecar/dist/server.mjs',
+        '../node-sidecar/package.json': 'node-sidecar/package.json',
+        '../node-sidecar/dist-node_modules/': 'node-sidecar/node_modules/',
+        '../codex-runtime/': 'codex-runtime/',
+        '../node-sidecar/runtime/': 'node-runtime/',
+      },
+    },
+  }))
+  await writeFile(join(root, 'node-sidecar', 'dist', 'server.mjs'), 'console.log("ok")')
+  await writeFile(join(root, 'node-sidecar', 'package.json'), '{"type":"module"}')
+  await writeFile(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude.gz'), 'compressed')
+  await writeFile(join(root, 'codex-runtime', 'codex'), 'codex')
+  await writeFile(join(root, 'codex-runtime', 'path', 'rg'), 'rg')
+  await writeFile(join(root, 'node-sidecar', 'runtime', 'linux-x86_64', 'bin', 'node'), 'node')
+  const linuxReady = await collectTauriPreviewReadiness({
+    root,
+    platform: 'linux',
+    arch: 'x64',
+  })
+  assert.equal(linuxReady.ok, true)
+  assert.ok(linuxReady.checks.some((check) => check.name === 'sidecar:claude-native:linux-x64' && check.detail.includes('claude.gz')))
+
   console.log('check-tauri-preview-readiness: passed')
 } finally {
   await rm(root, { recursive: true, force: true })

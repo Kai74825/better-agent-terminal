@@ -2,11 +2,13 @@
 // resolver / spawner used by other handlers (sendMessage, forkSession).
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { accessSync, constants as fsConstants } from 'node:fs'
+import { accessSync, chmodSync, constants as fsConstants, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { platform } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { execFile, execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 
 import { registerHandler } from '../lib/protocol.mjs'
 import { resolveDataDir } from '../lib/data-paths.mjs'
@@ -59,6 +61,40 @@ function isUsableClaudeCli(candidate) {
   }
 }
 
+function extractCompressedClaudeCli(compressedCandidate, exeName) {
+  let info
+  try {
+    info = statSync(compressedCandidate)
+    if (!info.isFile()) return null
+  } catch {
+    return null
+  }
+
+  const key = createHash('sha256')
+    .update(compressedCandidate)
+    .update(String(info.size))
+    .update(String(info.mtimeMs))
+    .digest('hex')
+    .slice(0, 16)
+  const outDir = join(resolveDataDir(), 'bin', 'claude-agent-sdk', key)
+  const outPath = join(outDir, exeName)
+  if (isUsableClaudeCli(outPath)) return outPath
+
+  try {
+    mkdirSync(outDir, { recursive: true, mode: 0o700 })
+    writeFileSync(outPath, gunzipSync(readFileSync(compressedCandidate)), { mode: 0o700 })
+    chmodSync(outPath, 0o700)
+  } catch {
+    return null
+  }
+  return isUsableClaudeCli(outPath) ? outPath : null
+}
+
+function resolvePackagedClaudeCli(candidate, exeName) {
+  if (isUsableClaudeCli(candidate)) return candidate
+  return extractCompressedClaudeCli(`${candidate}.gz`, exeName)
+}
+
 function findOnPath(exeName) {
   const pathEnv = process.env.PATH || ''
   for (const dir of pathEnv.split(delimiter)) {
@@ -97,9 +133,10 @@ export function resolveClaudeCliBinary() {
     for (const sidecarRoot of candidateSidecarRoots(here)) {
       for (const triple of tripleDirs) {
         const candidate = join(sidecarRoot, 'node_modules', '@anthropic-ai', triple, exeName)
-        if (isUsableClaudeCli(candidate)) {
-          _claudeCliPathCache = candidate
-          return candidate
+        const resolved = resolvePackagedClaudeCli(candidate, exeName)
+        if (resolved) {
+          _claudeCliPathCache = resolved
+          return resolved
         }
       }
     }
@@ -114,9 +151,10 @@ export function resolveClaudeCliBinary() {
   ]) {
     for (const triple of tripleDirs) {
       const candidate = join(root, '@anthropic-ai', triple, exeName)
-      if (isUsableClaudeCli(candidate)) {
-        _claudeCliPathCache = candidate
-        return candidate
+      const resolved = resolvePackagedClaudeCli(candidate, exeName)
+      if (resolved) {
+        _claudeCliPathCache = resolved
+        return resolved
       }
     }
   }

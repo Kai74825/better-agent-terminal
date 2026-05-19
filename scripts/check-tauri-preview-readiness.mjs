@@ -110,7 +110,13 @@ export async function collectTauriPreviewReadiness(options = {}) {
       exeName,
     )
     const claudeBinaryBytes = await fileSize(claudeBinary)
-    add(`sidecar:claude-native:${key}`, claudeBinaryBytes > 0, `${claudeBinary} (${claudeBinaryBytes} bytes)`)
+    const compressedClaudeBinary = `${claudeBinary}.gz`
+    const compressedClaudeBinaryBytes = await fileSize(compressedClaudeBinary)
+    const hasClaudeBinary = claudeBinaryBytes > 0 || (platform === 'linux' && compressedClaudeBinaryBytes > 0)
+    const detail = claudeBinaryBytes > 0
+      ? `${claudeBinary} (${claudeBinaryBytes} bytes)`
+      : `${compressedClaudeBinary} (${compressedClaudeBinaryBytes} bytes)`
+    add(`sidecar:claude-native:${key}`, hasClaudeBinary, detail)
   } else {
     add(`sidecar:claude-native:${key}`, false, `unsupported platform/arch for Claude native package: ${key}`)
   }

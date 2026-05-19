@@ -454,6 +454,7 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "cbc",
+ "flate2",
  "get_if_addrs",
  "image",
  "keyring",

@@ -3,9 +3,10 @@
 // sidecar. `dist/server.mjs` contains the JS dependencies; this directory
 // only keeps platform native binaries that must remain real files.
 
-import { cp, mkdir, realpath, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { gzipSync } from 'node:zlib'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -38,6 +39,16 @@ async function assertDirectory(path, label) {
   }
 }
 
+async function compressLinuxClaudeBinary(packageDir, platform) {
+  if (platform !== 'linux') return null
+  const binary = join(packageDir, 'claude')
+  const compressed = `${binary}.gz`
+  const bytes = await readFile(binary)
+  await writeFile(compressed, gzipSync(bytes, { level: 9 }), { mode: 0o644 })
+  await rm(binary, { force: true })
+  return compressed
+}
+
 export async function prepareTauriSidecarNodeModules(options = {}) {
   const platform = options.platform || process.platform
   const arch = options.arch || process.arch
@@ -54,15 +65,18 @@ export async function prepareTauriSidecarNodeModules(options = {}) {
   await rm(outputRoot, { recursive: true, force: true })
   const anthropicTargetRoot = join(outputRoot, '@anthropic-ai')
   await mkdir(anthropicTargetRoot, { recursive: true })
-  await cp(anthropicSource, join(anthropicTargetRoot, claudePackage), {
+  const anthropicTarget = join(anthropicTargetRoot, claudePackage)
+  await cp(anthropicSource, anthropicTarget, {
     recursive: true,
     force: true,
     verbatimSymlinks: true,
   })
+  const compressedClaudeBinary = await compressLinuxClaudeBinary(anthropicTarget, platform)
 
   return {
     outputRoot,
     packages: [`@anthropic-ai/${claudePackage}`],
+    compressedClaudeBinary,
   }
 }
 
