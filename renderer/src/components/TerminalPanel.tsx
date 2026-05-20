@@ -77,7 +77,7 @@ export const TerminalPanel = memo(function TerminalPanel({
   const hasBeenFocusedRef = useRef(false)
   const isActiveRef = useRef(isActive)
   const doResizeRef = useRef<(() => void) | null>(null)
-  const supportsImagePaste = agentPreset === 'codex-cli'
+  const supportsImagePaste = agentPreset === 'codex-cli' || isClaudeCliPreset(agentPreset)
   const isClaudeCliTerminal = isClaudeCliPreset(agentPreset)
   const ptyReadyRef = useRef(ptyReady)
   const onReadySizeRef = useRef(onReadySize)
@@ -204,25 +204,45 @@ export const TerminalPanel = memo(function TerminalPanel({
   }
 
   const handlePasteImage = async () => {
-    const filePath = await host.clipboard.saveImage()
+    dlog(`[paste-image] begin terminal=${terminalId} type=${terminalType}`)
+    let filePath: string | null = null
+    try {
+      filePath = await host.clipboard.saveImage()
+    } catch (err) {
+      dlog(`[paste-image] saveImage threw: ${(err as Error)?.message ?? String(err)}`)
+      return false
+    }
+    dlog(`[paste-image] saveImage → ${filePath ?? 'null'}`)
     if (!filePath) return false
-    const written = await host.clipboard.writeImage(filePath)
+    let written = false
+    try {
+      written = await host.clipboard.writeImage(filePath)
+    } catch (err) {
+      dlog(`[paste-image] writeImage threw: ${(err as Error)?.message ?? String(err)}`)
+      return false
+    }
+    dlog(`[paste-image] writeImage → ${written}`)
     if (!written) return false
     host.pty.write(terminalId, '\x1bv')
+    dlog(`[paste-image] sent \\x1bv to pty terminal=${terminalId}`)
     return true
   }
 
   const handlePasteFromClipboard = async ({ textOnly = false }: { textOnly?: boolean } = {}) => {
+    dlog(`[paste-clipboard] start textOnly=${textOnly} supportsImage=${supportsImagePaste} terminal=${terminalId}`)
     if (!textOnly && supportsImagePaste) {
       try {
         const items = await navigator.clipboard.read()
-        const hasImage = items.some(item => item.types.some(type => type.startsWith('image/')))
+        const types = items.flatMap(item => item.types)
+        const hasImage = types.some(type => type.startsWith('image/'))
+        dlog(`[paste-clipboard] navigator.clipboard.read items=${items.length} types=${JSON.stringify(types)} hasImage=${hasImage}`)
         if (hasImage) {
           const pastedImage = await handlePasteImage()
+          dlog(`[paste-clipboard] handlePasteImage → ${pastedImage}`)
           if (pastedImage) return
         }
-      } catch {
-        // Fallback to text paste when clipboard.read() is unavailable.
+      } catch (err) {
+        dlog(`[paste-clipboard] navigator.clipboard.read threw: ${(err as Error)?.message ?? String(err)}`)
       }
     }
 

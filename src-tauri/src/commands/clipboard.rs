@@ -5,6 +5,7 @@
 //   clipboard.saveImage()      -> Promise<string|null>
 //   clipboard.writeImage(file) -> Promise<boolean>
 
+use crate::commands::app::log_tauri;
 use serde::Serialize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,19 +62,44 @@ fn load_rgba_image(path: &Path) -> Result<Image<'static>, CommandError> {
 #[tauri::command]
 pub async fn clipboard_save_image(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
     let app_clone = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_log = app.clone();
+    let result: Result<Option<String>, CommandError> = tauri::async_runtime::spawn_blocking(move || {
         let image = match app_clone.clipboard().read_image() {
             Ok(image) => image,
-            Err(_) => return Ok(None),
+            Err(err) => {
+                log_tauri(
+                    &app_clone,
+                    &format!("[clipboard] save_image: read_image error: {err}"),
+                );
+                return Ok(None);
+            }
         };
+        let width = image.width();
+        let height = image.height();
         let path = clipboard_temp_png_path();
-        write_rgba_png(&path, image.rgba(), image.width(), image.height())?;
+        log_tauri(
+            &app_clone,
+            &format!(
+                "[clipboard] save_image: read_image ok {width}x{height} → {}",
+                path.display()
+            ),
+        );
+        write_rgba_png(&path, image.rgba(), width, height)?;
         Ok(Some(path.to_string_lossy().to_string()))
     })
     .await
     .map_err(|e| CommandError {
         message: e.to_string(),
-    })?
+    })?;
+    match &result {
+        Ok(Some(p)) => log_tauri(&app_for_log, &format!("[clipboard] save_image → {p}")),
+        Ok(None) => log_tauri(&app_for_log, "[clipboard] save_image → None"),
+        Err(e) => log_tauri(
+            &app_for_log,
+            &format!("[clipboard] save_image error: {}", e.message),
+        ),
+    }
+    result
 }
 
 #[tauri::command]
@@ -81,10 +107,39 @@ pub fn clipboard_write_image(
     app: tauri::AppHandle,
     file_path: String,
 ) -> Result<bool, CommandError> {
-    let Ok(image) = load_rgba_image(Path::new(&file_path)) else {
-        return Ok(false);
+    let image = match load_rgba_image(Path::new(&file_path)) {
+        Ok(img) => img,
+        Err(err) => {
+            log_tauri(
+                &app,
+                &format!(
+                    "[clipboard] write_image load_rgba_image failed: {} (path={})",
+                    err.message, file_path
+                ),
+            );
+            return Ok(false);
+        }
     };
-    Ok(app.clipboard().write_image(&image).is_ok())
+    let width = image.width();
+    let height = image.height();
+    match app.clipboard().write_image(&image) {
+        Ok(()) => {
+            log_tauri(
+                &app,
+                &format!("[clipboard] write_image ok {width}x{height} path={file_path}"),
+            );
+            Ok(true)
+        }
+        Err(err) => {
+            log_tauri(
+                &app,
+                &format!(
+                    "[clipboard] write_image plugin error: {err} (path={file_path})"
+                ),
+            );
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]
