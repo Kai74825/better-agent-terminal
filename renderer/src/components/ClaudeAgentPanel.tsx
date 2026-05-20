@@ -14,7 +14,7 @@ import { getAgentPreset, type AgentPresetId } from '../types/agent-presets'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ChatMarkdown } from './ChatMarkdown'
 import { WorktreeMergedChip } from './WorktreeMergedChip'
-import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-url'
+import { filenameForPastedImage, maybeResizeImageDataUrl, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
 import { autoCompactWindowForClaudeSelection, displayNameForClaudeSelection, normalizeClaudeModelSelection, sdkModelForClaudeSelection } from '../utils/claude-model-presets'
@@ -2726,10 +2726,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     if (current.length >= MAX_IMAGES || current.some(img => img.path === filePath)) return
     try {
       const dataUrl = await host.image.readAsDataUrl(filePath)
+      const resized = await maybeResizeImageDataUrl(dataUrl)
       setAttachedImages(prev => {
         if (prev.length >= MAX_IMAGES) return prev
         if (prev.some(img => img.path === filePath)) return prev
-        return [...prev, { path: filePath, dataUrl }]
+        return [...prev, { path: filePath, dataUrl: resized }]
       })
     } catch (err) {
       console.error('Failed to read image:', err)
@@ -2761,7 +2762,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       if (file.type.startsWith('image/')) {
         e.preventDefault()
         const dataUrl = await readFileAsDataUrl(file)
-        addImageDataUrl(filenameForPastedImage(file), dataUrl)
+        const resized = await maybeResizeImageDataUrl(dataUrl)
+        addImageDataUrl(filenameForPastedImage(file), resized)
         return
       }
     }
@@ -2773,7 +2775,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         const file = item.getAsFile()
         if (file) {
           const dataUrl = await readFileAsDataUrl(file)
-          addImageDataUrl(filenameForPastedImage(file), dataUrl)
+          const resized = await maybeResizeImageDataUrl(dataUrl)
+          addImageDataUrl(filenameForPastedImage(file), resized)
           return
         }
         if (!isRemoteConnected) {
@@ -2831,7 +2834,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       if (!filePath) {
         if (file.type.startsWith('image/')) {
           const dataUrl = await readFileAsDataUrl(file)
-          addImageDataUrl(file.name || filenameForPastedImage(file), dataUrl)
+          const resized = await maybeResizeImageDataUrl(dataUrl)
+          addImageDataUrl(file.name || filenameForPastedImage(file), resized)
         } else if (isRemoteConnected) {
           window.alert('Remote sessions can only attach local dropped images. File paths must exist on the host.')
         } else {
