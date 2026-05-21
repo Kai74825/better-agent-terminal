@@ -7,7 +7,15 @@
 import { existsSync } from 'node:fs'
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
-import { sessions, ensureSession, buildSessionMeta, saveSessionConfig } from '../lib/state.mjs'
+import {
+  sessions,
+  ensureSession,
+  buildSessionMeta,
+  saveSessionConfig,
+  appendSessionMessage,
+  clearSessionStream,
+  resetSessionTranscript,
+} from '../lib/state.mjs'
 import { expectedContextWindowForModel } from '../lib/models.mjs'
 import { closeLiveQuery } from './claude-send.mjs'
 import { loadSessionHistory } from './claude-history.mjs'
@@ -78,6 +86,7 @@ registerHandler('claude.startSession', async (params) => {
   s.agentPreset = params?.options?.agentPreset ?? null
   s.active = true
   s.options = params?.options ?? null
+  if (!s.sdkSessionId && !params?.options?.sdkSessionId) resetSessionTranscript(s)
   // Some options carry per-session config the renderer expects to read
   // back via getSessionMeta — capture them now.
   if (s.options && typeof s.options === 'object') {
@@ -185,16 +194,19 @@ registerHandler('claude.restSession', async (params) => {
   // CPU/tokens while paused. wake / next sendMessage will rebuild.
   closeLiveQuery(session)
   session.streaming = false
+  clearSessionStream(session)
   session.isResting = true
+  const message = {
+    id: `sys-rest-${Date.now()}`,
+    sessionId,
+    role: 'system',
+    content: 'Session is resting. Send a message to wake it up.',
+    timestamp: Date.now(),
+  }
+  appendSessionMessage(session, message)
   sendEvent('claude:message', {
     sessionId,
-    message: {
-      id: `sys-rest-${Date.now()}`,
-      sessionId,
-      role: 'system',
-      content: 'Session is resting. Send a message to wake it up.',
-      timestamp: Date.now(),
-    },
+    message,
   })
   return true
 })
@@ -247,6 +259,8 @@ registerHandler('claude.abortSession', async (params) => {
     // propagate through the iterator).
     closeLiveQuery(session)
     session.active = false
+    session.streaming = false
+    clearSessionStream(session)
     // claude:turn-end is also emitted by sendMessage's catch, but we
     // emit here too in case abort is called after streaming finished
     // (the renderer expects an explicit signal).
@@ -406,6 +420,10 @@ registerHandler('claude.getSessionState', async (params) => {
     autoCompactWindow: s.autoCompactWindow,
     codexSandboxMode: s.codexSandboxMode,
     codexApprovalPolicy: s.codexApprovalPolicy,
+    messages: Array.isArray(s.messages) ? s.messages : [],
+    isStreaming: s.streaming === true,
+    streamingText: s.streamingText || '',
+    streamingThinking: s.streamingThinking || '',
   }
 })
 

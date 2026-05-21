@@ -21,7 +21,16 @@
 // resolving promise.
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
-import { sessions, ensureSession, buildSessionMeta, saveSessionConfig } from '../lib/state.mjs'
+import {
+  sessions,
+  ensureSession,
+  buildSessionMeta,
+  saveSessionConfig,
+  appendSessionMessage,
+  appendSessionStream,
+  clearSessionStream,
+  updateSessionToolResult,
+} from '../lib/state.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { info as logInfo, warn as logWarn } from '../lib/logger.mjs'
 import { sdkModelForClaudeSelection } from '../lib/models.mjs'
@@ -58,6 +67,16 @@ function contentLength(content) {
     }, 0)
   }
   return 0
+}
+
+function textFromContent(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+    .trim()
 }
 
 function summarizeToolInput(input) {
@@ -128,21 +147,23 @@ function emitUserEcho(params, sessionId, prompt, images) {
   if (params?.suppressUserEcho === true) return
   const content = userDisplayContent(params, prompt, images)
   const now = Date.now()
+  const message = {
+    id: typeof params?.clientMessageId === 'string' && params.clientMessageId
+      ? params.clientMessageId
+      : `user-${now}-${++userEchoSeq}`,
+    sessionId,
+    role: 'user',
+    content: content || ' ',
+    timestamp: now,
+  }
+  appendSessionMessage(sessions.get(sessionId), message)
   debugLog('emit-user-echo', sessionId, {
     clientMessageId: params?.clientMessageId || null,
     contentLen: content.length,
   })
   sendEvent('claude:message', {
     sessionId,
-    message: {
-      id: typeof params?.clientMessageId === 'string' && params.clientMessageId
-        ? params.clientMessageId
-        : `user-${now}-${++userEchoSeq}`,
-      sessionId,
-      role: 'user',
-      content: content || ' ',
-      timestamp: now,
-    },
+    message,
   })
 }
 
@@ -276,20 +297,24 @@ function processMessage(s, sessionId, msg) {
     if (ev && ev.type === 'content_block_delta') {
       const d = ev.delta
       if (d?.text) {
+        const data = { text: d.text, parentToolUseId: msg.parent_tool_use_id ?? null }
+        appendSessionStream(s, data)
         debugLog('emit-stream', sessionId, {
           kind: 'text',
           len: d.text.length,
           parentToolUseId: msg.parent_tool_use_id ?? null,
         })
-        sendEvent('claude:stream', { sessionId, data: { text: d.text, parentToolUseId: msg.parent_tool_use_id ?? null } })
+        sendEvent('claude:stream', { sessionId, data })
       }
       if (d?.thinking) {
+        const data = { thinking: d.thinking, parentToolUseId: msg.parent_tool_use_id ?? null }
+        appendSessionStream(s, data)
         debugLog('emit-stream', sessionId, {
           kind: 'thinking',
           len: d.thinking.length,
           parentToolUseId: msg.parent_tool_use_id ?? null,
         })
-        sendEvent('claude:stream', { sessionId, data: { thinking: d.thinking, parentToolUseId: msg.parent_tool_use_id ?? null } })
+        sendEvent('claude:stream', { sessionId, data })
       }
     }
     return
@@ -310,6 +335,22 @@ function processMessage(s, sessionId, msg) {
         .trim()
     }
     const outboundMessage = flatThinking ? { ...msg, thinking: flatThinking } : msg
+    const text = textFromContent(blocks)
+      .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
+      .replace(/Full transcript available at:.*$/gm, '')
+      .trim()
+    if (text || flatThinking) {
+      appendSessionMessage(s, {
+        id: `assistant-${Date.now()}-${s.messages?.length || 0}`,
+        sessionId,
+        role: 'assistant',
+        content: text || '',
+        ...(flatThinking ? { thinking: flatThinking } : {}),
+        ...(msg.parent_tool_use_id ? { parentToolUseId: msg.parent_tool_use_id } : {}),
+        timestamp: Date.now(),
+      })
+      clearSessionStream(s)
+    }
     debugLog('emit-assistant-message', sessionId, {
       blockTypes: Array.isArray(blocks) ? blocks.map(b => b?.type).filter(Boolean) : [],
       textLen: contentLength(blocks),
@@ -323,17 +364,19 @@ function processMessage(s, sessionId, msg) {
             toolName: block.name,
             ...summarizeToolInput(block.input),
           })
+          const toolCall = {
+            id: block.id,
+            sessionId,
+            toolName: block.name,
+            input: block.input || {},
+            status: 'running',
+            parentToolUseId: msg.parent_tool_use_id ?? null,
+            timestamp: Date.now(),
+          }
+          appendSessionMessage(s, toolCall)
           sendEvent('claude:tool-use', {
             sessionId,
-            toolCall: {
-              id: block.id,
-              sessionId,
-              toolName: block.name,
-              input: block.input || {},
-              status: 'running',
-              parentToolUseId: msg.parent_tool_use_id ?? null,
-              timestamp: Date.now(),
-            },
+            toolCall,
           })
         }
       }
@@ -349,6 +392,10 @@ function processMessage(s, sessionId, msg) {
             id: block.tool_use_id,
             status: block.is_error ? 'error' : 'completed',
             contentLen: contentLength(block.content),
+          })
+          updateSessionToolResult(s, block.tool_use_id, {
+            status: block.is_error ? 'error' : 'completed',
+            result: block.content,
           })
           sendEvent('claude:tool-result', {
             sessionId,
@@ -381,6 +428,26 @@ function processMessage(s, sessionId, msg) {
       }
     }
     if (msg.subtype === 'success') {
+      clearSessionStream(s)
+      if (typeof msg.result === 'string' && msg.result.trim()) {
+        const recentAssistant = [...(s.messages || [])].reverse().find(item =>
+          item && typeof item === 'object' && item.role === 'assistant'
+        )
+        if (
+          !recentAssistant ||
+          (recentAssistant.content !== msg.result &&
+            !recentAssistant.content?.includes?.(msg.result) &&
+            !msg.result.includes(recentAssistant.content || ''))
+        ) {
+          appendSessionMessage(s, {
+            id: `result-${Date.now()}`,
+            sessionId,
+            role: 'assistant',
+            content: msg.result,
+            timestamp: Date.now(),
+          })
+        }
+      }
       debugLog('emit-result', sessionId, {
         subtype: msg.subtype,
         stopReason: msg.stop_reason || null,
@@ -390,6 +457,7 @@ function processMessage(s, sessionId, msg) {
       debugLog('emit-turn-end', sessionId, { reason: 'completed' })
       sendEvent('claude:turn-end', { sessionId, payload: { reason: 'completed', result: msg.result, sdkSessionId: msg.session_id } })
     } else {
+      clearSessionStream(s)
       const errMsg = resultErrorMessage(msg)
       if (batDebugEnabled()) {
         logWarn(`claude.result(${shortSessionId(sessionId)}): non-success subtype=${msg?.subtype || 'unknown'} keys=${Object.keys(msg || {}).join(',')}`)
@@ -543,7 +611,15 @@ async function performSendMessage(params) {
   if (!sdk || typeof sdk.query !== 'function') {
     logWarn(`claude.sendMessage: SDK unavailable, returning stub for session ${sessionId}`)
     clearRuntimeStatus(s)
-    sendEvent('claude:message', { sessionId, message: { role: 'assistant', content: '(stub reply — SDK unavailable)' } })
+    const message = {
+      id: `stub-${Date.now()}`,
+      sessionId,
+      role: 'assistant',
+      content: '(stub reply — SDK unavailable)',
+      timestamp: Date.now(),
+    }
+    appendSessionMessage(s, message)
+    sendEvent('claude:message', { sessionId, message })
     sendEvent('claude:turn-end', { sessionId, payload: { reason: 'completed', result: '(stub)' } })
     return { ok: true, stub: true }
   }
@@ -556,6 +632,7 @@ async function performSendMessage(params) {
     const errMsg = err instanceof Error ? err.message : String(err)
     logWarn(`claude.sendMessage(${sid}): ensureLiveQuery failed: ${errMsg}`)
     clearRuntimeStatus(s)
+    clearSessionStream(s)
     sendEvent('claude:error', { sessionId, error: errMsg })
     sendEvent('claude:turn-end', { sessionId, payload: { reason: 'error' } })
     return { ok: false, error: errMsg }
@@ -602,6 +679,7 @@ async function performSendMessage(params) {
       || /aborted/i.test(errMsg)
     if (!aborted) {
       logWarn(`claude.sendMessage(${sid}): push failed: ${errMsg}`)
+      clearSessionStream(s)
       sendEvent('claude:error', { sessionId, error: errMsg })
     } else {
       logInfo(`claude.sendMessage(${sid}): aborted`)

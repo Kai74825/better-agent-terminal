@@ -5,6 +5,8 @@ import { expectedContextWindowForModel } from './models.mjs'
 
 export const sessions = new Map()
 
+const MAX_SESSION_MESSAGES = 300
+
 // Persistent per-session config that survives sessions.delete() (stopSession,
 // resetSession). Captures the minimal state needed to rebuild a usable
 // session record on the next ensureSession call — cwd lives here so that
@@ -62,6 +64,9 @@ export function ensureSession(sessionId) {
       // Guard against concurrent sendMessage calls — same contract as the
       // Electron isStreaming flag.
       streaming: false,
+      messages: [],
+      streamingText: '',
+      streamingThinking: '',
       // FIFO promise chain for claude.sendMessage. Electron accepts a
       // prompt while a turn is still finishing; the sidecar must not drop
       // that prompt just because the previous result frame has not fully
@@ -98,6 +103,45 @@ export function ensureSession(sessionId) {
     }
   }
   return s
+}
+
+export function resetSessionTranscript(session) {
+  if (!session) return
+  session.messages = []
+  session.streamingText = ''
+  session.streamingThinking = ''
+}
+
+export function appendSessionMessage(session, message) {
+  if (!session || !message || typeof message !== 'object') return
+  if (!Array.isArray(session.messages)) session.messages = []
+  session.messages.push(message)
+  if (session.messages.length > MAX_SESSION_MESSAGES) {
+    session.messages = session.messages.slice(-MAX_SESSION_MESSAGES)
+  }
+}
+
+export function appendSessionStream(session, data) {
+  if (!session || !data || typeof data !== 'object') return
+  if (data.parentToolUseId) return
+  if (typeof data.text === 'string' && data.text) {
+    session.streamingText = (session.streamingText || '') + data.text
+  }
+  if (typeof data.thinking === 'string' && data.thinking) {
+    session.streamingThinking = (session.streamingThinking || '') + data.thinking
+  }
+}
+
+export function clearSessionStream(session) {
+  if (!session) return
+  session.streamingText = ''
+  session.streamingThinking = ''
+}
+
+export function updateSessionToolResult(session, toolId, updates) {
+  if (!session || typeof toolId !== 'string' || !Array.isArray(session.messages)) return
+  const idx = session.messages.findIndex(m => m && typeof m === 'object' && m.toolName && m.id === toolId)
+  if (idx !== -1) session.messages[idx] = { ...session.messages[idx], ...updates }
 }
 
 // buildSessionMeta(session): shared between the getSessionMeta RPC and
