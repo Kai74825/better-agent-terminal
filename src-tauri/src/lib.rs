@@ -187,6 +187,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             app_cmd::app_set_title,
             app_cmd::app_resolve_profile_window_close,
             app_cmd::app_new_window,
+            app_cmd::app_take_fresh_window_flag,
             app_cmd::app_focus_next_window,
             app_cmd::app_open_new_instance,
             app_cmd::app_restore_active_profiles,

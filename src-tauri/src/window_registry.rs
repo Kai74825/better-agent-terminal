@@ -47,6 +47,11 @@ pub struct WindowEntry {
 #[derive(Default)]
 pub struct WindowRegistryState {
     entries: Mutex<Vec<WindowEntry>>,
+    // One-shot markers for windows created by app_new_window (Cmd+N) so the
+    // renderer knows to skip profile.load() — those windows should land
+    // empty instead of inheriting the bound profile's saved workspaces.
+    // Per-window flag, consumed once on first read.
+    fresh_windows: Mutex<HashSet<String>>,
 }
 
 fn now_millis() -> i64 {
@@ -967,21 +972,35 @@ pub fn create_entries_for_profile(app: &AppHandle, profile_id: &str) -> Vec<Wind
 
 pub fn create_empty_entry_for_profile(app: &AppHandle, profile_id: &str) -> WindowEntry {
     let state = app.state::<WindowRegistryState>();
-    let mut entries = state.entries.lock().unwrap();
-    if entries.is_empty() {
-        *entries = load_entries(app);
-    }
-    let entry = WindowEntry {
-        id: make_window_id(profile_id, entries.len() + 1),
-        profile_id: profile_id.to_string(),
-        snapshot: empty_snapshot(),
-        detached_workspace_id: None,
-        detached_parent_window_id: None,
-        last_active_at: now_millis(),
+    let entry = {
+        let mut entries = state.entries.lock().unwrap();
+        if entries.is_empty() {
+            *entries = load_entries(app);
+        }
+        let entry = WindowEntry {
+            id: make_window_id(profile_id, entries.len() + 1),
+            profile_id: profile_id.to_string(),
+            snapshot: empty_snapshot(),
+            detached_workspace_id: None,
+            detached_parent_window_id: None,
+            last_active_at: now_millis(),
+        };
+        entries.push(entry.clone());
+        persist_entries(app, &entries);
+        entry
     };
-    entries.push(entry.clone());
-    persist_entries(app, &entries);
+    state
+        .fresh_windows
+        .lock()
+        .unwrap()
+        .insert(entry.id.clone());
     entry
+}
+
+pub fn take_fresh_window_flag(app: &AppHandle, window_id: &str) -> bool {
+    let state = app.state::<WindowRegistryState>();
+    let mut fresh = state.fresh_windows.lock().unwrap();
+    fresh.remove(window_id)
 }
 
 pub fn remove_profile_window_entry(app: &AppHandle, window_id: &str) -> Option<String> {

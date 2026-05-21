@@ -652,6 +652,7 @@ function createTauriHost(): BatAppAPI {
       onProfileWindowCloseRequested: (callback: (request: ProfileWindowCloseRequest) => void) =>
         listenAdapter<ProfileWindowCloseRequest>('app:profile-window-close-requested', callback),
       newWindow: () => getInvoke()<string>('app_new_window'),
+      takeFreshWindowFlag: () => getInvoke()<boolean>('app_take_fresh_window_flag'),
       focusNextWindow: () => getInvoke()<boolean>('app_focus_next_window'),
       openNewInstance: (profileId: string) =>
         getInvoke()<{ alreadyOpen: boolean; windowIds?: string[]; error?: string }>(

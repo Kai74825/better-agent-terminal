@@ -505,12 +505,24 @@ export default function App() {
           }
         } else if (active) {
           // For local profiles opened in a new window, load the profile snapshot
-          // so workspaces.json reflects this profile's data (not the previous profile's)
+          // so workspaces.json reflects this profile's data (not the previous profile's).
+          // Skip when the window was just opened via Cmd+N (app_new_window) — those
+          // windows are intentionally empty, and profile.load would overwrite the
+          // empty snapshot with the bound profile's saved workspaces.
           if (launchProfileId || windowProfileId) {
-            if (host.debug.isDebugMode === true) {
-              dlog(`[init] profile.load local id=${active.id} reason=${launchProfileId ? 'launch' : 'window'}`)
+            const freshEmpty = !launchProfileId && typeof host.app.takeFreshWindowFlag === 'function'
+              ? await host.app.takeFreshWindowFlag().catch(() => false)
+              : false
+            if (freshEmpty) {
+              if (host.debug.isDebugMode === true) {
+                dlog(`[init] skip profile.load: window is fresh-empty (Cmd+N)`)
+              }
+            } else {
+              if (host.debug.isDebugMode === true) {
+                dlog(`[init] profile.load local id=${active.id} reason=${launchProfileId ? 'launch' : 'window'}`)
+              }
+              await host.profile.load(active.id)
             }
-            await host.profile.load(active.id)
           }
           const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${active.name}:${winIdx}`)

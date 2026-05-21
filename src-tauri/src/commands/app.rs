@@ -446,6 +446,15 @@ pub fn app_new_window(app: AppHandle, window: WebviewWindow) -> String {
     id
 }
 
+// Returns true exactly once for a window that was just created via
+// app_new_window (Cmd+N). The renderer reads this on init to skip
+// profile.load(), which would otherwise overwrite the empty snapshot
+// with the bound profile's saved workspaces.
+#[tauri::command]
+pub fn app_take_fresh_window_flag(app: AppHandle, window: WebviewWindow) -> bool {
+    window_registry::take_fresh_window_flag(&app, window.label())
+}
+
 fn next_window_label(mut labels: Vec<String>, current: &str) -> Option<String> {
     if labels.is_empty() {
         return None;
