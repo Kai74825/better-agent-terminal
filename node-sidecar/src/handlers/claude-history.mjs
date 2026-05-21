@@ -6,7 +6,7 @@ import { readFile, appendFile, mkdir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { registerHandler, sendEvent } from '../lib/protocol.mjs'
-import { sessions, buildSessionMeta } from '../lib/state.mjs'
+import { sessions, buildSessionMeta, resetSessionTranscript } from '../lib/state.mjs'
 import { __resolveProjectsDir, archiveFilePath, resolveDataDir } from '../lib/data-paths.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { warn as logWarn } from '../lib/logger.mjs'
@@ -173,6 +173,11 @@ export async function loadSessionHistory(sessionId, sdkSessionId, cwd, opts = {}
   try {
     const raw = await readHistoryFile(sdkSessionId, cwd, opts)
     const items = raw !== null ? historyItemsFromJsonl(raw, sessionId) : []
+    const session = sessions.get(sessionId)
+    if (session) {
+      resetSessionTranscript(session)
+      session.messages = items.slice(-300)
+    }
     sendEvent('claude:history', { sessionId, items })
     return { ok: true, found: raw !== null, itemCount: items.length }
   } catch (err) {

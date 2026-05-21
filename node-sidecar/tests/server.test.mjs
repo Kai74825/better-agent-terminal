@@ -1078,6 +1078,11 @@ async function inProcess() {
     }
     // message payload.message.content shape preserved
     assert.equal(events[4].payload.message.message.content[0].text, 'hello back')
+    const sendState = await dispatch({ jsonrpc: '2.0', id: 2211, method: 'claude.getSessionState', params: { sessionId: 'send-1' } })
+    assert.equal(sendState.result.messages[0].role, 'user')
+    assert.equal(sendState.result.messages[0].content, 'hi')
+    assert.equal(sendState.result.messages.some(m => m.role === 'assistant' && m.content === 'hello back'), true)
+    assert.equal(sendState.result.isStreaming, false)
     // turn-end carries reason + sdkSessionId
     assert.equal(events[6].payload.payload.reason, 'completed')
     assert.equal(events[6].payload.payload.sdkSessionId, 'sdk-sess-abc')
@@ -2885,9 +2890,51 @@ async function inProcess() {
     assert.equal(streamEvents[2].payload.data.thinking, 'pondering')
     // parentToolUseId field present (null for top-level stream).
     for (const ev of streamEvents) assert.equal(ev.payload.data.parentToolUseId, null)
+    const state = await dispatch({ jsonrpc: '2.0', id: 2811, method: 'claude.getSessionState', params: { sessionId: 'stream-1' } })
+    assert.equal(state.result.streamingText, '')
+    assert.equal(state.result.messages.some(m => m.role === 'assistant' && m.content === 'Hello'), true)
   } finally {
     __setSdkOverrideForTests(undefined)
     restoreStreamEmit()
+  }
+
+  // getSessionState must expose in-flight streaming text so a late-mounted
+  // ClaudeAgentPanel can render the session body even if another listener
+  // (like the thumbnail) saw the stream first.
+  const liveStateCaptured = []
+  const restoreLiveStateEmit = mod.__setSendEventForTests((n, p) => liveStateCaptured.push({ name: n, payload: p }))
+  let releaseLiveStream
+  const firstDelta = new Promise(resolve => {
+    const fakeSdkLiveState = {
+      query() {
+        return (async function*() {
+          yield { type: 'system', subtype: 'init', session_id: 's-live-state', cwd: '/x' }
+          yield { type: 'stream_event', session_id: 's-live-state', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { text: 'partial' } } }
+          resolve()
+          await new Promise(done => { releaseLiveStream = done })
+          yield { type: 'assistant', session_id: 's-live-state', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'partial done' }] } }
+          yield { type: 'result', subtype: 'success', session_id: 's-live-state', result: 'partial done', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
+        })()
+      },
+    }
+    __setSdkOverrideForTests(fakeSdkLiveState)
+  })
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 282, method: 'claude.startSession', params: { sessionId: 'stream-state-1', options: { cwd: '/x' } } })
+    const liveSend = dispatch({ jsonrpc: '2.0', id: 283, method: 'claude.sendMessage', params: { sessionId: 'stream-state-1', prompt: 'hi' } })
+    await firstDelta
+    const liveState = await dispatch({ jsonrpc: '2.0', id: 284, method: 'claude.getSessionState', params: { sessionId: 'stream-state-1' } })
+    assert.equal(liveState.result.isStreaming, true)
+    assert.equal(liveState.result.streamingText, 'partial')
+    releaseLiveStream()
+    await liveSend
+    const doneState = await dispatch({ jsonrpc: '2.0', id: 285, method: 'claude.getSessionState', params: { sessionId: 'stream-state-1' } })
+    assert.equal(doneState.result.isStreaming, false)
+    assert.equal(doneState.result.streamingText, '')
+    assert.equal(doneState.result.messages.some(m => m.role === 'assistant' && m.content === 'partial done'), true)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreLiveStateEmit()
   }
 
   // rate_limit_event mapping. The SDK emits a top-level message of
