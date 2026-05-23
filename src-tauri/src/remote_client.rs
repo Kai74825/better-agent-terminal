@@ -1,7 +1,9 @@
 use crate::event_hub::publish_runtime_event;
 use crate::remote_core::{
-    canonical_remote_channel, is_proxied_remote_event, legacy_v1_event_args_to_params,
-    REMOTE_PROTOCOL_LEGACY_V1, REMOTE_PROTOCOL_V2,
+    canonical_remote_channel, decode_remote_binary_frame, decode_remote_text_frame,
+    encode_remote_frame, is_proxied_remote_event, legacy_v1_event_args_to_params,
+    RemoteCompression, RemoteFramePayload, REMOTE_COMPRESSION_GZIP, REMOTE_PROTOCOL_LEGACY_V1,
+    REMOTE_PROTOCOL_V2,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -35,6 +37,7 @@ pub struct RustRemoteClientState {
 struct RunningClient {
     host: String,
     port: u16,
+    compression: RemoteCompression,
     connected: Arc<AtomicBool>,
     tx: mpsc::Sender<ClientCommand>,
 }
@@ -53,6 +56,12 @@ struct PendingInvoke {
     channel: String,
     deadline: Instant,
     reply: mpsc::Sender<Result<Value, String>>,
+}
+
+struct RemoteConnection {
+    ws: RemoteWebSocket,
+    protocol: String,
+    compression: RemoteCompression,
 }
 
 #[derive(Debug)]
@@ -118,15 +127,18 @@ impl RustRemoteClientState {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(default_client_label);
         self.disconnect();
-        let (ws, protocol) = connect_socket(&host, port, &token, &fingerprint, &label)?;
+        let connection = connect_socket(&host, port, &token, &fingerprint, &label)?;
+        let compression = connection.compression;
+        let protocol = connection.protocol.clone();
         let (tx, rx) = mpsc::channel();
         let connected = Arc::new(AtomicBool::new(true));
         let connected_for_loop = Arc::clone(&connected);
-        thread::spawn(move || client_loop(app, ws, rx, connected_for_loop));
-        let info = json!({ "host": host, "port": port });
+        thread::spawn(move || client_loop(app, connection.ws, rx, connected_for_loop, compression));
+        let info = json!({ "host": host, "port": port, "compression": compression.as_str() });
         let running = RunningClient {
             host: info["host"].as_str().unwrap_or_default().to_string(),
             port,
+            compression,
             connected,
             tx,
         };
@@ -154,7 +166,11 @@ impl RustRemoteClientState {
         json!({
             "connected": connected,
             "info": if connected {
-                json!({ "host": client.host, "port": client.port })
+                json!({
+                    "host": client.host,
+                    "port": client.port,
+                    "compression": client.compression.as_str(),
+                })
             } else {
                 Value::Null
             },
@@ -202,9 +218,9 @@ impl RustRemoteClientState {
         fingerprint: String,
     ) -> Result<Value, String> {
         validate_connection_fields(&host, port, &token, &fingerprint)?;
-        let (mut ws, _) =
+        let mut connection =
             connect_socket(&host, port, &token, &fingerprint, &default_client_label())?;
-        let _ = ws.close(None);
+        let _ = connection.ws.close(None);
         Ok(json!({ "ok": true }))
     }
 
@@ -216,10 +232,16 @@ impl RustRemoteClientState {
         fingerprint: String,
     ) -> Result<Value, String> {
         validate_connection_fields(&host, port, &token, &fingerprint)?;
-        let (mut ws, _) =
+        let mut connection =
             connect_socket(&host, port, &token, &fingerprint, &default_client_label())?;
-        let result = invoke_socket(&mut ws, "profile:list", Vec::new(), INVOKE_TIMEOUT)?;
-        let _ = ws.close(None);
+        let result = invoke_socket(
+            &mut connection.ws,
+            connection.compression,
+            "profile:list",
+            Vec::new(),
+            INVOKE_TIMEOUT,
+        )?;
+        let _ = connection.ws.close(None);
         let profiles = result
             .get("profiles")
             .and_then(Value::as_array)
@@ -255,6 +277,7 @@ fn client_loop(
     mut ws: RemoteWebSocket,
     rx: mpsc::Receiver<ClientCommand>,
     connected: Arc<AtomicBool>,
+    compression: RemoteCompression,
 ) {
     let mut pending: HashMap<String, PendingInvoke> = HashMap::new();
     loop {
@@ -274,7 +297,7 @@ fn client_loop(
                 } => {
                     let frame =
                         json!({ "type": "invoke", "id": id, "channel": channel, "args": args });
-                    match send_json_frame(&mut ws, frame) {
+                    match send_json_frame(&mut ws, frame, compression) {
                         Ok(()) => {
                             pending.insert(
                                 id,
@@ -295,7 +318,16 @@ fn client_loop(
 
         expire_pending(&mut pending);
         match ws.read() {
-            Ok(Message::Text(text)) => handle_frame(&app, &mut pending, &text),
+            Ok(Message::Text(text)) if compression == RemoteCompression::None => {
+                if let Ok(frame) = decode_remote_text_frame(&text) {
+                    handle_frame(&app, &mut pending, frame);
+                }
+            }
+            Ok(Message::Binary(bytes)) if compression == RemoteCompression::Gzip => {
+                if let Ok(frame) = decode_remote_binary_frame(&bytes) {
+                    handle_frame(&app, &mut pending, frame);
+                }
+            }
             Ok(Message::Ping(bytes)) => {
                 let _ = ws.send(Message::Pong(bytes));
             }
@@ -311,10 +343,7 @@ fn client_loop(
     drain_pending(&mut pending, "Connection closed");
 }
 
-fn handle_frame(app: &AppHandle, pending: &mut HashMap<String, PendingInvoke>, text: &str) {
-    let Ok(frame) = serde_json::from_str::<Value>(text) else {
-        return;
-    };
+fn handle_frame(app: &AppHandle, pending: &mut HashMap<String, PendingInvoke>, frame: Value) {
     let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
     if matches!(frame_type, "invoke-result" | "invoke-error") {
         let Some(id) = frame.get("id").and_then(Value::as_str) else {
@@ -381,7 +410,7 @@ fn connect_socket(
     token: &str,
     fingerprint: &str,
     label: &str,
-) -> Result<(RemoteWebSocket, String), String> {
+) -> Result<RemoteConnection, String> {
     let pinned_fingerprint = normalize_fingerprint(fingerprint);
     if pinned_fingerprint.is_empty() {
         return Err("fingerprint is required for TLS pinning".to_string());
@@ -430,8 +459,10 @@ fn connect_socket(
             "id": format!("{}-auth", unix_ms()),
             "token": token,
             "protocols": [REMOTE_PROTOCOL_V2, REMOTE_PROTOCOL_LEGACY_V1],
+            "compression": [REMOTE_COMPRESSION_GZIP],
             "args": [label],
         }),
+        RemoteCompression::None,
     )?;
     let deadline = Instant::now() + AUTH_TIMEOUT;
     loop {
@@ -451,7 +482,15 @@ fn connect_socket(
                     .and_then(Value::as_str)
                     .unwrap_or(REMOTE_PROTOCOL_LEGACY_V1)
                     .to_string();
-                return Ok((ws, protocol));
+                let compression = match frame.get("compression").and_then(Value::as_str) {
+                    Some(REMOTE_COMPRESSION_GZIP) => RemoteCompression::Gzip,
+                    _ => RemoteCompression::None,
+                };
+                return Ok(RemoteConnection {
+                    ws,
+                    protocol,
+                    compression,
+                });
             }
             Ok(_) => {}
             Err(tungstenite::Error::Io(err))
@@ -469,6 +508,7 @@ fn connect_socket(
 
 fn invoke_socket(
     ws: &mut RemoteWebSocket,
+    compression: RemoteCompression,
     channel: &str,
     args: Vec<Value>,
     timeout: Duration,
@@ -477,12 +517,34 @@ fn invoke_socket(
     send_json_frame(
         ws,
         json!({ "type": "invoke", "id": id, "channel": channel, "args": args }),
+        compression,
     )?;
     let deadline = Instant::now() + timeout;
     loop {
         match ws.read() {
-            Ok(Message::Text(text)) => {
-                let Ok(frame) = serde_json::from_str::<Value>(&text) else {
+            Ok(Message::Text(text)) if compression == RemoteCompression::None => {
+                let Ok(frame) = decode_remote_text_frame(&text) else {
+                    continue;
+                };
+                if frame.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                    continue;
+                }
+                match frame.get("type").and_then(Value::as_str) {
+                    Some("invoke-result") => {
+                        return Ok(frame.get("result").cloned().unwrap_or(Value::Null));
+                    }
+                    Some("invoke-error") => {
+                        return Err(frame
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Remote invoke failed")
+                            .to_string());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Message::Binary(bytes)) if compression == RemoteCompression::Gzip => {
+                let Ok(frame) = decode_remote_binary_frame(&bytes) else {
                     continue;
                 };
                 if frame.get("id").and_then(Value::as_str) != Some(id.as_str()) {
@@ -534,9 +596,16 @@ fn server_name_for(host: &str) -> Result<ServerName<'static>, String> {
     ServerName::try_from(host.to_string()).map_err(|_| "remote host is not a valid DNS name".into())
 }
 
-fn send_json_frame(ws: &mut RemoteWebSocket, frame: Value) -> Result<(), String> {
-    ws.send(Message::Text(frame.to_string().into()))
-        .map_err(|err| format!("remote websocket send failed: {err}"))
+fn send_json_frame(
+    ws: &mut RemoteWebSocket,
+    frame: Value,
+    compression: RemoteCompression,
+) -> Result<(), String> {
+    match encode_remote_frame(&frame, compression)? {
+        RemoteFramePayload::Text(text) => ws.send(Message::Text(text.into())),
+        RemoteFramePayload::Binary(bytes) => ws.send(Message::Binary(bytes.into())),
+    }
+    .map_err(|err| format!("remote websocket send failed: {err}"))
 }
 
 fn validate_connection_fields(

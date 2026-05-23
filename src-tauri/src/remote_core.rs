@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::io::{Read, Write};
 
 pub const REMOTE_PROTOCOL_LEGACY_V1: &str = "bat-remote/legacy-v1";
 pub const REMOTE_PROTOCOL_V2: &str = "bat-remote/v2";
+pub const REMOTE_COMPRESSION_GZIP: &str = "gzip";
+pub const REMOTE_COMPRESSION_NONE: &str = "none";
+const REMOTE_GZIP_FRAME_MAGIC: &[u8] = b"BATGZIP1\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RemoteProtocol {
@@ -33,6 +37,80 @@ pub fn negotiate_remote_protocol(offered: &[String]) -> Option<RemoteProtocol> {
         return Some(RemoteProtocol::LegacyV1);
     }
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteCompression {
+    None,
+    Gzip,
+}
+
+impl RemoteCompression {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RemoteCompression::None => REMOTE_COMPRESSION_NONE,
+            RemoteCompression::Gzip => REMOTE_COMPRESSION_GZIP,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteFramePayload {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+pub fn negotiate_remote_compression(offered: &[String]) -> RemoteCompression {
+    if offered.iter().any(|value| value == REMOTE_COMPRESSION_GZIP) {
+        RemoteCompression::Gzip
+    } else {
+        RemoteCompression::None
+    }
+}
+
+pub fn encode_remote_frame(
+    frame: &Value,
+    compression: RemoteCompression,
+) -> Result<RemoteFramePayload, String> {
+    let raw =
+        serde_json::to_vec(frame).map_err(|err| format!("remote frame encode failed: {err}"))?;
+    match compression {
+        RemoteCompression::None => String::from_utf8(raw)
+            .map(RemoteFramePayload::Text)
+            .map_err(|err| format!("remote frame utf-8 encode failed: {err}")),
+        RemoteCompression::Gzip => {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder
+                .write_all(&raw)
+                .map_err(|err| format!("remote frame gzip write failed: {err}"))?;
+            let mut payload = REMOTE_GZIP_FRAME_MAGIC.to_vec();
+            payload.extend(
+                encoder
+                    .finish()
+                    .map_err(|err| format!("remote frame gzip finish failed: {err}"))?,
+            );
+            Ok(RemoteFramePayload::Binary(payload))
+        }
+    }
+}
+
+pub fn decode_remote_text_frame(text: &str) -> Result<Value, String> {
+    serde_json::from_str::<Value>(text)
+        .map_err(|err| format!("remote frame json parse failed: {err}"))
+}
+
+pub fn decode_remote_binary_frame(bytes: &[u8]) -> Result<Value, String> {
+    let Some(compressed) = bytes.strip_prefix(REMOTE_GZIP_FRAME_MAGIC) else {
+        return Err("remote binary frame has unsupported envelope".to_string());
+    };
+    let mut decoder = flate2::read::GzDecoder::new(compressed);
+    let mut raw = Vec::new();
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|err| format!("remote frame gzip decode failed: {err}"))?;
+    serde_json::from_slice::<Value>(&raw)
+        .map_err(|err| format!("remote frame json parse failed: {err}"))
 }
 
 pub fn canonical_remote_channel(channel: &str) -> String {
@@ -444,6 +522,47 @@ mod tests {
         );
         assert_eq!(negotiate_remote_protocol(&["unknown".into()]), None);
         assert_eq!(RemoteProtocol::V2.as_str(), REMOTE_PROTOCOL_V2);
+    }
+
+    #[test]
+    fn negotiates_compression_by_explicit_opt_in() {
+        assert_eq!(negotiate_remote_compression(&[]), RemoteCompression::None);
+        assert_eq!(
+            negotiate_remote_compression(&[REMOTE_COMPRESSION_GZIP.to_string()]),
+            RemoteCompression::Gzip
+        );
+        assert_eq!(
+            negotiate_remote_compression(&[REMOTE_COMPRESSION_NONE.to_string()]),
+            RemoteCompression::None
+        );
+        assert_eq!(RemoteCompression::Gzip.as_str(), REMOTE_COMPRESSION_GZIP);
+    }
+
+    #[test]
+    fn remote_frame_encoding_uses_text_when_uncompressed() {
+        let frame = json!({ "type": "ping", "id": "1" });
+        let payload = encode_remote_frame(&frame, RemoteCompression::None).unwrap();
+        let RemoteFramePayload::Text(text) = payload else {
+            panic!("expected text frame");
+        };
+        assert_eq!(decode_remote_text_frame(&text).unwrap(), frame);
+    }
+
+    #[test]
+    fn remote_frame_encoding_uses_gzip_binary_when_enabled() {
+        let frame = json!({
+            "type": "event",
+            "channel": "agent:history",
+            "params": {
+                "items": vec![json!({ "content": "hello world" }); 32],
+            },
+        });
+        let payload = encode_remote_frame(&frame, RemoteCompression::Gzip).unwrap();
+        let RemoteFramePayload::Binary(bytes) = payload else {
+            panic!("expected binary frame");
+        };
+        assert_eq!(decode_remote_binary_frame(&bytes).unwrap(), frame);
+        assert!(decode_remote_binary_frame(b"not-bat").is_err());
     }
 
     #[test]

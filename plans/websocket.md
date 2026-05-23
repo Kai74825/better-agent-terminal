@@ -16,7 +16,7 @@ Implementation entry points:
 - Default port: `9876`
 - Server TLS: self-signed certificate generated and persisted by the host.
 - Client TLS validation: certificate fingerprint pinning.
-- Frame encoding: one JSON object per WebSocket text message.
+- Frame encoding: one JSON object per WebSocket message. Uncompressed connections use text frames. Compressed connections use BAT gzip binary frames after authentication.
 
 The client accepts the self-signed certificate only after comparing the server certificate SHA-256 fingerprint with the fingerprint stored in the remote profile or connection URL.
 
@@ -60,6 +60,7 @@ New clients should send this in the auth frame:
   "id": "1700000000000-auth",
   "token": "<server-token>",
   "protocols": ["bat-remote/v2"],
+  "compression": ["gzip"],
   "args": ["Client Label", { "windowId": "optional-window-id" }]
 }
 ```
@@ -71,7 +72,8 @@ Server success response:
   "type": "auth-result",
   "id": "1700000000000-auth",
   "result": true,
-  "protocol": "bat-remote/v2"
+  "protocol": "bat-remote/v2",
+  "compression": "gzip"
 }
 ```
 
@@ -89,8 +91,77 @@ Rules:
 
 - `token` must exactly match the server token.
 - `protocols` must include `bat-remote/v2`.
+- `compression` is optional. Omitted or unsupported values mean `none`.
+- New BAT clients should advertise `["gzip"]`. Legacy clients do not advertise compression and remain fully uncompressed.
+- `auth` and `auth-result` are always uncompressed text frames. After a successful `compression: "gzip"` auth result, every following BAT frame on that connection is sent as a gzip binary frame. There is no per-message threshold.
 - `args[0]` is the client label displayed in server status.
 - `args[1].windowId` is optional and recorded in the server connected-client list when present.
+
+## Compression
+
+Compression is negotiated at the BAT protocol layer, not with WebSocket `permessage-deflate`.
+
+Supported compression ids:
+
+```text
+gzip
+```
+
+Negotiation:
+
+1. Client sends `auth` as an uncompressed text JSON frame.
+2. New clients include `compression: ["gzip"]`.
+3. Legacy clients omit `compression`; this is equivalent to `compression: []`.
+4. Server selects `gzip` only when the offered list contains `gzip`.
+5. Server sends `auth-result` as an uncompressed text JSON frame with the selected compression:
+
+```json
+{
+  "type": "auth-result",
+  "id": "1700000000000-auth",
+  "result": true,
+  "protocol": "bat-remote/v2",
+  "compression": "gzip"
+}
+```
+
+If no supported compression is selected, the server uses:
+
+```json
+{
+  "type": "auth-result",
+  "id": "1700000000000-auth",
+  "result": true,
+  "protocol": "bat-remote/v2",
+  "compression": "none"
+}
+```
+
+Binary frame envelope for compressed frames:
+
+```text
+BATGZIP1\0<gzip-compressed-json-bytes>
+```
+
+Wire layout:
+
+```text
+offset  size  content
+0       8     ASCII magic bytes: 42 41 54 47 5A 49 50 31 ("BATGZIP1")
+8       1     NUL byte: 00
+9       n     gzip-compressed UTF-8 JSON object bytes
+```
+
+Rules:
+
+- Compression is explicit opt-in. A client that does not send `compression: ["gzip"]` receives and sends only text JSON frames.
+- When `gzip` is negotiated, all post-auth BAT frames are gzip binary frames in both directions.
+- When `none` is negotiated, all BAT frames remain uncompressed WebSocket text frames.
+- There is no per-message compression threshold. The connection either compresses every post-auth BAT frame or none of them.
+- A compressed binary frame without the `BATGZIP1\0` prefix is invalid.
+- An uncompressed text frame received after `gzip` negotiation is invalid for protocol purposes and should be ignored or treated as a connection error by implementations.
+- A compressed binary frame received after `none` negotiation is invalid for protocol purposes and should be ignored or treated as a connection error by implementations.
+- `auth` and `auth-result` stay text JSON so negotiation is always readable by old clients and diagnostic tooling.
 
 ## Frame Types
 

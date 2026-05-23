@@ -12,8 +12,10 @@ use crate::electron_safe_storage::{
 };
 use crate::network_addresses;
 use crate::remote_core::{
-    canonical_remote_channel, event_params_to_legacy_v1_args, legacy_v1_args_to_params,
-    negotiate_remote_protocol, remote_agent_channel, RemoteProtocol, REMOTE_PROTOCOL_LEGACY_V1,
+    canonical_remote_channel, decode_remote_binary_frame, decode_remote_text_frame,
+    encode_remote_frame, event_params_to_legacy_v1_args, legacy_v1_args_to_params,
+    negotiate_remote_compression, negotiate_remote_protocol, remote_agent_channel,
+    RemoteCompression, RemoteFramePayload, RemoteProtocol, REMOTE_PROTOCOL_LEGACY_V1,
     REMOTE_PROTOCOL_V2,
 };
 use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, SidecarState};
@@ -24,6 +26,7 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -40,6 +43,7 @@ use tungstenite::Message;
 const DEFAULT_REMOTE_PORT: u16 = 9876;
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_INVOKE_TIMEOUT: Duration = Duration::from_secs(300);
+const REMOTE_EVENT_BUFFER_FLUSH: Duration = Duration::from_secs(1);
 const TOKEN_FILE: &str = "server-token.enc.json";
 const LEGACY_TOKEN_FILE: &str = "server-token.json";
 const CERT_FILE: &str = "server-cert.enc.json";
@@ -51,6 +55,7 @@ pub struct RemoteClientInfo {
     pub window_id: Option<String>,
     pub connected_at: u64,
     pub protocol: String,
+    pub compression: String,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +74,7 @@ struct RunningServer {
     bind_interface: String,
     bound_host: String,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
+    event_buffer: Arc<Mutex<RemoteEventBuffer>>,
     stop: mpsc::Sender<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -78,6 +84,19 @@ struct RemoteClientRecord {
     id: String,
     info: RemoteClientInfo,
     tx: mpsc::Sender<Value>,
+}
+
+#[derive(Debug, Default)]
+struct RemoteEventBuffer {
+    events: Vec<BufferedRemoteEvent>,
+    indexes: HashMap<String, usize>,
+    flush_scheduled: bool,
+}
+
+#[derive(Debug)]
+struct BufferedRemoteEvent {
+    channel: String,
+    params: Value,
 }
 
 #[derive(Default)]
@@ -139,6 +158,7 @@ impl RustRemoteServerState {
             .port();
 
         let clients = Arc::new(Mutex::new(Vec::new()));
+        let event_buffer = Arc::new(Mutex::new(RemoteEventBuffer::default()));
         let (stop_tx, stop_rx) = mpsc::channel();
         let thread_clients = Arc::clone(&clients);
         let thread_token = token.clone();
@@ -176,6 +196,7 @@ impl RustRemoteServerState {
             bind_interface,
             bound_host,
             clients,
+            event_buffer,
             stop: stop_tx,
             thread: Some(handle),
         };
@@ -237,34 +258,213 @@ impl RustRemoteServerState {
     }
 
     pub fn broadcast_event(&self, channel: &str, params: &Value) {
-        let args = event_params_to_legacy_v1_args(channel, params);
-        let agent_channel = remote_agent_channel(channel);
-        let clients = {
+        let canonical = canonical_remote_channel(channel);
+        let (clients, event_buffer) = {
             let Ok(guard) = self.inner.lock() else {
                 return;
             };
             let Some(running) = guard.as_ref() else {
                 return;
             };
-            Arc::clone(&running.clients)
+            (
+                Arc::clone(&running.clients),
+                Arc::clone(&running.event_buffer),
+            )
         };
-        if let Ok(mut clients) = clients.lock() {
-            clients.retain(|client| {
-                let frame = json!({
-                    "type": "event",
-                    "channel": agent_channel.clone(),
-                    "params": params.clone(),
-                    "args": args.clone(),
-                });
-                client.tx.send(frame).is_ok()
-            });
-        };
+        if !has_remote_clients(&clients) {
+            return;
+        }
+        if should_buffer_remote_event(&canonical)
+            && enqueue_remote_event(&clients, &event_buffer, canonical.as_str(), params)
+        {
+            return;
+        }
+        if should_flush_before_remote_event(&canonical) {
+            flush_remote_event_buffer(&clients, &event_buffer);
+        }
+        send_remote_event_to_clients(&clients, canonical.as_str(), params);
     }
 }
 
 impl Drop for RustRemoteServerState {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+fn has_remote_clients(clients: &Arc<Mutex<Vec<RemoteClientRecord>>>) -> bool {
+    clients
+        .lock()
+        .map(|clients| !clients.is_empty())
+        .unwrap_or(false)
+}
+
+fn should_buffer_remote_event(channel: &str) -> bool {
+    matches!(
+        canonical_remote_channel(channel).as_str(),
+        "claude:stream" | "claude:tool-result"
+    )
+}
+
+fn should_flush_before_remote_event(channel: &str) -> bool {
+    matches!(
+        canonical_remote_channel(channel).as_str(),
+        "claude:message"
+            | "claude:tool-use"
+            | "claude:result"
+            | "claude:turn-end"
+            | "claude:error"
+            | "claude:history"
+            | "claude:resume-loading"
+            | "claude:session-reset"
+    )
+}
+
+fn enqueue_remote_event(
+    clients: &Arc<Mutex<Vec<RemoteClientRecord>>>,
+    event_buffer: &Arc<Mutex<RemoteEventBuffer>>,
+    channel: &str,
+    params: &Value,
+) -> bool {
+    let Some(key) = buffered_remote_event_key(channel, params) else {
+        return false;
+    };
+    let canonical = canonical_remote_channel(channel);
+    let should_spawn = {
+        let Ok(mut buffer) = event_buffer.lock() else {
+            return false;
+        };
+        if let Some(index) = buffer.indexes.get(&key).copied() {
+            if canonical == "claude:stream" {
+                if let Some(event) = buffer.events.get_mut(index) {
+                    merge_buffered_stream_params(&mut event.params, params);
+                }
+            } else if let Some(event) = buffer.events.get_mut(index) {
+                event.params = params.clone();
+            }
+        } else {
+            let index = buffer.events.len();
+            buffer.indexes.insert(key, index);
+            buffer.events.push(BufferedRemoteEvent {
+                channel: canonical,
+                params: params.clone(),
+            });
+        }
+        if buffer.flush_scheduled {
+            false
+        } else {
+            buffer.flush_scheduled = true;
+            true
+        }
+    };
+
+    if should_spawn {
+        let clients = Arc::clone(clients);
+        let event_buffer = Arc::clone(event_buffer);
+        thread::spawn(move || {
+            thread::sleep(REMOTE_EVENT_BUFFER_FLUSH);
+            flush_remote_event_buffer(&clients, &event_buffer);
+        });
+    }
+    true
+}
+
+fn flush_remote_event_buffer(
+    clients: &Arc<Mutex<Vec<RemoteClientRecord>>>,
+    event_buffer: &Arc<Mutex<RemoteEventBuffer>>,
+) {
+    let events = {
+        let Ok(mut buffer) = event_buffer.lock() else {
+            return;
+        };
+        buffer.flush_scheduled = false;
+        buffer.indexes.clear();
+        std::mem::take(&mut buffer.events)
+    };
+    for event in events {
+        send_remote_event_to_clients(clients, event.channel.as_str(), &event.params);
+    }
+}
+
+fn send_remote_event_to_clients(
+    clients: &Arc<Mutex<Vec<RemoteClientRecord>>>,
+    channel: &str,
+    params: &Value,
+) {
+    let args = event_params_to_legacy_v1_args(channel, params);
+    let agent_channel = remote_agent_channel(channel);
+    if let Ok(mut clients) = clients.lock() {
+        clients.retain(|client| {
+            let frame = json!({
+                "type": "event",
+                "channel": agent_channel.clone(),
+                "params": params.clone(),
+                "args": args.clone(),
+            });
+            client.tx.send(frame).is_ok()
+        });
+    };
+}
+
+fn buffered_remote_event_key(channel: &str, params: &Value) -> Option<String> {
+    let canonical = canonical_remote_channel(channel);
+    let session_id = remote_key_part(params.get("sessionId"))?;
+    match canonical.as_str() {
+        "claude:stream" => Some(format!("{canonical}:{session_id}")),
+        "claude:tool-result" => {
+            let tool_id = remote_key_part(params.get("result").and_then(|value| value.get("id")))?;
+            Some(format!("{canonical}:{session_id}:{tool_id}"))
+        }
+        _ => None,
+    }
+}
+
+fn remote_key_part(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Null => None,
+        value => Some(value.to_string()),
+    }
+}
+
+fn merge_buffered_stream_params(existing: &mut Value, incoming: &Value) {
+    if !existing.is_object() || !incoming.is_object() {
+        *existing = incoming.clone();
+        return;
+    }
+    let existing_map = existing.as_object_mut().expect("checked object");
+    let incoming_map = incoming.as_object().expect("checked object");
+
+    for (key, value) in incoming_map {
+        if key != "data" {
+            existing_map.insert(key.clone(), value.clone());
+        }
+    }
+
+    let Some(Value::Object(incoming_data)) = incoming_map.get("data") else {
+        existing_map.insert("data".to_string(), incoming["data"].clone());
+        return;
+    };
+    let data = existing_map
+        .entry("data".to_string())
+        .or_insert_with(|| json!({}));
+    let Value::Object(existing_data) = data else {
+        *data = Value::Object(incoming_data.clone());
+        return;
+    };
+
+    for (key, value) in incoming_data {
+        match (key.as_str(), existing_data.get_mut(key), value.as_str()) {
+            ("text" | "thinking", Some(Value::String(existing_text)), Some(delta)) => {
+                existing_text.push_str(delta);
+            }
+            ("text" | "thinking", _, Some(delta)) => {
+                existing_data.insert(key.clone(), Value::String(delta.to_string()));
+            }
+            _ => {
+                existing_data.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 
@@ -480,11 +680,12 @@ fn handle_client(
     let mut client_label = String::from("Remote Client");
     let mut client_id = String::new();
     let mut client_protocol = RemoteProtocol::LegacyV1;
+    let mut client_compression = RemoteCompression::None;
     let (out_tx, out_rx) = mpsc::channel::<Value>();
 
     loop {
         while let Ok(frame) = out_rx.try_recv() {
-            send_frame(&mut ws, frame)?;
+            send_frame(&mut ws, frame, client_compression)?;
         }
         let msg = match ws.read() {
             Ok(msg) => msg,
@@ -496,11 +697,24 @@ fn handle_client(
             }
             Err(_) => break,
         };
-        let Message::Text(text) = msg else {
-            continue;
-        };
-        let Ok(frame) = serde_json::from_str::<Value>(&text) else {
-            continue;
+        let frame = match msg {
+            Message::Text(text)
+                if !authenticated || client_compression == RemoteCompression::None =>
+            {
+                match decode_remote_text_frame(&text) {
+                    Ok(frame) => frame,
+                    Err(_) => continue,
+                }
+            }
+            Message::Binary(bytes)
+                if authenticated && client_compression == RemoteCompression::Gzip =>
+            {
+                match decode_remote_binary_frame(&bytes) {
+                    Ok(frame) => frame,
+                    Err(_) => continue,
+                }
+            }
+            _ => continue,
         };
         let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
         let id = frame.get("id").cloned().unwrap_or(Value::Null);
@@ -514,6 +728,7 @@ fn handle_client(
                 send_frame(
                     &mut ws,
                     json!({ "type": "auth-result", "id": id, "error": "Invalid token" }),
+                    RemoteCompression::None,
                 )?;
                 break;
             }
@@ -544,10 +759,23 @@ fn handle_client(
                 send_frame(
                     &mut ws,
                     json!({ "type": "auth-result", "id": id, "error": "Unsupported remote protocol" }),
+                    RemoteCompression::None,
                 )?;
                 break;
             };
             client_protocol = protocol;
+            let offered_compression = frame
+                .get("compression")
+                .and_then(Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            client_compression = negotiate_remote_compression(&offered_compression);
             let label = frame
                 .get("args")
                 .and_then(Value::as_array)
@@ -573,6 +801,7 @@ fn handle_client(
                         window_id,
                         connected_at: unix_ms(),
                         protocol: protocol_name.clone(),
+                        compression: client_compression.as_str().to_string(),
                     },
                     tx: out_tx.clone(),
                 });
@@ -580,11 +809,21 @@ fn handle_client(
             authenticated = true;
             remote_debug_log(
                 &app,
-                format!("auth ok peer={peer} label={client_label} protocol={protocol_name}"),
+                format!(
+                    "auth ok peer={peer} label={client_label} protocol={protocol_name} compression={}",
+                    client_compression.as_str()
+                ),
             );
             send_frame(
                 &mut ws,
-                json!({ "type": "auth-result", "id": id, "result": true, "protocol": protocol_name }),
+                json!({
+                    "type": "auth-result",
+                    "id": id,
+                    "result": true,
+                    "protocol": protocol_name,
+                    "compression": client_compression.as_str(),
+                }),
+                RemoteCompression::None,
             )?;
             continue;
         }
@@ -593,7 +832,11 @@ fn handle_client(
             break;
         }
         if frame_type == "ping" {
-            send_frame(&mut ws, json!({ "type": "pong", "id": id }))?;
+            send_frame(
+                &mut ws,
+                json!({ "type": "pong", "id": id }),
+                client_compression,
+            )?;
             continue;
         }
         if frame_type == "invoke" {
@@ -1825,9 +2068,13 @@ fn channel_to_sidecar_method(channel: &str) -> String {
 fn send_frame<S: io::Read + io::Write>(
     ws: &mut tungstenite::WebSocket<S>,
     frame: Value,
+    compression: RemoteCompression,
 ) -> Result<(), String> {
-    ws.send(Message::Text(frame.to_string().into()))
-        .map_err(|err| format!("remote websocket send failed: {err}"))
+    match encode_remote_frame(&frame, compression)? {
+        RemoteFramePayload::Text(text) => ws.send(Message::Text(text.into())),
+        RemoteFramePayload::Binary(bytes) => ws.send(Message::Binary(bytes.into())),
+    }
+    .map_err(|err| format!("remote websocket send failed: {err}"))
 }
 
 fn unix_ms() -> u64 {
@@ -1907,6 +2154,53 @@ mod tests {
             Sec-WebSocket-Version: 13\r\n\
             \r\n";
         assert!(websocket_accept_key_from_request(request).is_err());
+    }
+
+    #[test]
+    fn remote_event_buffer_merges_stream_text_and_thinking() {
+        let mut existing = json!({
+            "sessionId": "session-1",
+            "data": {
+                "text": "hello",
+                "thinking": "plan",
+                "kind": "delta"
+            }
+        });
+        let incoming = json!({
+            "sessionId": "session-1",
+            "data": {
+                "text": " world",
+                "thinking": " more",
+                "kind": "update",
+                "index": 2
+            }
+        });
+
+        merge_buffered_stream_params(&mut existing, &incoming);
+
+        assert_eq!(existing["sessionId"], json!("session-1"));
+        assert_eq!(existing["data"]["text"], json!("hello world"));
+        assert_eq!(existing["data"]["thinking"], json!("plan more"));
+        assert_eq!(existing["data"]["kind"], json!("update"));
+        assert_eq!(existing["data"]["index"], json!(2));
+    }
+
+    #[test]
+    fn remote_event_buffer_keys_tool_results_by_session_and_tool_id() {
+        let stream = json!({ "sessionId": "session-1", "data": { "text": "a" } });
+        let tool = json!({
+            "sessionId": "session-1",
+            "result": { "id": "tool-1", "result": "out" }
+        });
+
+        assert_eq!(
+            buffered_remote_event_key("claude:stream", &stream).as_deref(),
+            Some("claude:stream:session-1")
+        );
+        assert_eq!(
+            buffered_remote_event_key("claude:tool-result", &tool).as_deref(),
+            Some("claude:tool-result:session-1:tool-1")
+        );
     }
 
     #[test]
