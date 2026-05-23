@@ -1580,11 +1580,16 @@ fn invoke_rust_for_remote(
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "default".to_string());
             string_param(params, "data", channel).map(|data| {
-                Value::Bool(profile_cmd::profile_save_workspace_for_remote(
-                    app,
-                    &profile_id,
-                    &data,
-                ))
+                let saved = profile_cmd::profile_save_workspace_for_remote(app, &profile_id, &data);
+                if saved {
+                    crate::event_hub::publish_runtime_event(
+                        app,
+                        "workspace:reload",
+                        Value::String(data),
+                        "remote-workspace-save",
+                    );
+                }
+                Value::Bool(saved)
             })
         }
         "pty:create" => {

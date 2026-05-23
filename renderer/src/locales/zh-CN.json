@@ -233,7 +233,9 @@
     "fetchingProfiles": "获取中...",
     "currentTarget": "当前目标",
     "localSection": "本地",
-    "remoteSection": "远程"
+    "remoteSection": "远程",
+    "remoteProfileUnavailable": "远程配置文件“{{profile}}”已无法使用。",
+    "remoteTargetUnavailable": "远程目标配置文件“{{profile}}”已无法使用。"
   },
   "folderPicker": {
     "title": "选择文件夹",

@@ -543,6 +543,8 @@ function createTauriHost(): BatAppAPI {
       listLocal: () => getInvoke()<unknown>('profile_list_local'),
       get: (profileId: string) => getInvoke()<unknown>('profile_get', { profileId }),
       getActiveIds: () => getInvoke()<string[]>('profile_get_active_ids'),
+      onChanged: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('profile:changed', callback),
       create: (name: string, options?: unknown) =>
         getInvoke()<unknown>('profile_create', { name, options }),
       save: (profileId: string) => getInvoke()<boolean>('profile_save', { profileId }),

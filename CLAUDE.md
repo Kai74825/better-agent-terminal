@@ -55,6 +55,14 @@
 - 15 configurable items (see `STATUSLINE_ITEMS` in `renderer/src/types/index.ts`) with custom colors, zone alignment, and template-based config.
 - Usage polling: Chrome session key (primary, lenient rate limits) → OAuth fallback (strict rate limits).
 
+## Remote State Ownership
+
+- Remote mode is host-owned by default. Except for purely local presentation state, clients do not own remote state.
+- Message filters are client-only presentation state and may stay local because they do not change host data.
+- All other remote actions must be sent to the host, and the client should render the host response or host broadcast reflection.
+- When a remote client requests a mutation, the host applies or rejects it first, then returns the result and broadcasts canonical shared-state changes to every connected client.
+- Avoid client-side optimistic final state for remote workflows. Loading/pending UI is fine while waiting for host confirmation.
+
 ## Release
 
 - `package.json` 與 `src-tauri/tauri.conf.json` 的 committed version 固定維持 `0.0.1-dev`。

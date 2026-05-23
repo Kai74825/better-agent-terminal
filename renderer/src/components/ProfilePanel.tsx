@@ -120,6 +120,12 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
   }, [loadProfiles])
 
   useEffect(() => {
+    return host.profile.onChanged(() => {
+      void loadProfiles()
+    })
+  }, [loadProfiles])
+
+  useEffect(() => {
     if (creating && createInputRef.current) {
       createInputRef.current.focus()
     }

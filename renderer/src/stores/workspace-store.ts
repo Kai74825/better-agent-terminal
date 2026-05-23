@@ -779,6 +779,7 @@ class WorkspaceStore {
         }
       }).filter((t: TerminalInstance | null): t is TerminalInstance => t !== null)
       const currentActiveWorkspaceId = this.state.activeWorkspaceId
+      const currentFocusedTerminalId = this.state.focusedTerminalId
       const shouldPreserveActive = !!options?.preserveActiveSelection
         && !!currentActiveWorkspaceId
         && workspaces.some((w: Workspace) => w.id === currentActiveWorkspaceId)
@@ -798,6 +799,16 @@ class WorkspaceStore {
       const restoredFocus = focusCandidate && terminals.find(
         (t: TerminalInstance) => t.id === focusCandidate && t.workspaceId === activeWorkspaceId
       ) ? focusCandidate : this.restoredFocusForWorkspace(activeWorkspaceId, workspaces, terminals)
+
+      if (options?.preserveActiveSelection && currentActiveWorkspaceId && currentActiveWorkspaceId !== activeWorkspaceId) {
+        host.debug.log?.(`[workspace-store] active workspace ${currentActiveWorkspaceId} removed by host; switched to ${activeWorkspaceId || 'none'}`)
+      }
+      if (options?.preserveActiveSelection && currentFocusedTerminalId && currentFocusedTerminalId !== restoredFocus) {
+        const stillExists = terminals.some(t => t.id === currentFocusedTerminalId)
+        if (!stillExists) {
+          host.debug.log?.(`[workspace-store] focused terminal/session ${currentFocusedTerminalId} removed by host; switched to ${restoredFocus || 'none'}`)
+        }
+      }
 
       this.state = {
         ...this.state,

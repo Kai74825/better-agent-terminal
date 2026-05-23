@@ -241,7 +241,9 @@
     "fetchingProfiles": "取得中...",
     "currentTarget": "目前目標",
     "localSection": "本機",
-    "remoteSection": "遠端"
+    "remoteSection": "遠端",
+    "remoteProfileUnavailable": "遠端設定檔「{{profile}}」已無法使用。",
+    "remoteTargetUnavailable": "遠端目標設定檔「{{profile}}」已無法使用。"
   },
 
   "folderPicker": {

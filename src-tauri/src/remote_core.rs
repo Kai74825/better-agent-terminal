@@ -403,6 +403,7 @@ pub fn event_params_to_legacy_v1_args(channel: &str, params: &Value) -> Vec<Valu
         "claude:worktree-info" => vec![params["sessionId"].clone(), params["payload"].clone()],
         "claude:rate-limit" => vec![params["sessionId"].clone(), params["info"].clone()],
         "fs:changed"
+        | "profile:changed"
         | "workspace:detached"
         | "workspace:reattached"
         | "workspace:reload"
@@ -448,6 +449,7 @@ pub fn legacy_v1_event_args_to_params(channel: &str, args: &[Value]) -> Value {
         "claude:worktree-info" => claude_event_params(args, "payload"),
         "claude:rate-limit" => claude_event_params(args, "info"),
         "fs:changed"
+        | "profile:changed"
         | "workspace:detached"
         | "workspace:reattached"
         | "workspace:reload"
@@ -496,6 +498,7 @@ pub fn is_proxied_remote_event(channel: &str) -> bool {
             | "claude:worktree-info"
             | "claude:rate-limit"
             | "fs:changed"
+            | "profile:changed"
             | "workspace:detached"
             | "workspace:reattached"
             | "workspace:reload"

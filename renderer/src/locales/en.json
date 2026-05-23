@@ -241,7 +241,9 @@
     "fetchingProfiles": "Fetching...",
     "currentTarget": "Current target",
     "localSection": "Local",
-    "remoteSection": "Remote"
+    "remoteSection": "Remote",
+    "remoteProfileUnavailable": "Remote profile \"{{profile}}\" is no longer available.",
+    "remoteTargetUnavailable": "Remote target profile \"{{profile}}\" is no longer available."
   },
 
   "folderPicker": {

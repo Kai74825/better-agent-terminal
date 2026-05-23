@@ -1057,48 +1057,274 @@ fn codex_history_items_from_content(session_id: &str, content: &str) -> Vec<Valu
         let Ok(entry) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if entry.get("type").and_then(Value::as_str) != Some("event_msg") {
-            continue;
-        }
         let Some(payload) = entry.get("payload") else {
             continue;
         };
         let timestamp = timestamp_or_now(entry.get("timestamp"));
-        match payload.get("type").and_then(Value::as_str) {
-            Some("user_message") => {
-                if let Some(message) = payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .filter(|message| !message.trim().is_empty())
-                {
-                    items.push(json!({
-                        "id": format!("hist-user-{}", items.len()),
-                        "sessionId": session_id,
-                        "role": "user",
-                        "content": message,
-                        "timestamp": timestamp,
-                    }));
+
+        match entry.get("type").and_then(Value::as_str) {
+            Some("event_msg") => match payload.get("type").and_then(Value::as_str) {
+                Some("user_message") => {
+                    if let Some(message) = payload
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .filter(|message| !message.trim().is_empty())
+                    {
+                        items.push(json!({
+                            "id": format!("hist-user-{}", items.len()),
+                            "sessionId": session_id,
+                            "role": "user",
+                            "content": message,
+                            "timestamp": timestamp,
+                        }));
+                    }
                 }
-            }
-            Some("agent_message") => {
-                if let Some(message) = payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .filter(|message| !message.trim().is_empty())
-                {
-                    items.push(json!({
-                        "id": format!("hist-assistant-{}", items.len()),
-                        "sessionId": session_id,
-                        "role": "assistant",
-                        "content": message,
-                        "timestamp": timestamp,
-                    }));
+                Some("agent_message") => {
+                    if let Some(message) = payload
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .filter(|message| !message.trim().is_empty())
+                    {
+                        items.push(json!({
+                            "id": format!("hist-assistant-{}", items.len()),
+                            "sessionId": session_id,
+                            "role": "assistant",
+                            "content": message,
+                            "timestamp": timestamp,
+                        }));
+                    }
                 }
-            }
+                Some("exec_command_end") => {
+                    let call_id = payload
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("hist-exec");
+                    let command = history_command_from_event(payload);
+                    upsert_history_tool_call(
+                        &mut items,
+                        json!({
+                            "id": call_id,
+                            "sessionId": session_id,
+                            "toolName": "Bash",
+                            "input": { "command": command },
+                            "status": history_status_from_event(payload),
+                            "result": history_event_result(payload),
+                            "timestamp": timestamp,
+                        }),
+                    );
+                }
+                Some("patch_apply_end") => {
+                    let call_id = payload
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("hist-patch");
+                    let input =
+                        history_tool_input_for_call(&items, call_id).unwrap_or_else(|| json!({}));
+                    upsert_history_tool_call(
+                        &mut items,
+                        json!({
+                            "id": call_id,
+                            "sessionId": session_id,
+                            "toolName": "apply_patch",
+                            "input": input,
+                            "status": history_status_from_event(payload),
+                            "result": history_event_result(payload),
+                            "timestamp": timestamp,
+                        }),
+                    );
+                }
+                Some("web_search_end") => {
+                    let call_id = payload
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("hist-web-search");
+                    upsert_history_tool_call(
+                        &mut items,
+                        json!({
+                            "id": call_id,
+                            "sessionId": session_id,
+                            "toolName": "WebSearch",
+                            "input": payload.get("action").cloned().unwrap_or_else(|| json!({})),
+                            "status": "completed",
+                            "result": history_event_result(payload),
+                            "timestamp": timestamp,
+                        }),
+                    );
+                }
+                _ => {}
+            },
+            Some("response_item") => match payload.get("type").and_then(Value::as_str) {
+                Some("function_call" | "custom_tool_call") => {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                        let name = payload
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Tool");
+                        upsert_history_tool_call(
+                            &mut items,
+                            json!({
+                                "id": call_id,
+                                "sessionId": session_id,
+                                "toolName": history_tool_name(name),
+                                "input": history_tool_input(name, payload),
+                                "status": "running",
+                                "timestamp": timestamp,
+                            }),
+                        );
+                    }
+                }
+                Some("function_call_output" | "custom_tool_call_output") => {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                        update_history_tool_call(
+                            &mut items,
+                            call_id,
+                            json!({
+                                "status": "completed",
+                                "result": text_from_value(payload.get("output").unwrap_or(&Value::Null)),
+                            }),
+                        );
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
     items
+}
+
+fn upsert_history_tool_call(items: &mut Vec<Value>, tool_call: Value) {
+    let Some(tool_id) = tool_call.get("id").and_then(Value::as_str) else {
+        items.push(tool_call);
+        return;
+    };
+    if let Some(existing) = items
+        .iter_mut()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(tool_id))
+    {
+        *existing = tool_call;
+    } else {
+        items.push(tool_call);
+    }
+}
+
+fn update_history_tool_call(items: &mut Vec<Value>, tool_id: &str, updates: Value) {
+    if let Some(existing) = items
+        .iter_mut()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(tool_id))
+    {
+        if let (Some(existing_object), Some(update_object)) =
+            (existing.as_object_mut(), updates.as_object())
+        {
+            for (key, value) in update_object {
+                existing_object.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        let mut tool_call = json!({
+            "id": tool_id,
+            "toolName": "Tool",
+            "input": {},
+            "status": "completed",
+        });
+        if let (Some(existing_object), Some(update_object)) =
+            (tool_call.as_object_mut(), updates.as_object())
+        {
+            for (key, value) in update_object {
+                existing_object.insert(key.clone(), value.clone());
+            }
+        }
+        items.push(tool_call);
+    }
+}
+
+fn history_tool_name(name: &str) -> String {
+    match name {
+        "exec_command" => "Bash".to_string(),
+        "web_search" | "web_search_call" => "WebSearch".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn history_parse_arguments(payload: &Value) -> Value {
+    if let Some(value) = payload.get("arguments").or_else(|| payload.get("input")) {
+        if let Some(text) = value.as_str() {
+            serde_json::from_str(text).unwrap_or_else(|_| json!({ "input": text }))
+        } else {
+            value.clone()
+        }
+    } else {
+        json!({})
+    }
+}
+
+fn history_tool_input(name: &str, payload: &Value) -> Value {
+    let args = history_parse_arguments(payload);
+    if name == "exec_command" {
+        return json!({
+            "command": args
+                .get("cmd")
+                .or_else(|| args.get("command"))
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+            "cwd": args.get("workdir").or_else(|| args.get("cwd")).cloned(),
+        });
+    }
+    args
+}
+
+fn history_tool_input_for_call(items: &[Value], call_id: &str) -> Option<Value> {
+    items
+        .iter()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(call_id))
+        .and_then(|item| item.get("input").cloned())
+}
+
+fn history_command_from_event(payload: &Value) -> String {
+    payload
+        .get("command")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items
+                .get(2)
+                .or_else(|| items.last())
+                .and_then(Value::as_str)
+        })
+        .or_else(|| payload.get("cmd").and_then(Value::as_str))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn history_status_from_event(payload: &Value) -> &'static str {
+    if payload.get("success").and_then(Value::as_bool) == Some(false) {
+        return "error";
+    }
+    if payload
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status == "failed")
+    {
+        return "error";
+    }
+    if payload
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|code| code != 0)
+    {
+        return "error";
+    }
+    "completed"
+}
+
+fn history_event_result(payload: &Value) -> Value {
+    payload
+        .get("aggregated_output")
+        .or_else(|| payload.get("stdout"))
+        .or_else(|| payload.get("stderr"))
+        .or_else(|| payload.get("output"))
+        .or_else(|| payload.get("formatted_output"))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn load_codex_history_items(app: &AppHandle, session_id: &str, thread_id: &str) -> Vec<Value> {
@@ -1160,6 +1386,49 @@ fn tool_status(item: &Value) -> &'static str {
         Some("failed" | "declined") => "error",
         Some("completed") => "completed",
         _ => "running",
+    }
+}
+
+fn push_session_item(session: &mut CodexSession, item: Value) {
+    session.messages.push(item);
+    if session.messages.len() > MSG_BUFFER_CAP {
+        let excess = session.messages.len() - MSG_BUFFER_CAP;
+        session.messages.drain(0..excess);
+    }
+}
+
+fn upsert_session_tool_call(session: &mut CodexSession, tool_call: Value) {
+    let Some(tool_id) = tool_call.get("id").and_then(Value::as_str) else {
+        push_session_item(session, tool_call);
+        return;
+    };
+    if let Some(existing) = session
+        .messages
+        .iter_mut()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(tool_id))
+    {
+        *existing = tool_call;
+    } else {
+        push_session_item(session, tool_call);
+    }
+}
+
+fn update_session_tool_call(session: &mut CodexSession, tool_id: &str, updates: Value) {
+    let Some(update_object) = updates.as_object() else {
+        return;
+    };
+    let Some(existing) = session
+        .messages
+        .iter_mut()
+        .find(|item| item.get("id").and_then(Value::as_str) == Some(tool_id))
+    else {
+        return;
+    };
+    let Some(existing_object) = existing.as_object_mut() else {
+        return;
+    };
+    for (key, value) in update_object {
+        existing_object.insert(key.clone(), value.clone());
     }
 }
 
@@ -2528,7 +2797,16 @@ fn handle_command_execution_output_delta(
         session
             .command_output_last_emit
             .insert(item_id.to_string(), now);
-        output.clone()
+        let output_snapshot = output.clone();
+        update_session_tool_call(
+            session,
+            item_id,
+            json!({
+                "status": "running",
+                "result": output_snapshot,
+            }),
+        );
+        output_snapshot
     };
     emit(
         app,
@@ -2586,26 +2864,22 @@ fn handle_item_started(
         }
         Some("commandExecution") => {
             let id = item_id(item);
+            let tool_call = json!({
+                "id": id,
+                "sessionId": session_id,
+                "toolName": "Bash",
+                "input": { "command": item.get("command").and_then(Value::as_str).unwrap_or("") },
+                "status": tool_status(item),
+                "timestamp": now_millis(),
+            });
             {
                 let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
                 if let Some(session) = sessions.get_mut(session_id) {
                     session.command_outputs.entry(id.clone()).or_default();
+                    upsert_session_tool_call(session, tool_call.clone());
                 }
             }
-            emit(
-                app,
-                "claude:tool-use",
-                session_id,
-                "toolCall",
-                json!({
-                    "id": id,
-                    "sessionId": session_id,
-                    "toolName": "Bash",
-                    "input": { "command": item.get("command").and_then(Value::as_str).unwrap_or("") },
-                    "status": tool_status(item),
-                    "timestamp": now_millis(),
-                }),
-            );
+            emit(app, "claude:tool-use", session_id, "toolCall", tool_call);
         }
         Some("fileChange") => {
             let path = item
@@ -2615,20 +2889,24 @@ fn handle_item_started(
                 .and_then(|v| v.get("path"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            emit(
-                app,
-                "claude:tool-use",
-                session_id,
-                "toolCall",
-                json!({
-                    "id": item_id(item),
-                    "sessionId": session_id,
-                    "toolName": "Edit",
-                    "input": { "file_path": path },
-                    "status": tool_status(item),
-                    "timestamp": now_millis(),
-                }),
-            );
+            let tool_call = json!({
+                "id": item_id(item),
+                "sessionId": session_id,
+                "toolName": "Edit",
+                "input": { "file_path": path },
+                "status": tool_status(item),
+                "timestamp": now_millis(),
+            });
+            if let Some(session) = state
+                .inner
+                .sessions
+                .lock()
+                .expect("codex sessions lock")
+                .get_mut(session_id)
+            {
+                upsert_session_tool_call(session, tool_call.clone());
+            }
+            emit(app, "claude:tool-use", session_id, "toolCall", tool_call);
         }
         Some("mcpToolCall") => {
             let name = match (
@@ -2639,36 +2917,44 @@ fn handle_item_started(
                 (_, Some(tool)) => tool.to_string(),
                 _ => "MCP".to_string(),
             };
-            emit(
-                app,
-                "claude:tool-use",
-                session_id,
-                "toolCall",
-                json!({
-                    "id": item_id(item),
-                    "sessionId": session_id,
-                    "toolName": name,
-                    "input": item.get("arguments").cloned().unwrap_or_else(|| json!({})),
-                    "status": tool_status(item),
-                    "timestamp": now_millis(),
-                }),
-            );
+            let tool_call = json!({
+                "id": item_id(item),
+                "sessionId": session_id,
+                "toolName": name,
+                "input": item.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                "status": tool_status(item),
+                "timestamp": now_millis(),
+            });
+            if let Some(session) = state
+                .inner
+                .sessions
+                .lock()
+                .expect("codex sessions lock")
+                .get_mut(session_id)
+            {
+                upsert_session_tool_call(session, tool_call.clone());
+            }
+            emit(app, "claude:tool-use", session_id, "toolCall", tool_call);
         }
         Some("webSearch") => {
-            emit(
-                app,
-                "claude:tool-use",
-                session_id,
-                "toolCall",
-                json!({
-                    "id": item_id(item),
-                    "sessionId": session_id,
-                    "toolName": "WebSearch",
-                    "input": web_search_input(item),
-                    "status": "running",
-                    "timestamp": now_millis(),
-                }),
-            );
+            let tool_call = json!({
+                "id": item_id(item),
+                "sessionId": session_id,
+                "toolName": "WebSearch",
+                "input": web_search_input(item),
+                "status": "running",
+                "timestamp": now_millis(),
+            });
+            if let Some(session) = state
+                .inner
+                .sessions
+                .lock()
+                .expect("codex sessions lock")
+                .get_mut(session_id)
+            {
+                upsert_session_tool_call(session, tool_call.clone());
+            }
+            emit(app, "claude:tool-use", session_id, "toolCall", tool_call);
         }
         _ => {}
     }
@@ -2724,33 +3010,42 @@ fn handle_item_completed(
 
     match item_type(item) {
         Some("commandExecution") => {
-            emit(
-                app,
-                "claude:tool-result",
-                session_id,
-                "result",
-                json!({
-                    "id": item_id(item),
-                    "status": tool_status(item),
-                    "result": completed_command_execution_result(state, session_id, item),
-                }),
-            );
+            let result = completed_command_execution_result(state, session_id, item);
+            let tool_result = json!({
+                "id": item_id(item),
+                "status": tool_status(item),
+                "result": result,
+            });
+            if let Some(session) = state
+                .inner
+                .sessions
+                .lock()
+                .expect("codex sessions lock")
+                .get_mut(session_id)
+            {
+                update_session_tool_call(session, &item_id(item), tool_result.clone());
+            }
+            emit(app, "claude:tool-result", session_id, "result", tool_result);
         }
         Some("fileChange" | "mcpToolCall" | "webSearch") => {
-            emit(
-                app,
-                "claude:tool-result",
-                session_id,
-                "result",
-                json!({
-                    "id": item_id(item),
-                    "status": tool_status(item),
-                    "result": item.get("aggregatedOutput")
-                        .or_else(|| item.get("result"))
-                        .or_else(|| item.get("error"))
-                        .cloned(),
-                }),
-            );
+            let tool_result = json!({
+                "id": item_id(item),
+                "status": tool_status(item),
+                "result": item.get("aggregatedOutput")
+                    .or_else(|| item.get("result"))
+                    .or_else(|| item.get("error"))
+                    .cloned(),
+            });
+            if let Some(session) = state
+                .inner
+                .sessions
+                .lock()
+                .expect("codex sessions lock")
+                .get_mut(session_id)
+            {
+                update_session_tool_call(session, &item_id(item), tool_result.clone());
+            }
+            emit(app, "claude:tool-result", session_id, "result", tool_result);
         }
         _ => {}
     }
@@ -3285,6 +3580,29 @@ mod tests {
         assert_eq!(items[1]["role"], "assistant");
         assert_eq!(items[1]["content"], "pong");
         assert_eq!(items[1]["timestamp"].as_u64(), Some(1_778_457_602_000));
+    }
+
+    #[test]
+    fn codex_history_loader_reads_tool_calls() {
+        let content = r#"
+{"timestamp":"2026-05-11T00:00:00Z","type":"session_meta","payload":{"id":"thread-1"}}
+{"timestamp":"2026-05-11T00:00:01Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls -la\",\"workdir\":\"/tmp\"}","call_id":"call-1"}}
+{"timestamp":"2026-05-11T00:00:02Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call-1","command":["/bin/zsh","-lc","ls -la"],"aggregated_output":"total 0","exit_code":0,"status":"completed"}}
+{"timestamp":"2026-05-11T00:00:03Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch","call_id":"call-2"}}
+{"timestamp":"2026-05-11T00:00:04Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call-2","stdout":"Success","success":true,"status":"completed"}}
+"#;
+        let items = codex_history_items_from_content("s-1", content);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], "call-1");
+        assert_eq!(items[0]["sessionId"], "s-1");
+        assert_eq!(items[0]["toolName"], "Bash");
+        assert_eq!(items[0]["input"]["command"], "ls -la");
+        assert_eq!(items[0]["status"], "completed");
+        assert_eq!(items[0]["result"], "total 0");
+        assert_eq!(items[1]["id"], "call-2");
+        assert_eq!(items[1]["toolName"], "apply_patch");
+        assert_eq!(items[1]["input"]["input"], "*** Begin Patch");
+        assert_eq!(items[1]["result"], "Success");
     }
 
     #[test]

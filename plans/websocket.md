@@ -349,6 +349,7 @@ Workspace / profile:
 ```text
 workspace:load
 workspace:save
+agent:list-sessions
 profile:list
 profile:get-active-ids
 profile:load
@@ -358,6 +359,121 @@ profile:deactivate
 ```
 
 Files, Git, GitHub, and snippets use the same `invoke` frame pattern.
+
+## Host-Owned State Sync
+
+The host is the source of truth for shared remote state. Remote clients may request changes, but the host must apply the change first and then broadcast the resulting state or invalidation event to every connected client.
+
+General principle:
+
+- Except for purely local presentation state, clients do not own remote state.
+- Message filters are client-only presentation state. They may be applied locally without host round trips because they do not change host data.
+- All other actions must be sent to the host as `invoke` frames.
+- The host executes or rejects the requested action, then returns an `invoke-result` / `invoke-error`.
+- When the action changes shared state, the host broadcasts the canonical result or an invalidation event back to all connected clients.
+- Clients should render the host response/reflection, not their own optimistic final state. Temporary local loading/pending UI is allowed while waiting for host confirmation.
+
+Workspace state:
+
+- `workspace:load` returns the current host workspace JSON for the selected remote profile.
+- `workspace:save` is client-to-host. A client must not assume its local state is accepted until the host returns success.
+- After a successful `workspace:save`, the host broadcasts `workspace:reload` with the saved workspace JSON.
+- Clients receiving `workspace:reload` must replace/reload their workspace state from the payload.
+- Host-side window/workspace changes that affect the serialized workspace view should also broadcast `workspace:reload`.
+
+Profile/window state:
+
+- `profile:list` and `profile:get-active-ids` always read from the host.
+- Host-side profile/window changes, including opening a profile window, closing the last window for a profile, activating/deactivating profiles, creating, updating, renaming, deleting, duplicating, or remote workspace saves that activate a profile, broadcast `profile:changed`.
+- Profile creation is reflected by `profile:changed`; clients should add it to profile lists only after it appears in the host payload.
+- Profile deletion is reflected by `profile:changed`; clients should remove it from profile lists when absent from the host payload.
+- If the remote profile backing the current client window is deleted or becomes inaccessible, the client must stop mutating that profile, show a disconnected/unavailable state, and require the user to select another profile or reconnect. It must not keep writing to the deleted profile id.
+- If a profile remains present but is no longer active, clients may keep an already-open view read/write-capable only if the host continues accepting its invokes. Profile list UI must still display the host's active state from `activeProfileIds`.
+- `profile:changed` payload:
+
+```json
+{
+  "profiles": [
+    {
+      "id": "default",
+      "name": "Default",
+      "type": "local",
+      "createdAt": 1700000000000,
+      "updatedAt": 1700000000000
+    }
+  ],
+  "activeProfileIds": ["default"]
+}
+```
+
+- Clients that display profile/window lists should refresh from the host when they receive `profile:changed`.
+
+Workspace lifecycle:
+
+- Workspace creation, deletion, reorder, rename, group changes, terminal add/remove, and window detach/reattach are host-owned workspace mutations.
+- Clients request these mutations through the relevant invoke path, usually ending in `workspace:save` or a workspace/window command.
+- After the host accepts a workspace mutation, it broadcasts `workspace:reload` with the canonical serialized workspace state for that profile/window scope.
+- Clients must reconcile local UI to the `workspace:reload` payload.
+- If the currently selected workspace is removed in the host payload, the client must switch to the payload's `activeWorkspaceId` when present.
+- If no `activeWorkspaceId` is present and workspaces remain, the client should select the first host-provided workspace.
+- If no workspaces remain, the client should show an empty workspace state and wait for the user/host to create a workspace. It must not continue sending terminal/session actions tied to the removed workspace.
+- If the currently selected terminal/session panel is removed from the host workspace payload, the client must close that panel locally and stop sending actions for the removed terminal/session id.
+
+Session lists:
+
+- `agent:list-sessions` returns the host's current session list for the requested `cwd` and optional agent kind.
+- Session list UI must fetch from the host when the client switches into the list view. Clients should not rely on cached session lists.
+- Session mutations remain host-owned. If a future session-list invalidation event is added, clients should still re-fetch with `agent:list-sessions` when opening the list.
+- A session appearing in the list means the host can offer it for resume/restore. Clients should not invent list entries locally.
+- A session absent from the latest host list should be removed from the visible list.
+- If the user is viewing a resume list and the selected session disappears before selection, the client should disable/remove that row and require a fresh selection.
+- If the currently open running session is stopped/aborted/removed by the host, the host should emit the corresponding agent status/error/turn-end event. The client must stop accepting input for that session until it receives or requests a fresh host-owned session state.
+
+Required remote implementation behavior:
+
+```text
+host profile created/updated/deleted/activated/deactivated
+  -> host broadcasts profile:changed
+  -> client refreshes any visible profile/window list from host payload or profile:list
+  -> if current backing profile is gone, client enters unavailable state and stops profile mutations
+
+client requests profile/window mutation
+  -> client sends invoke to host
+  -> host applies or rejects
+  -> host returns invoke-result/invoke-error
+  -> on success host broadcasts profile:changed when profile/window membership changed
+  -> all clients render host-reflected state
+
+host workspace changed
+  -> host broadcasts workspace:reload with canonical workspace JSON
+  -> client applies payload, preserving only local presentation state
+  -> if active workspace/terminal/session no longer exists, client exits that view and selects host fallback when available
+
+client requests workspace mutation
+  -> client sends invoke to host, commonly workspace:save
+  -> host writes canonical state or rejects
+  -> host returns invoke-result/invoke-error
+  -> on success host broadcasts workspace:reload
+  -> all clients apply the host payload
+
+client opens session/resume list
+  -> client invokes agent:list-sessions against host
+  -> host returns current list
+  -> client renders that list and discards stale local entries
+
+host session state changed
+  -> host emits the existing agent event family such as agent:status, agent:error, agent:turn-end, agent:history, or agent:resume-loading
+  -> client updates the open session from the host event
+  -> if the session is no longer usable, client disables input until a new host-owned session is selected or created
+```
+
+Implementation notes:
+
+- `profile:changed` is the profile/window list invalidation and reflection event.
+- `workspace:reload` is the workspace reflection event.
+- Session lists are pull-based today: opening the list must call `agent:list-sessions`.
+- Existing agent runtime events remain the session-state reflection mechanism.
+- Message filter state is the exception: it is client-only and is not sent to the host.
 
 ## Event Allowlist
 
@@ -387,6 +503,7 @@ agent:session-reset
 agent:worktree-info
 agent:rate-limit
 fs:changed
+profile:changed
 workspace:detached
 workspace:reattached
 workspace:reload

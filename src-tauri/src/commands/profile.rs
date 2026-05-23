@@ -6,6 +6,7 @@
 // avoids repeated macOS Keychain prompts during normal profile reads/writes.
 
 use crate::electron_safe_storage::decrypt_electron_safe_storage_data;
+use crate::event_hub::publish_runtime_event;
 use crate::{app_data, window_registry};
 #[cfg(not(test))]
 use keyring::use_native_store;
@@ -425,6 +426,24 @@ fn list_response_at(dir: &Path) -> ProfileListResponse {
     }
 }
 
+fn emit_profile_changed(app: &AppHandle) {
+    let payload = profiles_dir(app)
+        .map(|dir| {
+            let response = list_response_at(&dir);
+            json!({
+                "profiles": response.profiles,
+                "activeProfileIds": response.active_profile_ids,
+            })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "profiles": [default_entry()],
+                "activeProfileIds": [DEFAULT_PROFILE_ID],
+            })
+        });
+    publish_runtime_event(app, "profile:changed", payload, "profile");
+}
+
 fn load_profile_snapshot_at(dir: &Path, profile_id: &str, activate: bool) -> Option<Value> {
     let mut index = read_index_at(dir);
     if activate && !activate_profile_in_index(&mut index, profile_id) {
@@ -628,7 +647,11 @@ pub fn profile_load_snapshot_for_remote(app: &AppHandle, profile_id: &str) -> Op
 
 pub fn profile_load_for_remote(app: &AppHandle, profile_id: &str) -> Option<Value> {
     let dir = profiles_dir(app)?;
-    load_profile_snapshot_at(&dir, profile_id, true)
+    let snapshot = load_profile_snapshot_at(&dir, profile_id, true);
+    if snapshot.is_some() {
+        emit_profile_changed(app);
+    }
+    snapshot
 }
 
 pub fn profile_workspace_json_for_remote(app: &AppHandle, profile_id: &str) -> Option<String> {
@@ -664,6 +687,7 @@ pub fn profile_save_workspace_for_remote(app: &AppHandle, profile_id: &str, data
     if wrote {
         let _ = activate_profile_in_index(&mut index, profile_id);
         let _ = write_index_at(&dir, index);
+        emit_profile_changed(app);
     }
     wrote
 }
@@ -685,6 +709,7 @@ pub fn profile_create(
         let _ = write_snapshot_at(&dir, &entry.id, &empty_snapshot(&entry));
     }
     let _ = write_index_at(&dir, index);
+    emit_profile_changed(&app);
     entry
 }
 
@@ -717,7 +742,11 @@ pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
     {
         entry.updated_at = now_millis();
     }
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(&app);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -761,6 +790,7 @@ pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -
     let mut index = index;
     if activate_profile_in_index(&mut index, &profile_id) {
         let _ = write_index_at(&dir, index);
+        emit_profile_changed(&app);
     }
     snapshot.unwrap_or_else(|| empty_snapshot(&profile))
 }
@@ -773,7 +803,11 @@ pub fn activate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
     if !activate_profile_in_index(&mut index, profile_id) {
         return false;
     }
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(app);
+    }
+    saved
 }
 
 pub fn deactivate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
@@ -785,7 +819,11 @@ pub fn deactivate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
     if index.active_profile_ids.is_empty() {
         index.active_profile_ids.push(DEFAULT_PROFILE_ID.into());
     }
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(app);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -805,7 +843,11 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     }
     delete_remote_token_from_safe_store(&profile_id);
     let _ = fs::remove_file(profile_path(&dir, &profile_id));
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(&app);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -828,7 +870,11 @@ pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> b
         snapshot["name"] = Value::String(snapshot_name);
         let _ = write_snapshot_at(&dir, &profile_id, &snapshot);
     }
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(&app);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -870,7 +916,11 @@ pub fn profile_update(
         profile.kind = "remote".into();
     }
     profile.updated_at = now_millis();
-    write_index_at(&dir, index).is_ok()
+    let saved = write_index_at(&dir, index).is_ok();
+    if saved {
+        emit_profile_changed(&app);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -901,6 +951,7 @@ pub fn profile_duplicate(
         let _ = write_snapshot_at(&dir, &copy.id, &empty_snapshot(&copy));
     }
     write_index_at(&dir, index).ok()?;
+    emit_profile_changed(&app);
     Some(copy)
 }
 

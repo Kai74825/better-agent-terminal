@@ -303,6 +303,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
   const [contentModal, setContentModal] = useState<{ title: string; content: string; markdown?: boolean } | null>(null)
+  const refreshResumeSessions = useCallback(async () => {
+    setResumeLoading(true)
+    try {
+      setResumeSessions(await host.claude.listSessions(cwd) || [])
+    } catch {
+      setResumeSessions([])
+    } finally {
+      setResumeLoading(false)
+    }
+  }, [cwd])
+  useEffect(() => {
+    if (showResumeList) void refreshResumeSessions()
+  }, [showResumeList, refreshResumeSessions])
   const effortOptions = useMemo(
     () => includeCurrentOption(availableEfforts, effortLevel),
     [availableEfforts, effortLevel],
@@ -1720,6 +1733,21 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
     host.debug.log(`[Claude:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
+    setResumeLoading(true)
+    try {
+      const latest = await host.claude.listSessions(cwd) || []
+      if (!latest.some(s => s.sdkSessionId === sdkSessionId)) {
+        setResumeSessions(latest)
+        setShowResumeList(true)
+        return
+      }
+    } catch {
+      setResumeSessions([])
+      setShowResumeList(true)
+      return
+    } finally {
+      setResumeLoading(false)
+    }
     setShowResumeList(false)
     setResumeSessions([])
     // Clear UI immediately so user sees the switch
@@ -1944,16 +1972,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     // Intercept /resume command (only when not streaming)
     if (!isStreaming && trimmed === '/resume') {
       clearInput()
-      setResumeLoading(true)
       setShowResumeList(true)
-      try {
-        const sessions = await host.claude.listSessions(cwd)
-        setResumeSessions(sessions || [])
-      } catch {
-        setResumeSessions([])
-      } finally {
-        setResumeLoading(false)
-      }
       return
     }
 
@@ -5011,11 +5030,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             </span>
           ) : (
             <span key="sessionId" className="claude-statusline-item claude-statusline-clickable"
-              onClick={async () => {
-                setResumeLoading(true); setShowResumeList(true)
-                try { setResumeSessions(await host.claude.listSessions(cwd) || []) }
-                catch { setResumeSessions([]) }
-                finally { setResumeLoading(false) }
+              onClick={() => {
+                setShowResumeList(true)
               }}
               title={sessionMeta?.sdkSessionId
                 ? `SDK Session: ${sessionMeta.sdkSessionId}\nPanel: ${sessionId}\nClick to resume`

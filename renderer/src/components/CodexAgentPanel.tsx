@@ -252,6 +252,19 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const [resumeSessions, setResumeSessions] = useState<SessionSummary[]>([])
   const [resumeLoading, setResumeLoading] = useState(false)
   const [showModelList, setShowModelList] = useState(false)
+  const refreshResumeSessions = useCallback(async () => {
+    setResumeLoading(true)
+    try {
+      setResumeSessions(await host.claude.listSessions(cwd, 'codex') || [])
+    } catch {
+      setResumeSessions([])
+    } finally {
+      setResumeLoading(false)
+    }
+  }, [cwd])
+  useEffect(() => {
+    if (showResumeList) void refreshResumeSessions()
+  }, [showResumeList, refreshResumeSessions])
   const effortOptions = useMemo(
     () => includeCurrentOption(isCodexSession ? availableEfforts : EFFORT_LEVELS, effortLevel),
     [availableEfforts, effortLevel, isCodexSession],
@@ -1683,6 +1696,21 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
   const handleResumeSelect = useCallback(async (sdkSessionId: string) => {
     host.debug.log(`[Codex:${sessionId.slice(0, 8)}] handleResumeSelect sdkSessionId=${sdkSessionId.slice(0, 8)}`)
+    setResumeLoading(true)
+    try {
+      const latest = await host.claude.listSessions(cwd, 'codex') || []
+      if (!latest.some(s => s.sdkSessionId === sdkSessionId)) {
+        setResumeSessions(latest)
+        setShowResumeList(true)
+        return
+      }
+    } catch {
+      setResumeSessions([])
+      setShowResumeList(true)
+      return
+    } finally {
+      setResumeLoading(false)
+    }
     setShowResumeList(false)
     setResumeSessions([])
     // Clear UI immediately so user sees the switch
@@ -1916,16 +1944,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     // Intercept /resume command (only when not streaming)
     if (!isStreaming && trimmed === '/resume') {
       clearInput()
-      setResumeLoading(true)
       setShowResumeList(true)
-      try {
-        const sessions = await host.claude.listSessions(cwd, 'codex')
-        setResumeSessions(sessions || [])
-      } catch {
-        setResumeSessions([])
-      } finally {
-        setResumeLoading(false)
-      }
       return
     }
 
@@ -4930,11 +4949,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         const renderers: Record<string, () => React.ReactNode | null> = {
           sessionId: () => (
             <span key="sessionId" className="claude-statusline-item claude-statusline-clickable"
-              onClick={async () => {
-                setResumeLoading(true); setShowResumeList(true)
-                try { setResumeSessions(await host.claude.listSessions(cwd, 'codex') || []) }
-                catch { setResumeSessions([]) }
-                finally { setResumeLoading(false) }
+              onClick={() => {
+                setShowResumeList(true)
               }}
               title={sessionMeta?.sdkSessionId
                 ? `Codex Session: ${sessionMeta.sdkSessionId}\nPanel: ${sessionId}\nClick to restore`

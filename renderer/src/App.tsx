@@ -39,6 +39,15 @@ const MIN_SNIPPET_WIDTH = 180
 const MAX_SNIPPET_WIDTH = 500
 
 type WindowAuthInfo = { email: string; subscriptionType?: string }
+type ProfileEntryLike = {
+  id?: string
+  type?: string
+  remoteProfileId?: string
+}
+type ProfileChangedPayload = {
+  profiles?: ProfileEntryLike[]
+  activeProfileIds?: string[]
+}
 type ProfileWindowCloseAction = 'temporary' | 'removeFromProfile' | 'cancel'
 type ProfileWindowCloseRequest = {
   windowId: string
@@ -59,6 +68,24 @@ function normalizeWindowAuthInfo(info: unknown): WindowAuthInfo | null {
     email,
     ...(subscriptionType ? { subscriptionType } : {}),
   }
+}
+
+function normalizeProfileChangedPayload(payload: unknown): ProfileChangedPayload | null {
+  if (!payload || typeof payload !== 'object') return null
+  const record = payload as Record<string, unknown>
+  const profiles = Array.isArray(record.profiles)
+    ? record.profiles
+      .filter((profile): profile is Record<string, unknown> => !!profile && typeof profile === 'object')
+      .map(profile => ({
+        id: typeof profile.id === 'string' ? profile.id : undefined,
+        type: typeof profile.type === 'string' ? profile.type : undefined,
+        remoteProfileId: typeof profile.remoteProfileId === 'string' ? profile.remoteProfileId : undefined,
+      }))
+    : undefined
+  const activeProfileIds = Array.isArray(record.activeProfileIds)
+    ? record.activeProfileIds.filter((id): id is string => typeof id === 'string')
+    : undefined
+  return { profiles, activeProfileIds }
 }
 
 // Compute parent of a path, supporting both POSIX and Windows separators.
@@ -141,6 +168,8 @@ export default function App() {
   const [activeProfileName, setActiveProfileName] = useState<string>('Default')
   const [activeProfileIsRemote, setActiveProfileIsRemote] = useState(false)
   const [remoteClientConnected, setRemoteClientConnected] = useState(false)
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null)
+  const [activeRemoteProfileId, setActiveRemoteProfileId] = useState<string | null>(null)
   const isRemoteConnected = activeProfileIsRemote && remoteClientConnected
   const [appNotification, setAppNotification] = useState<string | null>(null)
   const [profileWindowCloseRequest, setProfileWindowCloseRequest] = useState<ProfileWindowCloseRequest | null>(null)
@@ -163,6 +192,20 @@ export default function App() {
   const [mountedWorkspaces, setMountedWorkspaces] = useState<Set<string>>(new Set())
   const lastRenderSummaryRef = useRef<string>('')
   const currentWindowIdRef = useRef<string | null>(null)
+  const activeProfileIdRef = useRef<string | null>(null)
+  const activeRemoteProfileIdRef = useRef<string | null>(null)
+  const activeProfileIsRemoteRef = useRef(false)
+  const remoteUnavailableRef = useRef(false)
+
+  useEffect(() => { activeProfileIdRef.current = activeProfileId }, [activeProfileId])
+  useEffect(() => { activeRemoteProfileIdRef.current = activeRemoteProfileId }, [activeRemoteProfileId])
+  useEffect(() => {
+    activeProfileIsRemoteRef.current = activeProfileIsRemote
+    if (!activeProfileIsRemote) remoteUnavailableRef.current = false
+  }, [activeProfileIsRemote])
+  useEffect(() => {
+    if (remoteClientConnected) remoteUnavailableRef.current = false
+  }, [remoteClientConnected])
 
   // Sync window title with active profile, window index, and account info
   const [windowIndex, setWindowIndex] = useState<number>(1)
@@ -507,11 +550,15 @@ export default function App() {
               const winIdx = await host.app.getWindowIndex()
               setActiveProfileName(`${localProfile.name}:${winIdx}`)
               setActiveProfileIsRemote(false)
+              setActiveProfileId(localProfile.id)
+              setActiveRemoteProfileId(null)
             }
           } else {
             const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${active.name}:${winIdx}`)
             setActiveProfileIsRemote(true)
+            setActiveProfileId(active.id)
+            setActiveRemoteProfileId(active.remoteProfileId || 'default')
             setRemoteClientConnected(true)
           }
         } else if (active?.type === 'remote') {
@@ -527,6 +574,8 @@ export default function App() {
             const winIdx = await host.app.getWindowIndex()
             setActiveProfileName(`${localProfile.name}:${winIdx}`)
             setActiveProfileIsRemote(false)
+            setActiveProfileId(localProfile.id)
+            setActiveRemoteProfileId(null)
           }
         } else if (active) {
           // For local profiles opened in a new window, load the profile snapshot
@@ -552,12 +601,16 @@ export default function App() {
           const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${active.name}:${winIdx}`)
           setActiveProfileIsRemote(false)
+          setActiveProfileId(active.id)
+          setActiveRemoteProfileId(null)
         } else if (result.profiles.length > 0) {
           // Fallback: activeProfileId didn't match any profile — use first local profile
           const fallback = result.profiles.find(p => p.type !== 'remote') || result.profiles[0]
           const winIdx = await host.app.getWindowIndex()
           setActiveProfileName(`${fallback.name}:${winIdx}`)
           setActiveProfileIsRemote(fallback.type === 'remote')
+          setActiveProfileId(fallback.id)
+          setActiveRemoteProfileId(fallback.type === 'remote' ? (fallback.remoteProfileId || 'default') : null)
         }
 
         // Store windowId for cross-window workspace drag
@@ -653,6 +706,61 @@ export default function App() {
       if (interval) clearInterval(interval)
     }
   }, [])
+
+  useEffect(() => {
+    let disposed = false
+    const markRemoteUnavailable = async (reason: string) => {
+      if (remoteUnavailableRef.current) return
+      remoteUnavailableRef.current = true
+      setRemoteClientConnected(false)
+      setAppNotification(reason)
+      try {
+        await host.remote.disconnect()
+      } catch {
+        // Connection may already be closed.
+      }
+      if (!disposed) {
+        void host.debug.log('[remote] current profile became unavailable', {
+          localProfileId: activeProfileIdRef.current,
+          remoteProfileId: activeRemoteProfileIdRef.current,
+          reason,
+        }).catch(() => {})
+      }
+    }
+    const unsubscribe = host.profile.onChanged(async rawPayload => {
+      if (!activeProfileIsRemoteRef.current) return
+      const localProfileId = activeProfileIdRef.current
+      const remoteProfileId = activeRemoteProfileIdRef.current || 'default'
+      const payload = normalizeProfileChangedPayload(rawPayload)
+
+      if (localProfileId) {
+        try {
+          const localResult = await host.profile.listLocal()
+          const localProfiles = Array.isArray(localResult?.profiles) ? localResult.profiles : []
+          const localStillExists = localProfiles.some((profile: ProfileEntryLike) => profile?.id === localProfileId)
+          if (!localStillExists) {
+            await markRemoteUnavailable(t('profiles.remoteProfileUnavailable', { profile: activeProfileName }))
+            return
+          }
+        } catch {
+          // If the local profile list cannot be read, fall through and use the event payload.
+        }
+      }
+
+      const profiles = payload?.profiles || []
+      const isLocalProfileEvent = !!localProfileId
+        && profiles.some(profile => profile.id === localProfileId && profile.type === 'remote')
+      if (isLocalProfileEvent) return
+
+      if (profiles.length > 0 && !profiles.some(profile => profile.id === remoteProfileId)) {
+        await markRemoteUnavailable(t('profiles.remoteTargetUnavailable', { profile: remoteProfileId }))
+      }
+    })
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [activeProfileName, t])
 
   const handleAddWorkspace = useCallback(() => {
     const { workspaces, activeWorkspaceId } = workspaceStore.getState()
