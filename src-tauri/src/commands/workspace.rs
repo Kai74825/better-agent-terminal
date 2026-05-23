@@ -28,6 +28,45 @@ use std::time::Duration;
 use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use thiserror::Error;
 
+fn bat_debug_enabled() -> bool {
+    matches!(
+        std::env::var("BAT_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn debug_workspace_log(app: &tauri::AppHandle, message: impl AsRef<str>) {
+    if bat_debug_enabled() {
+        log_tauri(app, &format!("[workspace] {}", message.as_ref()));
+    }
+}
+
+fn workspace_payload_summary(data: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return format!("bytes={} parse=failed", data.len());
+    };
+    let workspace_count = value
+        .get("workspaces")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let terminal_count = value
+        .get("terminals")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let active_workspace_id = value
+        .get("activeWorkspaceId")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let active_terminal_id = value
+        .get("activeTerminalId")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    format!(
+        "bytes={} workspaces={workspace_count} terminals={terminal_count} activeWorkspace={active_workspace_id} activeTerminal={active_terminal_id}",
+        data.len()
+    )
+}
+
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
     #[error("could not resolve app data directory: {0}")]
@@ -164,16 +203,55 @@ pub async fn workspace_save(
     data: String,
 ) -> Result<bool, CommandError> {
     let window_label = window.label().to_string();
+    debug_workspace_log(
+        &app,
+        format!(
+            "save requested window={} {}",
+            window_label,
+            workspace_payload_summary(&data)
+        ),
+    );
     if let Some(remote_result) =
         remote_workspace_invoke(&app, &window_label, "workspace:save", vec![json!(data)]).await
     {
-        return remote_result.map(|value| value.as_bool().unwrap_or(false));
+        let result = remote_result.map(|value| value.as_bool().unwrap_or(false));
+        match &result {
+            Ok(ok) => debug_workspace_log(
+                &app,
+                format!("save remote-result window={window_label} ok={ok}"),
+            ),
+            Err(error) => debug_workspace_log(
+                &app,
+                format!(
+                    "save remote-error window={window_label} error={}",
+                    error.message
+                ),
+            ),
+        }
+        return result;
     }
-    tauri::async_runtime::spawn_blocking(move || workspace_save_impl(app, window_label, data))
-        .await
-        .map_err(|err| CommandError {
-            message: format!("workspace.save worker failed: {err}"),
-        })?
+    let app_for_log = app.clone();
+    let log_window_label = window_label.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || workspace_save_impl(app, window_label, data))
+            .await
+            .map_err(|err| CommandError {
+                message: format!("workspace.save worker failed: {err}"),
+            })?;
+    match &result {
+        Ok(ok) => debug_workspace_log(
+            &app_for_log,
+            format!("save local-result window={log_window_label} ok={ok}"),
+        ),
+        Err(error) => debug_workspace_log(
+            &app_for_log,
+            format!(
+                "save local-error window={log_window_label} error={}",
+                error.message
+            ),
+        ),
+    }
+    result
 }
 
 #[tauri::command]

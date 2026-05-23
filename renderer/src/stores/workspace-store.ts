@@ -8,6 +8,11 @@ import { settingsStore } from './settings-store'
 
 type Listener = () => void
 
+function debugLog(...args: unknown[]): void {
+  if (host.debug.isDebugMode !== true) return
+  void host.debug.log(...args).catch(() => {})
+}
+
 function setHostDockBadge(count: number): void {
   void host.app.setDockBadge(count).catch(() => {})
 }
@@ -334,6 +339,20 @@ class WorkspaceStore {
     }
 
     this.notify()
+    debugLog('[workspace-store] addTerminal', {
+      windowId: this.windowId,
+      workspaceId,
+      workspaceName: workspace.name,
+      folderPath: workspace.folderPath,
+      terminalId: terminal.id,
+      agentPreset: terminal.agentPreset || 'none',
+      title,
+      terminalCount: this.state.terminals.length,
+      workspaceTerminalCount: this.state.terminals.filter(t => t.workspaceId === workspaceId).length,
+      activeWorkspaceId: this.state.activeWorkspaceId,
+      activeTerminalId: this.state.activeTerminalId,
+      focusedTerminalId: this.state.focusedTerminalId,
+    })
     return terminal
   }
 
@@ -680,12 +699,23 @@ class WorkspaceStore {
   // Persistence — serialized to prevent concurrent writes from corrupting the file
   async save(): Promise<void> {
     // If a save is already queued, skip — the queued save will capture the latest state
-    if (this._savePending) return
+    if (this._savePending) {
+      debugLog('[workspace-store] save skipped: pending write will capture latest state', {
+        windowId: this.windowId,
+        workspaceCount: this.state.workspaces.length,
+        terminalCount: this.state.terminals.length,
+        activeWorkspaceId: this.state.activeWorkspaceId,
+        activeTerminalId: this.state.activeTerminalId,
+        focusedTerminalId: this.state.focusedTerminalId,
+      })
+      return
+    }
     this._savePending = true
 
     // Wait for any in-flight save to finish, then perform ours
     this._savePromise = this._savePromise.then(async () => {
       this._savePending = false
+      const saveStartedAt = Date.now()
       const savedTerminals = this.state.terminals.map(t => ({
         id: t.id,
         workspaceId: t.workspaceId,
@@ -719,9 +749,38 @@ class WorkspaceStore {
         terminals: savedTerminals,
         activeTerminalId: this.state.activeTerminalId,
       })
-      await host.workspace.save(data)
+      const activeWorkspace = wsWithFocus.find(w => w.id === this.state.activeWorkspaceId)
+      const activeWorkspaceTerminals = savedTerminals.filter(t => t.workspaceId === this.state.activeWorkspaceId)
+      debugLog('[workspace-store] save start', {
+        windowId: this.windowId,
+        workspaceCount: wsWithFocus.length,
+        terminalCount: savedTerminals.length,
+        activeWorkspaceId: this.state.activeWorkspaceId,
+        activeWorkspaceName: activeWorkspace?.name,
+        activeWorkspaceFolder: activeWorkspace?.folderPath,
+        activeTerminalId: this.state.activeTerminalId,
+        focusedTerminalId: this.state.focusedTerminalId,
+        activeWorkspaceTerminals: activeWorkspaceTerminals.map(t => ({
+          id: t.id,
+          title: t.title,
+          agentPreset: t.agentPreset || 'none',
+          cwd: t.cwd,
+        })),
+        dataLength: data.length,
+      })
+      const ok = await host.workspace.save(data)
+      debugLog('[workspace-store] save done', {
+        windowId: this.windowId,
+        ok,
+        elapsedMs: Date.now() - saveStartedAt,
+        workspaceCount: wsWithFocus.length,
+        terminalCount: savedTerminals.length,
+      })
     }).catch(e => {
-      console.error('Failed to save workspace data:', e)
+      debugLog('[workspace-store] save failed', {
+        windowId: this.windowId,
+        error: e instanceof Error ? e.message : String(e),
+      })
     })
 
     return this._savePromise
@@ -819,6 +878,22 @@ class WorkspaceStore {
         focusedTerminalId: restoredFocus,
       }
       this.activeGroup = parsed.activeGroup || null
+      debugLog('[workspace-store] load applied', {
+        windowId: this.windowId,
+        workspaceCount: workspaces.length,
+        terminalCount: terminals.length,
+        activeWorkspaceId,
+        activeTerminalId: restoredFocus,
+        focusedTerminalId: restoredFocus,
+        activeWorkspaceTerminals: terminals
+          .filter(t => t.workspaceId === activeWorkspaceId)
+          .map(t => ({
+            id: t.id,
+            title: t.title,
+            agentPreset: t.agentPreset || 'none',
+            cwd: t.cwd,
+          })),
+      })
       this.notify()
     } catch (e) {
       host.debug.log?.(`Failed to parse workspace data: ${e}`)

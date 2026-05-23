@@ -1,4 +1,5 @@
 use crate::app_data;
+use crate::commands::app::log_tauri;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -12,6 +13,23 @@ const WINDOWS_FILE: &str = "windows.json";
 const WORKSPACES_FILE: &str = "workspaces.json";
 const PROFILES_DIR: &str = "profiles";
 const DEFAULT_PROFILE_ID: &str = "default";
+
+fn bat_debug_enabled() -> bool {
+    matches!(
+        std::env::var("BAT_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn debug_registry_log(app: &AppHandle, message: impl AsRef<str>) {
+    if bat_debug_enabled() {
+        log_tauri(app, &format!("[window-registry] {}", message.as_ref()));
+    }
+}
+
+fn value_array_len(value: &Value) -> usize {
+    value.as_array().map_or(0, Vec::len)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -805,6 +823,13 @@ pub fn workspace_json(app: &AppHandle, window_id: &str) -> Option<String> {
 
 pub fn save_workspace_json(app: &AppHandle, window_id: &str, data: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(data) else {
+        debug_registry_log(
+            app,
+            format!(
+                "save ignored window={window_id} reason=parse-failed bytes={}",
+                data.len()
+            ),
+        );
         return false;
     };
     let state = app.state::<WindowRegistryState>();
@@ -815,6 +840,14 @@ pub fn save_workspace_json(app: &AppHandle, window_id: &str, data: &str) -> bool
     // webview tears down — resurrecting the entry there would re-add the
     // window to the profile snapshot and the next launch would restore it.
     let Some(slot_index) = entries.iter().position(|entry| entry.id == window_id) else {
+        debug_registry_log(
+            app,
+            format!(
+                "save ignored window={window_id} reason=missing-registry-entry workspaces={} terminals={}",
+                value.get("workspaces").map_or(0, value_array_len),
+                value.get("terminals").map_or(0, value_array_len)
+            ),
+        );
         return false;
     };
     let mut entry = entries[slot_index].clone();
@@ -827,6 +860,17 @@ pub fn save_workspace_json(app: &AppHandle, window_id: &str, data: &str) -> bool
     }
     let windows = profile_windows(&entries, &entry.profile_id);
     write_profile_snapshot(app, &entry.profile_id, &windows);
+    debug_registry_log(
+        app,
+        format!(
+            "save wrote window={} profile={} profileWindows={} snapshotWorkspaces={} snapshotTerminals={}",
+            window_id,
+            entry.profile_id,
+            windows.len(),
+            value_array_len(&entry.snapshot.workspaces),
+            value_array_len(&entry.snapshot.terminals)
+        ),
+    );
     true
 }
 
