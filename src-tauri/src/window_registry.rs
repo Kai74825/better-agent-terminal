@@ -323,6 +323,50 @@ fn normalize_window_entry_profile_ids(
     affected_profile_ids
 }
 
+fn prune_overlapping_profile_window_entries(
+    entries: &mut Vec<WindowEntry>,
+) -> (HashSet<String>, usize) {
+    let mut keep = vec![true; entries.len()];
+    let mut sorted_indices = (0..entries.len()).collect::<Vec<_>>();
+    sorted_indices.sort_by(|a, b| entries[*b].last_active_at.cmp(&entries[*a].last_active_at));
+
+    let mut seen_terminal_ids_by_profile: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut affected_profile_ids = HashSet::new();
+    let mut removed_count = 0;
+
+    for index in sorted_indices {
+        let entry = &entries[index];
+        if entry.detached_workspace_id.is_some() || !snapshot_has_content(&entry.snapshot) {
+            continue;
+        }
+        let terminal_ids = snapshot_terminal_ids(&entry.snapshot);
+        if terminal_ids.is_empty() {
+            continue;
+        }
+        let seen = seen_terminal_ids_by_profile
+            .entry(entry.profile_id.clone())
+            .or_default();
+        if terminal_ids.iter().any(|id| seen.contains(id)) {
+            keep[index] = false;
+            removed_count += 1;
+            affected_profile_ids.insert(entry.profile_id.clone());
+            continue;
+        }
+        seen.extend(terminal_ids);
+    }
+
+    if removed_count > 0 {
+        let mut index = 0;
+        entries.retain(|_| {
+            let should_keep = keep[index];
+            index += 1;
+            should_keep
+        });
+    }
+
+    (affected_profile_ids, removed_count)
+}
+
 fn write_profile_snapshots_for_ids(
     app: &AppHandle,
     entries: &[WindowEntry],
@@ -335,10 +379,18 @@ fn write_profile_snapshots_for_ids(
 }
 
 fn normalize_entries_for_app(app: &AppHandle, entries: &mut Vec<WindowEntry>) -> bool {
-    let affected_profile_ids =
+    let mut affected_profile_ids =
         normalize_window_entry_profile_ids(entries, &known_profile_safe_ids(app));
+    let (pruned_profile_ids, pruned_count) = prune_overlapping_profile_window_entries(entries);
+    affected_profile_ids.extend(pruned_profile_ids);
     if affected_profile_ids.is_empty() {
         return false;
+    }
+    if pruned_count > 0 {
+        debug_registry_log(
+            app,
+            format!("normalize pruned overlapping window entries count={pruned_count}"),
+        );
     }
     persist_entries(app, entries);
     write_profile_snapshots_for_ids(app, entries, &affected_profile_ids);
@@ -471,13 +523,20 @@ fn profile_name(app: &AppHandle, profile_id: &str) -> Option<String> {
 }
 
 fn profile_windows(entries: &[WindowEntry], profile_id: &str) -> Vec<WindowSnapshot> {
-    let snapshots = entries
+    let mut matching = entries
         .iter()
         .filter(|entry| {
             entry.profile_id == profile_id
                 && entry.detached_workspace_id.is_none()
                 && snapshot_has_content(&entry.snapshot)
         })
+        .collect::<Vec<_>>();
+    // Stale duplicate window entries can survive crashes or old profile bugs.
+    // When snapshots overlap by terminal ids, keep the most recently active
+    // entry so a fresh save cannot be overwritten by an older duplicate.
+    matching.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+    let snapshots = matching
+        .into_iter()
         .map(|entry| entry.snapshot.clone())
         .collect();
     dedupe_snapshots_by_terminal_ids(snapshots)
@@ -1308,6 +1367,70 @@ mod tests {
     }
 
     #[test]
+    fn prune_overlapping_profile_window_entries_removes_stale_duplicates() {
+        let old = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "old"}],
+            "terminals": [{"id": "t1"}, {"id": "t2"}],
+        }));
+        let recent = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "recent"}],
+            "terminals": [{"id": "t1"}, {"id": "t2"}],
+        }));
+        let other_profile = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "other-profile"}],
+            "terminals": [{"id": "t1"}, {"id": "t2"}],
+        }));
+        let unrelated = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "unrelated"}],
+            "terminals": [{"id": "t3"}],
+        }));
+        let mut entries = vec![
+            WindowEntry {
+                id: "old".into(),
+                profile_id: "default".into(),
+                snapshot: old,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 10,
+            },
+            WindowEntry {
+                id: "recent".into(),
+                profile_id: "default".into(),
+                snapshot: recent,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 20,
+            },
+            WindowEntry {
+                id: "other-profile".into(),
+                profile_id: "other".into(),
+                snapshot: other_profile,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 5,
+            },
+            WindowEntry {
+                id: "unrelated".into(),
+                profile_id: "default".into(),
+                snapshot: unrelated,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 1,
+            },
+        ];
+
+        let (affected, removed_count) = prune_overlapping_profile_window_entries(&mut entries);
+        let ids = entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(removed_count, 1);
+        assert!(affected.contains("default"));
+        assert_eq!(ids, vec!["recent", "other-profile", "unrelated"]);
+    }
+
+    #[test]
     fn bounds_tuple_rejects_missing_or_tiny_bounds() {
         assert_eq!(
             bounds_tuple(&json!({"x": 10, "y": 20, "width": 1200, "height": 800})),
@@ -1483,6 +1606,43 @@ mod tests {
         assert_eq!(
             value_id(&value_array(&windows[1].workspaces)[0]),
             Some("w2")
+        );
+    }
+
+    #[test]
+    fn profile_windows_dedupes_overlapping_terminal_snapshots_by_recency() {
+        let old = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "old"}],
+            "terminals": [{"id": "t1"}, {"id": "t2"}],
+        }));
+        let recent = snapshot_from_workspace_value(json!({
+            "workspaces": [{"id": "recent"}],
+            "terminals": [{"id": "t1"}, {"id": "t2"}],
+        }));
+        let entries = vec![
+            WindowEntry {
+                id: "old".into(),
+                profile_id: "default".into(),
+                snapshot: old,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 10,
+            },
+            WindowEntry {
+                id: "recent".into(),
+                profile_id: "default".into(),
+                snapshot: recent,
+                detached_workspace_id: None,
+                detached_parent_window_id: None,
+                last_active_at: 20,
+            },
+        ];
+
+        let windows = profile_windows(&entries, "default");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(
+            value_id(&value_array(&windows[0].workspaces)[0]),
+            Some("recent")
         );
     }
 
