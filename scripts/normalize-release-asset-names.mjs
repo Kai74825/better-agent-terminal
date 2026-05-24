@@ -23,6 +23,19 @@ function normalizeMacArch(value) {
   return value || (process.arch === 'arm64' ? 'arm64' : 'x64')
 }
 
+function normalizeBundleMode(value) {
+  const mode = String(value || '').trim()
+  if (!mode) return ''
+  if (mode !== 'all-in-one' && mode !== 'lightweight') {
+    throw new Error(`unsupported release bundle mode: ${mode}`)
+  }
+  return mode
+}
+
+function withModeSuffix(name, mode) {
+  return mode ? `${name}.${mode}` : name
+}
+
 function isIgnoredReleaseArtifact(filePath) {
   return /^rw\.\d+\..+\.dmg$/.test(basename(filePath))
 }
@@ -41,16 +54,16 @@ async function listFiles(dir) {
   return files
 }
 
-function targetNameFor({ filePath, platform, version, arch }) {
+function targetNameFor({ filePath, platform, version, arch, mode }) {
   const ext = extname(filePath)
   if (platform === 'mac' && ext === '.dmg') {
-    return `BetterAgentTerminal-${version}-${normalizeMacArch(arch)}.dmg`
+    return `${withModeSuffix(`BetterAgentTerminal-${version}-${normalizeMacArch(arch)}`, mode)}.dmg`
   }
   if (platform === 'linux' && ext === '.AppImage') {
-    return `BetterAgentTerminal-${version}.AppImage`
+    return `${withModeSuffix(`BetterAgentTerminal-${version}`, mode)}.AppImage`
   }
   if (platform === 'win' && ext === '.exe') {
-    return `BetterAgentTerminal.Setup.${version}.exe`
+    return `${withModeSuffix(`BetterAgentTerminal.Setup.${version}`, mode)}.exe`
   }
   return null
 }
@@ -60,6 +73,7 @@ export async function normalizeReleaseAssetNames(options = {}) {
   const platform = normalizePlatform(options.platform || process.env.BAT_RELEASE_PLATFORM)
   const version = normalizeVersion(options.version || process.env.VERSION || process.env.GITHUB_REF_NAME)
   const arch = options.arch || process.env.BAT_RELEASE_ARCH
+  const mode = normalizeBundleMode(options.mode || process.env.BAT_RELEASE_BUNDLE_MODE)
 
   if (!version) {
     throw new Error('missing release version; set VERSION or GITHUB_REF_NAME')
@@ -68,7 +82,7 @@ export async function normalizeReleaseAssetNames(options = {}) {
   const files = await listFiles(releaseDir)
   const renamed = []
   for (const filePath of files) {
-    const targetName = targetNameFor({ filePath, platform, version, arch })
+    const targetName = targetNameFor({ filePath, platform, version, arch, mode })
     if (!targetName || basename(filePath) === targetName) continue
 
     const targetPath = join(dirname(filePath), targetName)

@@ -9,10 +9,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
+const defaultConfigPath = join(repoRoot, 'src-tauri', 'tauri.conf.json')
 
-const requiredResourceSources = [
+const coreResourceSources = [
   '../node-sidecar/dist/server.mjs',
   '../node-sidecar/package.json',
+]
+
+const allInOneResourceSources = [
   '../node-sidecar/dist-node_modules/',
   '../codex-runtime/',
   '../node-sidecar/runtime/',
@@ -64,25 +68,39 @@ async function dirExists(path) {
   }
 }
 
-async function loadResourceSources(configPath) {
-  const raw = await readFile(configPath, 'utf8')
-  const parsed = JSON.parse(raw)
-  return new Set(Object.keys(parsed?.bundle?.resources || {}))
+async function loadResourceSources(configPaths) {
+  const sources = new Set()
+  for (const configPath of configPaths) {
+    const raw = await readFile(configPath, 'utf8')
+    const parsed = JSON.parse(raw)
+    for (const source of Object.keys(parsed?.bundle?.resources || {})) {
+      sources.add(source)
+    }
+  }
+  return sources
 }
 
 export async function collectTauriPreviewReadiness(options = {}) {
   const root = resolve(options.root || repoRoot)
   const platform = options.platform || process.platform
   const arch = options.arch || process.arch
+  const mode = options.mode || 'all-in-one'
   const key = runtimeKey(platform, arch)
   const runtimeRel = options.runtimeRel || runtimeExecutables[key]
   const configPath = options.configPath || join(root, 'src-tauri', 'tauri.conf.json')
+  const runtimeConfigPath = options.runtimeConfigPath || join(root, 'src-tauri', 'tauri.all-in-one.conf.json')
+  const configPaths = mode === 'lightweight'
+    ? [configPath]
+    : [configPath, runtimeConfigPath]
   const sidecarRoot = join(root, 'node-sidecar')
   const checks = []
 
   const add = (name, ok, detail) => checks.push({ name, ok, detail })
 
-  const resourceSources = await loadResourceSources(configPath)
+  const resourceSources = await loadResourceSources(configPaths)
+  const requiredResourceSources = mode === 'lightweight'
+    ? coreResourceSources
+    : [...coreResourceSources, ...allInOneResourceSources]
   for (const source of requiredResourceSources) {
     add(
       `resource:${source}`,
@@ -98,47 +116,49 @@ export async function collectTauriPreviewReadiness(options = {}) {
   const sidecarPackagePath = join(sidecarRoot, 'package.json')
   add('sidecar:package-json', await pathExists(sidecarPackagePath), sidecarPackagePath)
 
-  const nodeModulesPath = join(sidecarRoot, 'dist-node_modules')
-  add('sidecar:dist-node-modules', await dirExists(nodeModulesPath), nodeModulesPath)
-  const claudeNativePackage = claudeNativePackages[key]
-  if (claudeNativePackage) {
-    const exeName = platform === 'win32' ? 'claude.exe' : 'claude'
-    const claudeBinary = join(
-      nodeModulesPath,
-      '@anthropic-ai',
-      claudeNativePackage,
-      exeName,
-    )
-    const claudeBinaryBytes = await fileSize(claudeBinary)
-    const compressedClaudeBinary = `${claudeBinary}.gz`
-    const compressedClaudeBinaryBytes = await fileSize(compressedClaudeBinary)
-    const hasClaudeBinary = claudeBinaryBytes > 0 || (platform === 'linux' && compressedClaudeBinaryBytes > 0)
-    const detail = claudeBinaryBytes > 0
-      ? `${claudeBinary} (${claudeBinaryBytes} bytes)`
-      : `${compressedClaudeBinary} (${compressedClaudeBinaryBytes} bytes)`
-    add(`sidecar:claude-native:${key}`, hasClaudeBinary, detail)
-  } else {
-    add(`sidecar:claude-native:${key}`, false, `unsupported platform/arch for Claude native package: ${key}`)
-  }
-  const codexRuntimeRoot = join(root, 'codex-runtime')
-  add('codex-runtime:root', await dirExists(codexRuntimeRoot), codexRuntimeRoot)
-  const codexExeName = platform === 'win32' ? 'codex.exe' : 'codex'
-  const codexBinary = join(codexRuntimeRoot, codexExeName)
-  const codexBinaryBytes = await fileSize(codexBinary)
-  add(`codex-runtime:binary:${key}`, codexBinaryBytes > 0, `${codexBinary} (${codexBinaryBytes} bytes)`)
-  const rgName = platform === 'win32' ? 'rg.exe' : 'rg'
-  const codexRipgrep = join(codexRuntimeRoot, 'path', rgName)
-  const codexRipgrepBytes = await fileSize(codexRipgrep)
-  add(`codex-runtime:ripgrep:${key}`, codexRipgrepBytes > 0, `${codexRipgrep} (${codexRipgrepBytes} bytes)`)
+  if (mode !== 'lightweight') {
+    const nodeModulesPath = join(sidecarRoot, 'dist-node_modules')
+    add('sidecar:dist-node-modules', await dirExists(nodeModulesPath), nodeModulesPath)
+    const claudeNativePackage = claudeNativePackages[key]
+    if (claudeNativePackage) {
+      const exeName = platform === 'win32' ? 'claude.exe' : 'claude'
+      const claudeBinary = join(
+        nodeModulesPath,
+        '@anthropic-ai',
+        claudeNativePackage,
+        exeName,
+      )
+      const claudeBinaryBytes = await fileSize(claudeBinary)
+      const compressedClaudeBinary = `${claudeBinary}.gz`
+      const compressedClaudeBinaryBytes = await fileSize(compressedClaudeBinary)
+      const hasClaudeBinary = claudeBinaryBytes > 0 || (platform === 'linux' && compressedClaudeBinaryBytes > 0)
+      const detail = claudeBinaryBytes > 0
+        ? `${claudeBinary} (${claudeBinaryBytes} bytes)`
+        : `${compressedClaudeBinary} (${compressedClaudeBinaryBytes} bytes)`
+      add(`sidecar:claude-native:${key}`, hasClaudeBinary, detail)
+    } else {
+      add(`sidecar:claude-native:${key}`, false, `unsupported platform/arch for Claude native package: ${key}`)
+    }
+    const codexRuntimeRoot = join(root, 'codex-runtime')
+    add('codex-runtime:root', await dirExists(codexRuntimeRoot), codexRuntimeRoot)
+    const codexExeName = platform === 'win32' ? 'codex.exe' : 'codex'
+    const codexBinary = join(codexRuntimeRoot, codexExeName)
+    const codexBinaryBytes = await fileSize(codexBinary)
+    add(`codex-runtime:binary:${key}`, codexBinaryBytes > 0, `${codexBinary} (${codexBinaryBytes} bytes)`)
+    const rgName = platform === 'win32' ? 'rg.exe' : 'rg'
+    const codexRipgrep = join(codexRuntimeRoot, 'path', rgName)
+    const codexRipgrepBytes = await fileSize(codexRipgrep)
+    add(`codex-runtime:ripgrep:${key}`, codexRipgrepBytes > 0, `${codexRipgrep} (${codexRipgrepBytes} bytes)`)
 
-  const runtimeRoot = join(sidecarRoot, 'runtime')
-  add('runtime:root', await dirExists(runtimeRoot), runtimeRoot)
-  if (runtimeRel) {
-    const runtimePath = join(runtimeRoot, runtimeRel)
-    const runtimeBytes = await fileSize(runtimePath)
-    add(`runtime:${key}`, runtimeBytes > 0, `${runtimePath} (${runtimeBytes} bytes)`)
-  } else {
-    add(`runtime:${key}`, false, `unsupported platform/arch for preview runtime: ${key}`)
+    const runtimeRoot = join(sidecarRoot, 'runtime')
+    add('runtime:root', await dirExists(runtimeRoot), runtimeRoot)
+    if (runtimeRel) {
+      const runtimePath = join(runtimeRoot, runtimeRel)
+      const runtimeBytes = await fileSize(runtimePath)
+      add(`runtime:${key}`, runtimeBytes > 0, `${runtimePath} (${runtimeBytes} bytes)`)
+    } else {
+      add(`runtime:${key}`, false, `unsupported platform/arch for preview runtime: ${key}`)
+    }
   }
 
   return {
@@ -148,17 +168,18 @@ export async function collectTauriPreviewReadiness(options = {}) {
 }
 
 function parseArgs(argv) {
-  const out = { root: repoRoot, json: false }
+  const out = { root: repoRoot, json: false, mode: 'all-in-one' }
   for (const arg of argv) {
     if (arg === '--json') out.json = true
     else if (arg.startsWith('--root=')) out.root = resolve(arg.slice('--root='.length))
+    else if (arg.startsWith('--mode=')) out.mode = arg.slice('--mode='.length)
   }
   return out
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
-  const result = await collectTauriPreviewReadiness({ root: args.root })
+  const result = await collectTauriPreviewReadiness({ root: args.root, mode: args.mode })
   if (args.json) {
     console.log(JSON.stringify(result, null, 2))
   } else {

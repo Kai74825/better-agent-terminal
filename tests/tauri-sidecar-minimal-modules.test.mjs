@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = dirname(fileURLToPath(new URL('../package.json', import.meta.url)))
 const config = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'))
+const allInOneConfig = JSON.parse(await readFile(new URL('../src-tauri/tauri.all-in-one.conf.json', import.meta.url), 'utf8'))
 
 async function pingBundledSidecar(serverPath) {
   const child = spawn(process.execPath, [serverPath], {
@@ -75,14 +76,19 @@ async function pingBundledSidecar(serverPath) {
 }
 
 assert.equal(
-  config?.bundle?.resources?.['../node-sidecar/dist-node_modules/'],
+  allInOneConfig?.bundle?.resources?.['../node-sidecar/dist-node_modules/'],
   'node-sidecar/node_modules/',
-  'Tauri should package the minimal sidecar node_modules tree',
+  'Tauri all-in-one config should package the minimal sidecar node_modules tree',
 )
 assert.equal(
   config?.bundle?.resources?.['../node-sidecar/node_modules/'],
   undefined,
   'Tauri should not package the full sidecar node_modules tree',
+)
+assert.equal(
+  config?.bundle?.resources?.['../node-sidecar/dist-node_modules/'],
+  undefined,
+  'Tauri lightweight base config should not package Claude native runtime resources',
 )
 
 const anthropicModules = new URL('../node-sidecar/dist-node_modules/@anthropic-ai', import.meta.url)

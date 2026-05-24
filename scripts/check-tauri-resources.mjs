@@ -10,6 +10,29 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
 const defaultConfigPath = resolve(repoRoot, 'src-tauri', 'tauri.conf.json')
+const allInOneConfigPath = resolve(repoRoot, 'src-tauri', 'tauri.all-in-one.conf.json')
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function mergeConfig(base, overlay) {
+  if (!isPlainObject(base) || !isPlainObject(overlay)) return overlay
+  const out = { ...base }
+  for (const [key, value] of Object.entries(overlay)) {
+    out[key] = key in out ? mergeConfig(out[key], value) : value
+  }
+  return out
+}
+
+async function loadMergedConfig(configPaths) {
+  let merged = {}
+  for (const configPath of configPaths) {
+    const raw = await readFile(configPath, 'utf8')
+    merged = mergeConfig(merged, JSON.parse(raw))
+  }
+  return merged
+}
 
 async function countPath(path) {
   let info
@@ -36,9 +59,8 @@ async function countPath(path) {
   return { files, bytes, missing }
 }
 
-export async function collectTauriResourceStats(configPath = defaultConfigPath) {
-  const raw = await readFile(configPath, 'utf8')
-  const parsed = JSON.parse(raw)
+export async function collectTauriResourceStats(configPath = defaultConfigPath, extraConfigPaths = []) {
+  const parsed = await loadMergedConfig([configPath, ...extraConfigPaths])
   const resources = parsed?.bundle?.resources
   if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
     return { configPath, entries: [], totalFiles: 0, totalBytes: 0, missing: [] }
@@ -64,6 +86,7 @@ export async function collectTauriResourceStats(configPath = defaultConfigPath) 
 function parseArgs(argv) {
   const out = {
     configPath: defaultConfigPath,
+    extraConfigPaths: [],
     json: false,
     strictMissing: false,
     maxFiles: null,
@@ -73,6 +96,11 @@ function parseArgs(argv) {
     if (arg === '--json') out.json = true
     else if (arg === '--strict-missing') out.strictMissing = true
     else if (arg.startsWith('--config=')) out.configPath = resolve(arg.slice('--config='.length))
+    else if (arg.startsWith('--extra-config=')) out.extraConfigPaths.push(resolve(arg.slice('--extra-config='.length)))
+    else if (arg === '--mode=all-in-one') out.extraConfigPaths.push(allInOneConfigPath)
+    else if (arg === '--mode=lightweight') {
+      // Base config is the lightweight resource surface.
+    }
     else if (arg.startsWith('--max-files=')) out.maxFiles = Number(arg.slice('--max-files='.length))
     else if (arg.startsWith('--max-mb=')) out.maxBytes = Number(arg.slice('--max-mb='.length)) * 1024 * 1024
   }
@@ -85,7 +113,7 @@ function formatMb(bytes) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
-  const stats = await collectTauriResourceStats(args.configPath)
+  const stats = await collectTauriResourceStats(args.configPath, args.extraConfigPaths)
   if (args.json) {
     console.log(JSON.stringify(stats, null, 2))
   } else {

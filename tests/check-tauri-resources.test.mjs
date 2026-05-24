@@ -34,6 +34,18 @@ try {
   assert.deepEqual(stats.missing, ['../resources/missing.txt'])
   assert.equal(stats.entries.find((entry) => entry.source === '../resources/dir/').files, 2)
 
+  const extraConfigPath = join(tauriDir, 'tauri.all-in-one.conf.json')
+  await writeFile(extraConfigPath, JSON.stringify({
+    bundle: {
+      resources: {
+        '../resources/one.txt': 'one-copy.txt',
+      },
+    },
+  }))
+  const mergedStats = await collectTauriResourceStats(configPath, [extraConfigPath])
+  assert.equal(mergedStats.entries.length, 3)
+  assert.ok(mergedStats.entries.some((entry) => entry.target === 'one-copy.txt'))
+
   console.log('check-tauri-resources: passed')
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -8,6 +8,28 @@ import { collectTauriPreviewReadiness } from '../scripts/check-tauri-preview-rea
 const root = join(tmpdir(), `bat-tauri-preview-readiness-${process.pid}`)
 await rm(root, { recursive: true, force: true })
 
+async function writeTauriConfigs(root, runtimeResources = true) {
+  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
+    bundle: {
+      resources: {
+        '../node-sidecar/dist/server.mjs': 'node-sidecar/dist/server.mjs',
+        '../node-sidecar/package.json': 'node-sidecar/package.json',
+      },
+    },
+  }))
+  await writeFile(join(root, 'src-tauri', 'tauri.all-in-one.conf.json'), JSON.stringify({
+    bundle: {
+      resources: runtimeResources
+        ? {
+            '../node-sidecar/dist-node_modules/': 'node-sidecar/node_modules/',
+            '../codex-runtime/': 'codex-runtime/',
+            '../node-sidecar/runtime/': 'node-runtime/',
+          }
+        : {},
+    },
+  }))
+}
+
 try {
   await mkdir(join(root, 'src-tauri'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'dist'), { recursive: true })
@@ -15,17 +37,7 @@ try {
   await mkdir(join(root, 'codex-runtime'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'runtime', 'windows-x86_64'), { recursive: true })
 
-  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
-    bundle: {
-      resources: {
-        '../node-sidecar/dist/server.mjs': 'node-sidecar/dist/server.mjs',
-        '../node-sidecar/package.json': 'node-sidecar/package.json',
-        '../node-sidecar/dist-node_modules/': 'node-sidecar/node_modules/',
-        '../codex-runtime/': 'codex-runtime/',
-        '../node-sidecar/runtime/': 'node-runtime/',
-      },
-    },
-  }))
+  await writeTauriConfigs(root)
   await writeFile(join(root, 'node-sidecar', 'dist', 'server.mjs'), 'console.log("ok")')
   await writeFile(join(root, 'node-sidecar', 'package.json'), '{"type":"module"}')
   await writeFile(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-win32-x64', 'claude.exe'), 'claude')
@@ -41,13 +53,7 @@ try {
   })
   assert.equal(ready.ok, true)
 
-  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
-    bundle: {
-      resources: {
-        '../node-sidecar/dist/server.mjs': 'node-sidecar/dist/server.mjs',
-      },
-    },
-  }))
+  await writeTauriConfigs(root, false)
   const notReady = await collectTauriPreviewReadiness({
     root,
     platform: 'win32',
@@ -56,23 +62,22 @@ try {
   assert.equal(notReady.ok, false)
   assert.ok(notReady.checks.some((check) => check.name === 'resource:../node-sidecar/runtime/' && !check.ok))
 
+  const lightweightReady = await collectTauriPreviewReadiness({
+    root,
+    platform: 'win32',
+    arch: 'x64',
+    mode: 'lightweight',
+  })
+  assert.equal(lightweightReady.ok, true)
+  assert.ok(!lightweightReady.checks.some((check) => check.name === 'resource:../node-sidecar/runtime/'))
+
   await rm(root, { recursive: true, force: true })
   await mkdir(join(root, 'src-tauri'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'dist'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64'), { recursive: true })
   await mkdir(join(root, 'codex-runtime', 'path'), { recursive: true })
   await mkdir(join(root, 'node-sidecar', 'runtime', 'linux-x86_64', 'bin'), { recursive: true })
-  await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), JSON.stringify({
-    bundle: {
-      resources: {
-        '../node-sidecar/dist/server.mjs': 'node-sidecar/dist/server.mjs',
-        '../node-sidecar/package.json': 'node-sidecar/package.json',
-        '../node-sidecar/dist-node_modules/': 'node-sidecar/node_modules/',
-        '../codex-runtime/': 'codex-runtime/',
-        '../node-sidecar/runtime/': 'node-runtime/',
-      },
-    },
-  }))
+  await writeTauriConfigs(root)
   await writeFile(join(root, 'node-sidecar', 'dist', 'server.mjs'), 'console.log("ok")')
   await writeFile(join(root, 'node-sidecar', 'package.json'), '{"type":"module"}')
   await writeFile(join(root, 'node-sidecar', 'dist-node_modules', '@anthropic-ai', 'claude-agent-sdk-linux-x64', 'claude.gz'), 'compressed')

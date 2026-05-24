@@ -16,8 +16,9 @@ try {
     platform: 'mac',
     version: 'v2.9.0-pre.15',
     arch: 'arm64',
+    mode: 'all-in-one',
   })
-  assert.deepEqual(await readdir(macDir), ['BetterAgentTerminal-2.9.0-pre.15-arm64.dmg'])
+  assert.deepEqual(await readdir(macDir), ['BetterAgentTerminal-2.9.0-pre.15-arm64.all-in-one.dmg'])
 
   const linuxDir = join(root, 'appimage')
   await mkdir(linuxDir)
@@ -36,8 +37,9 @@ try {
     releaseDir: winDir,
     platform: 'win',
     version: '2.9.0-pre.15',
+    mode: 'lightweight',
   })
-  assert.deepEqual(await readdir(winDir), ['BetterAgentTerminal.Setup.2.9.0-pre.15.exe'])
+  assert.deepEqual(await readdir(winDir), ['BetterAgentTerminal.Setup.2.9.0-pre.15.lightweight.exe'])
 
   console.log('normalize-release-asset-names: passed')
 } finally {

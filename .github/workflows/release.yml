@@ -82,9 +82,20 @@ jobs:
           - os: windows-latest
             platform: win
             arch: x64
-            artifact: release-win
+            artifact: release-win-all-in-one
             release_exts: '.exe'
             bundle: nsis
+            bundle_mode: all-in-one
+            asset_mode: all-in-one
+            prerelease: true
+          - os: windows-latest
+            platform: win
+            arch: x64
+            artifact: release-win-lightweight
+            release_exts: '.exe'
+            bundle: nsis
+            bundle_mode: lightweight
+            asset_mode: lightweight
             prerelease: true
           - os: macos-15-intel
             platform: mac
@@ -92,13 +103,26 @@ jobs:
             artifact: release-mac-x64
             release_exts: '.dmg'
             bundle: dmg
+            bundle_mode: all-in-one
+            asset_mode: ''
             prerelease: false
           - os: macos-14
             platform: mac
             arch: arm64
-            artifact: release-mac-arm64
+            artifact: release-mac-arm64-all-in-one
             release_exts: '.dmg'
             bundle: dmg
+            bundle_mode: all-in-one
+            asset_mode: all-in-one
+            prerelease: true
+          - os: macos-14
+            platform: mac
+            arch: arm64
+            artifact: release-mac-arm64-lightweight
+            release_exts: '.dmg'
+            bundle: dmg
+            bundle_mode: lightweight
+            asset_mode: lightweight
             prerelease: true
           - os: ubuntu-22.04
             platform: linux
@@ -106,6 +130,8 @@ jobs:
             artifact: release-linux
             release_exts: '.AppImage'
             bundle: appimage
+            bundle_mode: all-in-one
+            asset_mode: ''
             prerelease: false
 
     runs-on: ${{ matrix.os }}
@@ -246,12 +272,12 @@ jobs:
             ${{ runner.os }}-${{ matrix.arch }}-sidecar-node-modules-
 
       - name: Compute Tauri resource cache keys
-        if: env.BUILD_MATRIX_ENTRY == 'true'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
         id: tauri-resource-cache-keys
         run: node scripts/tauri-resource-cache-keys.mjs
 
       - name: Cache bundled Node runtime
-        if: env.BUILD_MATRIX_ENTRY == 'true'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
         id: node-runtime-cache
         uses: actions/cache@v4
         with:
@@ -261,7 +287,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.arch }}-node-runtime-
 
       - name: Cache prepared sidecar resources
-        if: env.BUILD_MATRIX_ENTRY == 'true'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
         id: sidecar-resource-cache
         uses: actions/cache@v4
         with:
@@ -273,7 +299,7 @@ jobs:
             ${{ runner.os }}-${{ matrix.arch }}-sidecar-resources-
 
       - name: Cache prepared Codex runtime
-        if: env.BUILD_MATRIX_ENTRY == 'true'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
         id: codex-runtime-cache
         uses: actions/cache@v4
         with:
@@ -329,24 +355,29 @@ jobs:
         if: env.BUILD_MATRIX_ENTRY == 'true'
         shell: bash
         run: |
-          node scripts/fetch-node-runtime.mjs
-          if [[ "${{ steps.sidecar-resource-cache.outputs.cache-hit }}" == "true" ]]; then
-            echo "Prepared sidecar resources restored from cache."
+          if [[ "${{ matrix.bundle_mode }}" == "lightweight" ]]; then
+            pnpm run prepare:tauri-bundle:ci:lightweight
+            pnpm run verify:tauri-preview-readiness:lightweight
           else
-            pnpm --dir node-sidecar install --frozen-lockfile --prefer-offline
-            pnpm run prune:tauri-sidecar
-            pnpm run build:tauri-sidecar
-            pnpm run prepare:tauri-sidecar-node-modules
+            node scripts/fetch-node-runtime.mjs
+            if [[ "${{ steps.sidecar-resource-cache.outputs.cache-hit }}" == "true" ]]; then
+              echo "Prepared sidecar resources restored from cache."
+            else
+              pnpm --dir node-sidecar install --frozen-lockfile --prefer-offline
+              pnpm run prune:tauri-sidecar
+              pnpm run build:tauri-sidecar
+              pnpm run prepare:tauri-sidecar-node-modules
+            fi
+            if [[ "${{ steps.codex-runtime-cache.outputs.cache-hit }}" == "true" ]]; then
+              echo "Prepared Codex runtime restored from cache."
+            else
+              pnpm run prepare:tauri-codex-runtime
+            fi
+            pnpm run verify:tauri-preview-readiness:all-in-one
           fi
-          if [[ "${{ steps.codex-runtime-cache.outputs.cache-hit }}" == "true" ]]; then
-            echo "Prepared Codex runtime restored from cache."
-          else
-            pnpm run prepare:tauri-codex-runtime
-          fi
-          pnpm run verify:tauri-preview-readiness
 
       - name: Sign macOS resource binaries
-        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac'
+        if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'mac' && matrix.bundle_mode == 'all-in-one'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -365,7 +396,7 @@ jobs:
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
-        run: pnpm exec tauri build --bundles ${{ matrix.bundle }} --verbose
+        run: node scripts/tauri-build-mode.mjs --mode ${{ matrix.bundle_mode }} --bundles ${{ matrix.bundle }} --verbose
 
       - name: Build Tauri release bundle
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform != 'linux'
@@ -377,13 +408,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
-        run: pnpm exec tauri build --bundles ${{ matrix.bundle }}
+        run: node scripts/tauri-build-mode.mjs --mode ${{ matrix.bundle_mode }} --bundles ${{ matrix.bundle }}
 
       - name: Normalize release asset names
         if: env.BUILD_MATRIX_ENTRY == 'true'
         env:
           BAT_RELEASE_PLATFORM: ${{ matrix.platform }}
           BAT_RELEASE_ARCH: ${{ matrix.arch }}
+          BAT_RELEASE_BUNDLE_MODE: ${{ matrix.asset_mode }}
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: node scripts/normalize-release-asset-names.mjs src-tauri/target/release/bundle
 
@@ -489,7 +521,7 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
-          name: release-win
+          name: release-win-all-in-one
           path: artifacts
 
       - name: Extract version from tag
