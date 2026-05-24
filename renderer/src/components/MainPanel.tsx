@@ -33,6 +33,9 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
   const isClaudeCode = isSdkManaged
   const hasRuntimeError = !!terminal.runtimeError
   const agentConfig = isAgent ? getAgentPreset(terminal.agentPreset!) : null
+  const agentColorStyle = agentConfig
+    ? { '--agent-color': agentConfig.color } as React.CSSProperties
+    : undefined
   const displayTitle = terminal.alias || terminal.title
   const { t } = useTranslation()
   const [isEditing, setIsEditing] = useState(false)
@@ -68,7 +71,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
       <div className="main-panel-header">
         <div
           className={`main-panel-title ${isAgent ? 'agent-terminal' : ''}`}
-          style={agentConfig ? { '--agent-color': agentConfig.color } as React.CSSProperties : undefined}
+          style={agentColorStyle}
           onDoubleClick={handleDoubleClick}
           title={terminal.alias ? terminal.title : t('terminal.doubleClickToRename')}
         >
@@ -97,7 +100,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
           )}
         </div>
         {isClaudeCode && !isWorker && (
-          <div className="msg-filter-bar">
+          <div className="msg-filter-bar" style={agentColorStyle}>
             <button
               className={`msg-filter-btn${showUserMsg ? ' active' : ''}`}
               onClick={() => setShowUserMsg(v => !v)}
@@ -127,7 +130,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
               onClick={() => setShowThinkingMsg(v => !v)}
               title={showThinkingMsg ? t('claude.hideThinkingMessages') : t('claude.showThinkingMessages')}
             >
-              <span className="msg-filter-dot" style={{ background: 'var(--claude-accent)' }} />
+              <span className="msg-filter-dot" style={{ background: 'var(--agent-color, var(--claude-accent))' }} />
               {t('claude.filterThinking')}
             </button>
           </div>
