@@ -342,14 +342,11 @@ pub struct HostDispatchRequest {
 }
 
 pub fn normalize_remote_invoke(request: RemoteInvokeRequest) -> HostDispatchRequest {
-    let params = invoke_params_for_protocol(
-        request.protocol,
-        &request.channel,
-        &request.args,
-        request.params,
-    );
+    let channel = canonical_remote_channel(&request.channel);
+    let params =
+        invoke_params_for_protocol(request.protocol, &channel, &request.args, request.params);
     HostDispatchRequest {
-        channel: request.channel,
+        channel,
         params,
         window_id: request.window_id,
         profile_id: request.profile_id,
@@ -818,7 +815,7 @@ mod tests {
     fn normalizes_remote_invoke_into_host_dispatch_request() {
         let dispatch = normalize_remote_invoke(RemoteInvokeRequest {
             protocol: RemoteProtocol::LegacyV1,
-            channel: "claude:send-message".into(),
+            channel: "agent:send-message".into(),
             args: vec![json!("s1"), json!("hi")],
             params: None,
             window_id: Some("win-1".into()),

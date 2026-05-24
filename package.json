@@ -67,15 +67,17 @@
     "dev:renderer": "cross-env BAT_DEBUG=1 vite"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.128",
-    "@anthropic-ai/claude-code": "^2.1.128",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.150",
+    "@anthropic-ai/claude-code": "^2.1.150",
+    "@anthropic-ai/sdk": "^0.98.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex": "0.128.0",
     "@vscode/ripgrep": "^1.17.1",
     "better-sqlite3": "^12.5.0",
     "selfsigned": "^5.5.0",
     "uuid": "^14.0.0",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "zod": "^4.4.3"
   },
   "optionalDependencies": {
     "@img/sharp-darwin-arm64": "^0.34.5",

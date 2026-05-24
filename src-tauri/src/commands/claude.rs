@@ -2755,7 +2755,7 @@ pub async fn claude_auth_status(
         &app,
         &state,
         &window,
-        "claude:auth-status",
+        "agent:auth-status",
         vec![],
         DEFAULT_TIMEOUT,
     )
@@ -2781,7 +2781,7 @@ pub async fn claude_account_list(
         &app,
         &state,
         &window,
-        "claude:account-list",
+        "agent:account-list",
         vec![],
         DEFAULT_TIMEOUT,
     )
@@ -2808,7 +2808,7 @@ pub async fn claude_start_session(
         &app,
         &state,
         &window,
-        "claude:start-session",
+        "agent:start-session",
         vec![
             json!(session_id.clone()),
             options.clone().unwrap_or(Value::Null),
@@ -2862,7 +2862,7 @@ pub async fn claude_send_message(
         &app,
         &state,
         &window,
-        "claude:send-message",
+        "agent:send-message",
         vec![
             json!(session_id.clone()),
             json!(prompt.clone()),
@@ -2904,7 +2904,7 @@ pub async fn claude_stop_session(
         &app,
         &state,
         &window,
-        "claude:stop-session",
+        "agent:stop-session",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -2936,7 +2936,7 @@ pub async fn claude_abort_session(
         &app,
         &state,
         &window,
-        "claude:abort-session",
+        "agent:abort-session",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -2962,7 +2962,7 @@ pub async fn claude_stop_task(
         &app,
         &state,
         &window,
-        "claude:stop-task",
+        "agent:stop-task",
         vec![json!(session_id.clone()), json!(task_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3098,7 +3098,7 @@ pub async fn claude_account_switch(
         &app,
         &state,
         &window,
-        "claude:account-switch",
+        "agent:account-switch",
         vec![json!(account_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3122,7 +3122,7 @@ pub async fn claude_account_remove(
         &app,
         &state,
         &window,
-        "claude:account-remove",
+        "agent:account-remove",
         vec![json!(account_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3145,7 +3145,7 @@ pub async fn claude_account_mark_warning_shown(
         &app,
         &state,
         &window,
-        "claude:account-mark-warning-shown",
+        "agent:account-mark-warning-shown",
         vec![],
         DEFAULT_TIMEOUT,
     )
@@ -3170,7 +3170,7 @@ pub async fn claude_get_cli_path(
         &app,
         &state,
         &window,
-        "claude:get-cli-path",
+        "agent:get-cli-path",
         vec![],
         DEFAULT_TIMEOUT,
     )
@@ -3196,7 +3196,7 @@ pub async fn claude_prepare_cli_session(
         &app,
         &state,
         &window,
-        "claude:prepare-cli-session",
+        "agent:prepare-cli-session",
         vec![
             json!(terminal_id.clone()),
             json!(workspace_id.clone()),
@@ -3232,7 +3232,7 @@ pub async fn claude_list_sessions(
         &app,
         &state,
         &window,
-        "claude:list-sessions",
+        "agent:list-sessions",
         vec![json!(cwd.clone()), json!(agent_kind.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3258,7 +3258,7 @@ pub async fn claude_get_supported_models(
         &app,
         &state,
         &window,
-        "claude:get-supported-models",
+        "agent:get-supported-models",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3352,7 +3352,7 @@ pub async fn claude_get_supported_commands(
         &app,
         &state,
         &window,
-        "claude:get-supported-commands",
+        "agent:get-supported-commands",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3377,7 +3377,7 @@ pub async fn claude_get_supported_agents(
         &app,
         &state,
         &window,
-        "claude:get-supported-agents",
+        "agent:get-supported-agents",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3402,7 +3402,7 @@ pub async fn claude_get_account_info(
         &app,
         &state,
         &window,
-        "claude:get-account-info",
+        "agent:get-account-info",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3427,7 +3427,7 @@ pub async fn claude_get_session_state(
         &app,
         &state,
         &window,
-        "claude:get-session-state",
+        "agent:get-session-state",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3452,7 +3452,7 @@ pub async fn claude_get_session_meta(
         &app,
         &state,
         &window,
-        "claude:get-session-meta",
+        "agent:get-session-meta",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3477,7 +3477,7 @@ pub async fn claude_get_context_usage(
         &app,
         &state,
         &window,
-        "claude:get-context-usage",
+        "agent:get-context-usage",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3501,7 +3501,7 @@ pub async fn claude_get_worktree_status(
         &app,
         &state,
         &window,
-        "claude:get-worktree-status",
+        "agent:get-worktree-status",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3541,7 +3541,7 @@ pub async fn claude_scan_skills(
         &app,
         &state,
         &window,
-        "claude:scan-skills",
+        "agent:scan-skills",
         vec![json!(cwd.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3565,7 +3565,7 @@ pub async fn claude_cleanup_worktree(
         &app,
         &state,
         &window,
-        "claude:cleanup-worktree",
+        "agent:cleanup-worktree",
         vec![json!(session_id.clone()), json!(delete_branch)],
         DEFAULT_TIMEOUT,
     )
@@ -3639,7 +3639,7 @@ pub async fn claude_set_auto_continue(
         &app,
         &state,
         &window,
-        "claude:set-auto-continue",
+        "agent:set-auto-continue",
         vec![json!(session_id.clone()), opts.clone()],
         DEFAULT_TIMEOUT,
     )
@@ -3664,7 +3664,7 @@ pub async fn claude_get_auto_continue(
         &app,
         &state,
         &window,
-        "claude:get-auto-continue",
+        "agent:get-auto-continue",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3690,7 +3690,7 @@ pub async fn claude_set_permission_mode(
         &app,
         &state,
         &window,
-        "claude:set-permission-mode",
+        "agent:set-permission-mode",
         vec![json!(session_id.clone()), json!(mode.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3716,7 +3716,7 @@ pub async fn claude_set_codex_sandbox_mode(
         &app,
         &state,
         &window,
-        "claude:set-codex-sandbox-mode",
+        "agent:set-codex-sandbox-mode",
         vec![json!(session_id.clone()), json!(mode.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3742,7 +3742,7 @@ pub async fn claude_set_codex_approval_policy(
         &app,
         &state,
         &window,
-        "claude:set-codex-approval-policy",
+        "agent:set-codex-approval-policy",
         vec![json!(session_id.clone()), json!(policy.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3769,7 +3769,7 @@ pub async fn claude_set_model(
         &app,
         &state,
         &window,
-        "claude:set-model",
+        "agent:set-model",
         vec![
             json!(session_id.clone()),
             json!(model.clone()),
@@ -3817,7 +3817,7 @@ pub async fn claude_set_effort(
         &app,
         &state,
         &window,
-        "claude:set-effort",
+        "agent:set-effort",
         vec![json!(session_id.clone()), json!(effort.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3855,7 +3855,7 @@ pub async fn claude_reset_session(
         &app,
         &state,
         &window,
-        "claude:reset-session",
+        "agent:reset-session",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3880,7 +3880,7 @@ pub async fn claude_fork_session(
         &app,
         &state,
         &window,
-        "claude:fork-session",
+        "agent:fork-session",
         vec![json!(session_id.clone())],
         Duration::from_secs(90),
     )
@@ -3905,7 +3905,7 @@ pub async fn claude_archive_messages(
         &app,
         &state,
         &window,
-        "claude:archive-messages",
+        "agent:archive-messages",
         vec![json!(session_id.clone()), messages.clone()],
         DEFAULT_TIMEOUT,
     )
@@ -3933,7 +3933,7 @@ pub async fn claude_load_archived(
         &app,
         &state,
         &window,
-        "claude:load-archived",
+        "agent:load-archived",
         vec![json!(session_id.clone()), json!(offset), json!(limit)],
         DEFAULT_TIMEOUT,
     )
@@ -3961,7 +3961,7 @@ pub async fn claude_clear_archive(
         &app,
         &state,
         &window,
-        "claude:clear-archive",
+        "agent:clear-archive",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -3985,7 +3985,7 @@ pub async fn claude_rest_session(
         &app,
         &state,
         &window,
-        "claude:rest-session",
+        "agent:rest-session",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -4021,7 +4021,7 @@ pub async fn claude_wake_session(
         &app,
         &state,
         &window,
-        "claude:wake-session",
+        "agent:wake-session",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -4057,7 +4057,7 @@ pub async fn claude_is_resting(
         &app,
         &state,
         &window,
-        "claude:is-resting",
+        "agent:is-resting",
         vec![json!(session_id.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -4093,7 +4093,7 @@ pub async fn claude_fetch_subagent_messages(
         &app,
         &state,
         &window,
-        "claude:fetch-subagent-messages",
+        "agent:fetch-subagent-messages",
         vec![json!(session_id.clone()), json!(agent_tool_use_id.clone())],
         Duration::from_secs(30),
     )
@@ -4119,7 +4119,7 @@ pub async fn claude_rewind_to_prompt(
         &app,
         &state,
         &window,
-        "claude:rewind-to-prompt",
+        "agent:rewind-to-prompt",
         vec![json!(session_id.clone()), json!(prompt_index)],
         DEFAULT_TIMEOUT,
     )
@@ -4147,7 +4147,7 @@ pub async fn claude_resume_session(
         &app,
         &state,
         &window,
-        "claude:resume-session",
+        "agent:resume-session",
         vec![
             json!(session_id.clone()),
             json!(sdk_session_id.clone()),
@@ -4199,7 +4199,7 @@ pub async fn claude_resolve_permission(
         &app,
         &state,
         &window,
-        "claude:resolve-permission",
+        "agent:resolve-permission",
         vec![
             json!(session_id.clone()),
             json!(tool_use_id.clone()),
@@ -4230,7 +4230,7 @@ pub async fn claude_resolve_ask_user(
         &app,
         &state,
         &window,
-        "claude:resolve-ask-user",
+        "agent:resolve-ask-user",
         vec![
             json!(session_id.clone()),
             json!(tool_use_id.clone()),
@@ -4258,7 +4258,7 @@ pub async fn claude_check_mcp_json_status(
         &app,
         &state,
         &window,
-        "claude:check-mcp-json-status",
+        "agent:check-mcp-json-status",
         vec![json!(cwd.clone())],
         DEFAULT_TIMEOUT,
     )
@@ -4280,7 +4280,7 @@ pub async fn claude_enable_all_project_mcp(
         &app,
         &state,
         &window,
-        "claude:enable-all-project-mcp",
+        "agent:enable-all-project-mcp",
         vec![json!(cwd.clone())],
         DEFAULT_TIMEOUT,
     )
