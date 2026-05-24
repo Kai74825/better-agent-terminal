@@ -1182,9 +1182,8 @@ fn invoke_rust_for_remote(
         })),
         "app:new-window" => profile_id_from_params(channel, params)
             .map(|profile_id| Value::String(app_cmd::app_new_window_for_profile(app, &profile_id))),
-        "agent:get-supported-session-types" | "agent:list-presets" => {
-            Ok(agent_cmd::agent_supported_session_type_ids())
-        }
+        "agent:get-supported-session-types" => Ok(agent_cmd::agent_supported_session_type_ids()),
+        "agent:list-presets" => Ok(agent_cmd::agent_supported_session_presets()),
         "claude:start-session" => {
             let options = params.get("options").cloned().unwrap_or(Value::Null);
             let maybe_options = Some(options.clone());

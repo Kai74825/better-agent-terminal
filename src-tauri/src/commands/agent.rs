@@ -38,7 +38,10 @@ pub async fn agent_get_supported_session_types(app: AppHandle, window: WebviewWi
 
 #[tauri::command]
 pub async fn agent_list_presets(app: AppHandle, window: WebviewWindow) -> Value {
-    agent_get_supported_session_types(app, window).await
+    if let Some(remote_result) = remote_agent_presets(&app, &window).await {
+        return remote_result.unwrap_or_else(|_| agent_supported_session_presets());
+    }
+    agent_supported_session_presets()
 }
 
 async fn remote_supported_session_types(
@@ -65,6 +68,24 @@ async fn remote_supported_session_types(
     )
 }
 
+async fn remote_agent_presets(
+    app: &AppHandle,
+    window: &WebviewWindow,
+) -> Option<Result<Value, String>> {
+    if !is_remote_profile_window(app, window) {
+        return None;
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    Some(
+        tauri::async_runtime::spawn_blocking(move || {
+            remote_client.invoke("agent:list-presets", Vec::new(), Duration::from_secs(10))
+        })
+        .await
+        .map_err(|err| format!("remote.invoke agent:list-presets worker failed: {err}"))
+        .and_then(|value| value),
+    )
+}
+
 fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
         return false;
@@ -80,12 +101,101 @@ pub fn agent_supported_session_type_ids() -> Value {
     ))
 }
 
+pub fn agent_supported_session_presets() -> Value {
+    json!(agent_supported_session_presets_for_debug(
+        bat_debug_enabled()
+    ))
+}
+
 fn agent_supported_session_type_ids_for_debug(debug_enabled: bool) -> Vec<&'static str> {
     AGENT_PRESET_IDS
         .iter()
         .copied()
         .filter(|id| debug_enabled || !DEBUG_ONLY_AGENT_PRESET_IDS.contains(id))
         .collect()
+}
+
+fn agent_supported_session_presets_for_debug(debug_enabled: bool) -> Vec<Value> {
+    agent_supported_session_type_ids_for_debug(debug_enabled)
+        .into_iter()
+        .filter_map(agent_preset_metadata)
+        .collect()
+}
+
+fn agent_preset_metadata(id: &str) -> Option<Value> {
+    let preset = match id {
+        "claude-code" => json!({
+            "id": "claude-code",
+            "name": "Claude Agent",
+            "icon": "✦",
+            "color": "#d97706",
+            "command": "claude --continue",
+            "suggested": true,
+            "backend": "sdk",
+        }),
+        "claude-channel" => json!({
+            "id": "claude-channel",
+            "name": "Claude Channel Agent",
+            "icon": "◉",
+            "color": "#f97316",
+            "debug": true,
+            "backend": "channel",
+        }),
+        "claude-code-worktree" => json!({
+            "id": "claude-code-worktree",
+            "name": "Claude Agent (Worktree)",
+            "icon": "✦",
+            "color": "#22c55e",
+            "backend": "sdk",
+            "needsGitRepo": true,
+        }),
+        "claude-cli" => json!({
+            "id": "claude-cli",
+            "name": "Claude CLI",
+            "icon": "▶",
+            "color": "#d97706",
+            "suggested": true,
+            "backend": "cli",
+        }),
+        "claude-cli-worktree" => json!({
+            "id": "claude-cli-worktree",
+            "name": "Claude CLI (Worktree)",
+            "icon": "▶",
+            "color": "#22c55e",
+            "backend": "cli",
+            "needsGitRepo": true,
+        }),
+        "codex-agent" => json!({
+            "id": "codex-agent",
+            "name": "Codex Agent",
+            "icon": "⬡",
+            "color": "#10a37f",
+            "backend": "sdk",
+        }),
+        "codex-agent-worktree" => json!({
+            "id": "codex-agent-worktree",
+            "name": "Codex Agent (Worktree)",
+            "icon": "⬡",
+            "color": "#10a37f",
+            "backend": "sdk",
+            "needsGitRepo": true,
+        }),
+        "codex-cli" => json!({
+            "id": "codex-cli",
+            "name": "Codex CLI",
+            "icon": "▶",
+            "color": "#10a37f",
+            "backend": "pty",
+        }),
+        "none" => json!({
+            "id": "none",
+            "name": "Terminal",
+            "icon": "⌘",
+            "color": "#888888",
+        }),
+        _ => return None,
+    };
+    Some(preset)
 }
 
 #[cfg(test)]
@@ -110,5 +220,17 @@ mod tests {
 
         let debug = agent_supported_session_type_ids_for_debug(true);
         assert!(debug.contains(&"claude-channel"));
+    }
+
+    #[test]
+    fn preset_metadata_contains_names_for_supported_ids() {
+        let presets = agent_supported_session_presets_for_debug(false);
+        assert!(presets.iter().any(|preset| {
+            preset.get("id").and_then(Value::as_str) == Some("codex-agent")
+                && preset.get("name").and_then(Value::as_str) == Some("Codex Agent")
+        }));
+        assert!(!presets
+            .iter()
+            .any(|preset| { preset.get("id").and_then(Value::as_str) == Some("claude-channel") }));
     }
 }

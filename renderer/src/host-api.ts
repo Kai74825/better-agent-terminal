@@ -1171,7 +1171,7 @@ function createTauriHost(): BatAppAPI {
     }),
     agent: {
       getSupportedSessionTypes: () => getInvoke()<string[]>('agent_get_supported_session_types'),
-      listPresets: () => getInvoke()<string[]>('agent_list_presets'),
+      listPresets: () => getInvoke()<Array<string | Record<string, unknown>>>('agent_list_presets'),
     },
     workerBuffer: {
       // Renderer-side terminal buffer cache. We back this with a Rust
