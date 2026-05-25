@@ -295,7 +295,7 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .thumbnail:hover {
@@ -305,13 +305,25 @@
 }
 
 .thumbnail.active {
-  border-color: var(--accent-color);
+  --thumbnail-focus-color: var(--accent-color);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--thumbnail-focus-color) 18%, var(--bg-tertiary)) 0%, var(--bg-secondary) 100%);
+  border-color: var(--thumbnail-focus-color);
   border-width: 2px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--thumbnail-focus-color) 86%, white 14%),
+    0 0 0 4px rgba(0, 0, 0, 0.36),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
 }
 
 /* Dynamic agent terminal styling - uses CSS custom property --agent-color */
 .thumbnail.agent-terminal {
   border-color: var(--agent-color, var(--claude-accent));
+}
+
+.thumbnail.active.agent-terminal {
+  --thumbnail-focus-color: var(--agent-color, var(--claude-accent));
 }
 
 .thumbnail-header {
@@ -321,6 +333,10 @@
   padding: 4px 8px;
   background: var(--bg-secondary);
   font-size: 11px;
+}
+
+.thumbnail.active .thumbnail-header {
+  background: color-mix(in srgb, var(--thumbnail-focus-color) 22%, var(--bg-primary));
 }
 
 .thumbnail-title {
