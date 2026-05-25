@@ -401,12 +401,14 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
   const INITIAL_ARCHIVE_LOAD = 200
   const LOAD_BATCH = 50
   const historyLoadedRef = useRef(false)
+  const historyItemsReceivedRef = useRef(false)
   const inputHistoryRef = useRef<string[]>([])
   const inputHistoryIndexRef = useRef(-1)
   const inputDraftRef = useRef('')
   const pendingPromptSentRef = useRef(false)
   const messageCountRef = useRef(0)
   const autoLoadedArchiveSessionRef = useRef<string | null>(null)
+  const initialArchiveLoadInFlightRef = useRef(false)
 
   useEffect(() => {
     const sandboxMode = normalizedAgentParams?.sandboxMode
@@ -664,14 +666,12 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     host.debug.log(`[Codex:${sessionId.slice(0, 8)}] render messages ${summary}`)
   }, [allMessages.length, hasMoreArchived, isLoadingMore, loadedArchive.length, messages.length, sessionId])
 
-  // Show enough recent archived context by default while still keeping older
-  // archive pages opt-in through the load-more button.
-  useEffect(() => {
-    if (autoLoadedArchiveSessionRef.current === sessionId) return
-    autoLoadedArchiveSessionRef.current = sessionId
+  const loadInitialArchivedMessages = useCallback((reason: string) => {
+    if (initialArchiveLoadInFlightRef.current) return undefined
+    initialArchiveLoadInFlightRef.current = true
     let cancelled = false
     archiveDlog(
-      `[Codex:${sessionId.slice(0, 8)}] auto-load archived start limit=${INITIAL_ARCHIVE_LOAD} live=${messages.length} loaded=${loadedArchive.length}`
+      `[Codex:${sessionId.slice(0, 8)}] ${reason} archived start limit=${INITIAL_ARCHIVE_LOAD}`
     )
     setIsLoadingMore(true)
     host.claude.loadArchived(sessionId, 0, INITIAL_ARCHIVE_LOAD)
@@ -680,7 +680,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         const rawMessages = result.messages || []
         const archived = rawMessages.filter(isMessageItem)
         archiveDlog(
-          `[Codex:${sessionId.slice(0, 8)}] auto-load archived result messages=${archived.length}/${rawMessages.length} total=${result.total || 0} hasMore=${result.hasMore} live=${messages.length}`
+          `[Codex:${sessionId.slice(0, 8)}] ${reason} archived result messages=${archived.length}/${rawMessages.length} total=${result.total || 0} hasMore=${result.hasMore}`
         )
         archivedCountRef.current = result.total || archived.length
         loadedFromArchiveRef.current = rawMessages.length
@@ -689,20 +689,38 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       })
       .catch((err) => {
         archiveDlog(
-          `[Codex:${sessionId.slice(0, 8)}] auto-load archived failed: ${err instanceof Error ? err.message : String(err)}`
+          `[Codex:${sessionId.slice(0, 8)}] ${reason} archived failed: ${err instanceof Error ? err.message : String(err)}`
         )
         if (!cancelled) setHasMoreArchived(false)
       })
       .finally(() => {
+        initialArchiveLoadInFlightRef.current = false
         if (!cancelled) setIsLoadingMore(false)
       })
     return () => {
       cancelled = true
+    }
+  }, [archiveDlog, sessionId])
+
+  // Show enough recent archived context by default while still keeping older
+  // archive pages opt-in through the load-more button.
+  useEffect(() => {
+    if (autoLoadedArchiveSessionRef.current === sessionId) return
+    autoLoadedArchiveSessionRef.current = sessionId
+    const cancelLoad = loadInitialArchivedMessages('auto-load')
+    return () => {
+      cancelLoad?.()
       if (autoLoadedArchiveSessionRef.current === sessionId) {
         autoLoadedArchiveSessionRef.current = null
       }
     }
-  }, [archiveDlog, sessionId])
+  }, [loadInitialArchivedMessages, sessionId])
+
+  useEffect(() => {
+    if (!hasMoreArchived || isLoadingMore) return
+    if (messages.length > 0 || loadedArchive.length > 0 || loadedFromArchiveRef.current > 0) return
+    loadInitialArchivedMessages('repair-empty')
+  }, [hasMoreArchived, isLoadingMore, loadInitialArchivedMessages, loadedArchive.length, messages.length])
 
   // Active tasks (running Task/Agent tool calls) for the indicator bar
   const activeTasks = useMemo(() => {
@@ -1252,6 +1270,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
       api.onSessionReset((sid: string) => {
         if (sid !== sessionId) return
+        historyItemsReceivedRef.current = false
         setMessages([])
         setStreamingText('')
         setStreamingThinking('')
@@ -1276,6 +1295,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       api.onHistory((sid: string, items: unknown[]) => {
         if (sid !== sessionId) return
         archiveDlog(`${tag} onHistory items=${(items as unknown[]).length} pendingPromptSent=${pendingPromptSentRef.current}`)
+        historyItemsReceivedRef.current = true
         historyLoadedRef.current = true
         setIsResumingHistory(false)
         // Partition history items: main timeline vs subagent buckets
@@ -1396,10 +1416,17 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         const existingMessages = (existingState.messages || []) as MessageItem[]
         historyLoadedRef.current = true
         setIsResumingHistory(false)
-        if (existingMessages.length > 0 || messageCountRef.current === 0) {
+        if (existingMessages.length > 0) {
           setMessages(existingMessages)
+        } else if (
+          messageCountRef.current === 0 &&
+          !historyItemsReceivedRef.current &&
+          archivedCountRef.current === 0 &&
+          loadedFromArchiveRef.current === 0
+        ) {
+          setMessages([])
         } else if (host.debug.isDebugMode === true) {
-          dlog(`${stag} skip empty getSessionState messages; preserving rendered history count=${messageCountRef.current}`)
+          dlog(`${stag} skip empty getSessionState messages; preserving rendered history/archive count=${messageCountRef.current}/${archivedCountRef.current}`)
         }
         setIsStreaming(!!existingState.isStreaming)
         setStreamingText(existingState.streamingText || '')
@@ -1733,6 +1760,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     await host.claude.setModel(sessionId, modelValue, settingsStore.getSettings().autoCompactWindow)
     workspaceStore.updateTerminalModel(sessionId, modelValue)
     if (isCodexSession && modelValue !== currentModel) {
+      historyItemsReceivedRef.current = false
+      autoLoadedArchiveSessionRef.current = null
       setMessages([])
       setLoadedArchive([])
       archivedCountRef.current = 0
@@ -1768,6 +1797,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     setShowResumeList(false)
     setResumeSessions([])
     // Clear UI immediately so user sees the switch
+    historyItemsReceivedRef.current = false
+    autoLoadedArchiveSessionRef.current = null
     setMessages([])
     setLoadedArchive([])
     archivedCountRef.current = 0
@@ -2050,6 +2081,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       clearPendingAutoContinue()
       autoContinueHandledTurnKeysRef.current.clear()
       autoContinueRef.current = { ...autoContinueRef.current, enabled: false, used: 0 }
+      historyItemsReceivedRef.current = false
+      autoLoadedArchiveSessionRef.current = null
       setMessages([])
       setLoadedArchive([])
       archivedCountRef.current = 0
