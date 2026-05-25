@@ -68,6 +68,7 @@ struct CodexConnection {
     next_id: AtomicU64,
     pending: Arc<PendingTable>,
     child: Mutex<Child>,
+    pid: u32,
 }
 
 impl CodexConnection {
@@ -105,6 +106,44 @@ impl CodexConnection {
                 Err(format!("codex app-server request timed out: {method}"))
             }
         }
+    }
+
+    fn request_logged(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        let started = Instant::now();
+        log_codex(
+            app,
+            session_id,
+            format!("jsonrpc request start pid={} method={method}", self.pid),
+        );
+        let result = self.request(method, params, timeout);
+        match &result {
+            Ok(_) => log_codex(
+                app,
+                session_id,
+                format!(
+                    "jsonrpc request ok pid={} method={method} elapsedMs={}",
+                    self.pid,
+                    started.elapsed().as_millis()
+                ),
+            ),
+            Err(err) => log_codex(
+                app,
+                session_id,
+                format!(
+                    "jsonrpc request failed pid={} method={method} elapsedMs={} error={err}",
+                    self.pid,
+                    started.elapsed().as_millis()
+                ),
+            ),
+        }
+        result
     }
 }
 
@@ -739,6 +778,13 @@ fn codex_debug_enabled() -> bool {
         std::env::var("BAT_DEBUG").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
     )
+}
+
+fn log_codex_global(app: &AppHandle, message: impl AsRef<str>) {
+    if !codex_debug_enabled() {
+        return;
+    }
+    app_cmd::log_tauri(app, &format!("[codex-app-server] {}", message.as_ref()));
 }
 
 fn log_codex(app: &AppHandle, session_id: &str, message: impl AsRef<str>) {
@@ -1619,6 +1665,20 @@ impl CodexAppServerState {
         None
     }
 
+    fn clear_connection_if_pid(&self, pid: u32) -> bool {
+        let Ok(mut guard) = self.inner.connection.lock() else {
+            return false;
+        };
+        let should_clear = guard
+            .as_ref()
+            .map(|connection| connection.pid == pid)
+            .unwrap_or(false);
+        if should_clear {
+            *guard = None;
+        }
+        should_clear
+    }
+
     fn ensure_connection(&self, app: &AppHandle) -> Result<Arc<CodexConnection>, String> {
         if let Some(existing) = self
             .inner
@@ -1627,15 +1687,22 @@ impl CodexAppServerState {
             .map_err(|_| "codex connection lock poisoned")?
             .clone()
         {
+            log_codex_global(
+                app,
+                format!("ensure_connection reuse existing pid={}", existing.pid),
+            );
             return Ok(existing);
         }
 
+        log_codex_global(app, "ensure_connection spawning codex app-server");
         let mut child = build_codex_command(app)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|err| format!("failed to start codex app-server: {err}"))?;
+        let pid = child.id();
+        log_codex_global(app, format!("codex app-server spawned pid={pid}"));
         let stdin = child
             .stdin
             .take()
@@ -1650,11 +1717,13 @@ impl CodexAppServerState {
             next_id: AtomicU64::new(0),
             pending: pending.clone(),
             child: Mutex::new(child),
+            pid,
         });
 
         let app_for_reader = app.clone();
         let state_for_reader = self.clone();
         std::thread::spawn(move || {
+            log_codex_global(&app_for_reader, format!("reader started pid={pid}"));
             for line in BufReader::new(stdout).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
@@ -1665,15 +1734,31 @@ impl CodexAppServerState {
                                 &pending,
                                 message,
                             );
+                        } else {
+                            log_codex_global(
+                                &app_for_reader,
+                                format!("reader non-json line pid={pid} bytes={}", line.len()),
+                            );
                         }
                     }
                     Ok(_) => {}
-                    Err(_) => break,
+                    Err(err) => {
+                        log_codex_global(
+                            &app_for_reader,
+                            format!("reader failed pid={pid} error={err}"),
+                        );
+                        break;
+                    }
                 }
             }
             for tx in pending.drain_all() {
                 let _ = tx.send(Err("codex app-server exited".to_string()));
             }
+            let cleared = state_for_reader.clear_connection_if_pid(pid);
+            log_codex_global(
+                &app_for_reader,
+                format!("reader exited pid={pid} clearedConnection={cleared}"),
+            );
         });
 
         {
@@ -1685,7 +1770,9 @@ impl CodexAppServerState {
             *guard = Some(connection.clone());
         }
 
-        connection.request(
+        if let Err(err) = connection.request_logged(
+            app,
+            "init",
             "initialize",
             json!({
                 "clientInfo": {
@@ -1696,8 +1783,26 @@ impl CodexAppServerState {
                 "capabilities": { "experimentalApi": true }
             }),
             REQUEST_TIMEOUT,
-        )?;
-        connection.notify("initialized", json!({}))?;
+        ) {
+            let cleared = self.clear_connection_if_pid(pid);
+            log_codex_global(
+                app,
+                format!("initialize failed pid={pid} clearedConnection={cleared} error={err}"),
+            );
+            return Err(err);
+        }
+        log_codex_global(app, format!("initialize ok pid={pid}"));
+        if let Err(err) = connection.notify("initialized", json!({})) {
+            let cleared = self.clear_connection_if_pid(pid);
+            log_codex_global(
+                app,
+                format!(
+                    "initialized notification failed pid={pid} clearedConnection={cleared} error={err}"
+                ),
+            );
+            return Err(err);
+        }
+        log_codex_global(app, format!("initialized notification sent pid={pid}"));
         Ok(connection)
     }
 
@@ -1720,6 +1825,13 @@ impl CodexAppServerState {
         let approval_policy =
             normalize_approval(options.get("codexApprovalPolicy").and_then(Value::as_str));
         let effort = normalize_effort(options.get("effort").and_then(Value::as_str));
+        log_codex(
+            app,
+            &session_id,
+            format!(
+                "start_session requested cwd={cwd} model={model} effort={effort} sandbox={sandbox_mode} approval={approval_policy}"
+            ),
+        );
         let session = CodexSession {
             session_id: session_id.clone(),
             thread_id: None,
@@ -1760,7 +1872,9 @@ impl CodexAppServerState {
 
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         let response = connection
-            .request(
+            .request_logged(
+                app,
+                &session_id,
                 "thread/start",
                 json!({
                     "model": model,
@@ -1786,6 +1900,11 @@ impl CodexAppServerState {
             .or_else(|| response.get("threadId").and_then(Value::as_str))
             .ok_or_else(|| bridge_error("codex app-server thread/start returned no thread id"))?
             .to_string();
+        log_codex(
+            app,
+            &session_id,
+            format!("start_session thread/start ok thread={thread_id}"),
+        );
 
         {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
@@ -1845,6 +1964,14 @@ impl CodexAppServerState {
             normalize_sandbox(options.get("codexSandboxMode").and_then(Value::as_str));
         let approval_policy =
             normalize_approval(options.get("codexApprovalPolicy").and_then(Value::as_str));
+        log_codex(
+            app,
+            &session_id,
+            format!(
+                "resume_session requested thread={} cwd={cwd} model={model} sandbox={sandbox_mode} approval={approval_policy}",
+                sdk_session_id
+            ),
+        );
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         emit(
             app,
@@ -1853,7 +1980,9 @@ impl CodexAppServerState {
             "loading",
             json!(true),
         );
-        let response = connection.request(
+        let response = connection.request_logged(
+            app,
+            &session_id,
             "thread/resume",
             json!({
                 "threadId": sdk_session_id,
@@ -1929,6 +2058,15 @@ impl CodexAppServerState {
             emit(app, "claude:worktree-info", &session_id, "payload", payload);
         }
         let history_items = load_codex_history_items(app, &session_id, &sdk_session_id);
+        log_codex(
+            app,
+            &session_id,
+            format!(
+                "resume_session thread/resume ok thread={} historyItems={}",
+                sdk_session_id,
+                history_items.len()
+            ),
+        );
         {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             if let Some(session) = sessions.get_mut(&session_id) {
@@ -2057,7 +2195,10 @@ impl CodexAppServerState {
             session.is_resting = false;
             session.active_turn_id = None;
             session.num_turns += 1;
-            session.active_turn_key = Some(format!("local-{}-{}", session.session_id, session.num_turns));
+            session.active_turn_key = Some(format!(
+                "local-{}-{}",
+                session.session_id, session.num_turns
+            ));
             session.last_turn_started_at = Some(Instant::now());
             session.last_turn_first_token_ms = None;
             session.last_turn_duration_ms = None;
@@ -2099,7 +2240,9 @@ impl CodexAppServerState {
             let interrupt_app = app.clone();
             let interrupt_session_id = session_id.clone();
             std::thread::spawn(move || {
-                match interrupt_connection.request(
+                match interrupt_connection.request_logged(
+                    &interrupt_app,
+                    &interrupt_session_id,
                     "turn/interrupt",
                     json!({ "threadId": interrupt_thread_id, "turnId": interrupt_turn_id }),
                     REQUEST_TIMEOUT,
@@ -2125,7 +2268,9 @@ impl CodexAppServerState {
                 thread_id, model, effort
             ),
         );
-        let response = match connection.request(
+        let response = match connection.request_logged(
+            app,
+            &session_id,
             "turn/start",
             build_turn_start_params(&thread_id, input.clone(), &model, &effort),
             TURN_START_TIMEOUT,
@@ -2156,7 +2301,9 @@ impl CodexAppServerState {
                             );
                         }
                     }
-                    match connection.request(
+                    match connection.request_logged(
+                        app,
+                        &session_id,
                         "thread/resume",
                         build_thread_resume_params(
                             &thread_id,
@@ -2178,7 +2325,9 @@ impl CodexAppServerState {
                                 .lock()
                                 .expect("codex thread map lock")
                                 .insert(thread_id.clone(), session_id.clone());
-                            match connection.request(
+                            match connection.request_logged(
+                                app,
+                                &session_id,
                                 "turn/start",
                                 build_turn_start_params(&thread_id, input, &model, &effort),
                                 TURN_START_TIMEOUT,
@@ -2324,7 +2473,9 @@ impl CodexAppServerState {
         };
         if let (Some(thread_id), Some(turn_id)) = (thread_id.clone(), interrupt_turn_id.clone()) {
             let connection = self.ensure_connection(app).map_err(bridge_error)?;
-            match connection.request(
+            match connection.request_logged(
+                app,
+                &session_id,
                 "turn/interrupt",
                 json!({ "threadId": thread_id, "turnId": turn_id }),
                 REQUEST_TIMEOUT,
@@ -2394,7 +2545,9 @@ impl CodexAppServerState {
         }
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         let response = connection
-            .request(
+            .request_logged(
+                app,
+                &session_id,
                 "thread/start",
                 json!({
                     "model": model,
@@ -2654,7 +2807,9 @@ impl CodexAppServerState {
         };
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         connection
-            .request(
+            .request_logged(
+                app,
+                session_id,
                 "thread/resume",
                 json!({
                     "threadId": thread_id,
@@ -2822,7 +2977,9 @@ fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &st
                     match interrupt_state
                         .ensure_connection(&interrupt_app)
                         .and_then(|connection| {
-                            connection.request(
+                            connection.request_logged(
+                                &interrupt_app,
+                                &interrupt_session_id,
                                 "turn/interrupt",
                                 json!({ "threadId": thread_id, "turnId": turn_id }),
                                 REQUEST_TIMEOUT,
