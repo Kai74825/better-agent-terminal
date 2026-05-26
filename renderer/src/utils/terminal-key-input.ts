@@ -116,6 +116,14 @@ export function shouldTraceTerminalInputData(data: string): boolean {
     data === '\x1b[3~'
 }
 
+export function isPrintableTerminalInputData(data: string): boolean {
+  if (!data) return false
+  return Array.from(data).every((ch) => {
+    const code = ch.codePointAt(0) ?? 0
+    return code >= 0x20 && code !== 0x7f
+  })
+}
+
 export function getExpectedPlainBackspaceInput(
   platform?: TerminalInputPlatform,
 ): string | null {

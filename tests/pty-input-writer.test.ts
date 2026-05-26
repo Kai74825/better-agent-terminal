@@ -9,6 +9,7 @@ import {
   getPrintableKeyInput,
   getTerminalKeyInput,
   getTerminalKeyInputOverride,
+  isPrintableTerminalInputData,
   shouldTraceTerminalInputData,
   shouldTraceTerminalKeyEvent,
   shouldBlockForImeComposition,
@@ -351,6 +352,10 @@ async function main() {
       }, { platform: 'darwin' }),
       'p',
     )
+    assert.equal(isPrintableTerminalInputData('中文'), true)
+    assert.equal(isPrintableTerminalInputData('abc'), true)
+    assert.equal(isPrintableTerminalInputData('\r'), false)
+    assert.equal(isPrintableTerminalInputData('\x1b[A'), false)
     assert.equal(shouldTraceTerminalInputData('\x7f'), true)
     assert.equal(shouldTraceTerminalInputData(' '), true)
     assert.equal(shouldTraceTerminalInputData('a'), true)

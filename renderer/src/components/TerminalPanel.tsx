@@ -16,6 +16,7 @@ import {
   getExpectedPlainBackspaceInput,
   getTerminalKeyInput,
   getTerminalKeyInputOverride,
+  isPrintableTerminalInputData,
   shouldBlockForImeComposition,
   shouldTraceTerminalInputData,
   shouldTraceTerminalKeyEvent,
@@ -508,6 +509,14 @@ export const TerminalPanel = memo(function TerminalPanel({
     ptyInputRef.current = ptyInput
 
     let imeComposing = false
+    const writeTerminalUserInput = (phase: string, data: string) => {
+      traceTerminalInputData(phase, data)
+      ptyInput.write(data)
+      if (terminalType === 'code-agent') {
+        workspaceStore.markHasUserInput(terminalId)
+      }
+    }
+
     const handleNativeTerminalKeydown = (event: KeyboardEvent) => {
       if (!useDirectTerminalKeyInput) return
       const container = containerRef.current
@@ -547,11 +556,7 @@ export const TerminalPanel = memo(function TerminalPanel({
       event.preventDefault()
       event.stopImmediatePropagation()
       traceTerminalKeyEvent(event)
-      traceTerminalInputData('direct-key', input)
-      ptyInput.write(input)
-      if (terminalType === 'code-agent') {
-        workspaceStore.markHasUserInput(terminalId)
-      }
+      writeTerminalUserInput('direct-key', input)
     }
     window.addEventListener('keydown', handleNativeTerminalKeydown, true)
 
@@ -670,18 +675,22 @@ export const TerminalPanel = memo(function TerminalPanel({
         traceTerminalInputData('xterm.onData.ignored', data)
         return
       }
-      traceTerminalInputData('xterm.onData', data)
-      ptyInput.write(data)
-      if (terminalType === 'code-agent') {
-        workspaceStore.markHasUserInput(terminalId)
-      }
+      writeTerminalUserInput('xterm.onData', data)
     })
 
     // Track IME composition state on xterm's hidden textarea
     // to prevent CAPS LOCK and other keys from committing partial IME input
     const xtermTextarea = containerRef.current?.querySelector('.xterm-helper-textarea') as HTMLElement | null
-    const onCompositionStart = () => { imeComposing = true }
-    const onCompositionEnd = () => { imeComposing = false }
+    const onCompositionStart = () => {
+      imeComposing = true
+    }
+    const onCompositionEnd = (event: CompositionEvent) => {
+      imeComposing = false
+      if (!useDirectTerminalKeyInput || !isActiveRef.current || !ptyReadyRef.current) return
+      if (isPrintableTerminalInputData(event.data)) {
+        writeTerminalUserInput('compositionend', event.data)
+      }
+    }
     if (xtermTextarea) {
       xtermTextarea.addEventListener('compositionstart', onCompositionStart)
       xtermTextarea.addEventListener('compositionend', onCompositionEnd)
