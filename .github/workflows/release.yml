@@ -276,7 +276,23 @@ jobs:
             ${{ runner.os }}-${{ matrix.arch }}-root-node-modules-
 
       - name: Cache sidecar node_modules
+        id: sidecar-node-modules-cache
         if: env.BUILD_MATRIX_ENTRY == 'true'
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: node-sidecar/node_modules
+          key: ${{ runner.os }}-${{ matrix.arch }}-sidecar-node-modules-${{ hashFiles('node-sidecar/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-sidecar-node-modules-
+
+      - name: Wait before retrying sidecar node_modules cache
+        if: env.BUILD_MATRIX_ENTRY == 'true' && steps.sidecar-node-modules-cache.outcome == 'failure'
+        shell: bash
+        run: sleep 10
+
+      - name: Retry sidecar node_modules cache
+        if: env.BUILD_MATRIX_ENTRY == 'true' && steps.sidecar-node-modules-cache.outcome == 'failure'
         continue-on-error: true
         uses: actions/cache@v4
         with:
