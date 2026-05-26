@@ -178,8 +178,8 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 ; 4. Custom page to ask user if he wants to reinstall/uninstall
 ;    only if a previous installation was detected
 Var ReinstallPageCheck
-; BetterAgentTerminal keeps older installs in place when moving to the per-user
-; Programs directory, so skip Tauri's default uninstall/reinstall prompt.
+; BetterAgentTerminal keeps older installs in place during Tauri upgrades, so
+; skip Tauri's default uninstall/reinstall prompt.
 ; Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
   ; Uninstall previous WiX installation if exists.

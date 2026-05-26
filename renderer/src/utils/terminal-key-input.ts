@@ -123,6 +123,10 @@ export function getExpectedPlainBackspaceInput(
   return null
 }
 
+export function shouldUseDirectTerminalKeyInput(platform?: TerminalInputPlatform): boolean {
+  return platform !== 'win32'
+}
+
 export function shouldBlockForImeComposition(
   event: TerminalKeyEventLike,
   imeComposing: boolean,

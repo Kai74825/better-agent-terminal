@@ -741,7 +741,11 @@ where
     I: IntoIterator<Item = PathBuf>,
 {
     let exe_names: &[&str] = if cfg!(windows) {
-        &["node.exe", "node.cmd", "node"]
+        // Do not launch the sidecar through node.cmd. Command shims run
+        // through cmd.exe on Windows and can mangle absolute script paths
+        // such as C:\... into a bare drive path ("C:"), which makes Node
+        // crash while resolving the main module.
+        &["node.exe"]
     } else {
         &["node"]
     };
@@ -821,6 +825,18 @@ mod tests {
         std::fs::write(&exe, b"fake").unwrap();
         let found = find_node_in_dirs(vec![tmp.clone()]).expect("expected node candidate");
         assert_eq!(found, exe);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn find_node_in_dirs_ignores_windows_command_shim() {
+        let tmp =
+            std::env::temp_dir().join(format!("bat-node-cmd-dir-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("node.cmd"), b"fake").unwrap();
+        assert!(find_node_in_dirs(vec![tmp.clone()]).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

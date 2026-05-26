@@ -19,6 +19,7 @@ import {
   shouldBlockForImeComposition,
   shouldTraceTerminalInputData,
   shouldTraceTerminalKeyEvent,
+  shouldUseDirectTerminalKeyInput,
 } from '../utils/terminal-key-input'
 import '@xterm/xterm/css/xterm.css'
 
@@ -446,6 +447,7 @@ export const TerminalPanel = memo(function TerminalPanel({
     const settings = settingsStore.getSettings()
     const colors = settingsStore.getTerminalColors()
     const windowsBuildNumber = getWindowsBuildNumber()
+    const useDirectTerminalKeyInput = shouldUseDirectTerminalKeyInput(host.platform)
 
     // Create terminal instance with customizable colors
     const terminal = new Terminal({
@@ -479,7 +481,7 @@ export const TerminalPanel = memo(function TerminalPanel({
       convertEol: !isClaudeCliTerminal,
       allowProposedApi: true,
       allowTransparency: !isClaudeCliTerminal,
-      disableStdin: true,
+      disableStdin: useDirectTerminalKeyInput,
       windowsPty: host.platform === 'win32'
         ? {
             backend: 'conpty',
@@ -507,6 +509,7 @@ export const TerminalPanel = memo(function TerminalPanel({
 
     let imeComposing = false
     const handleNativeTerminalKeydown = (event: KeyboardEvent) => {
+      if (!useDirectTerminalKeyInput) return
       const container = containerRef.current
       if (!container || !isActiveRef.current || !ptyReadyRef.current) return
       if (!isTerminalKeyboardEventTarget(container, event.target)) return
@@ -663,7 +666,15 @@ export const TerminalPanel = memo(function TerminalPanel({
 
     terminal.onData((data) => {
       if (!ptyReadyRef.current) return
-      traceTerminalInputData('xterm.onData.ignored', data)
+      if (useDirectTerminalKeyInput) {
+        traceTerminalInputData('xterm.onData.ignored', data)
+        return
+      }
+      traceTerminalInputData('xterm.onData', data)
+      ptyInput.write(data)
+      if (terminalType === 'code-agent') {
+        workspaceStore.markHasUserInput(terminalId)
+      }
     })
 
     // Track IME composition state on xterm's hidden textarea
@@ -702,6 +713,13 @@ export const TerminalPanel = memo(function TerminalPanel({
       })
       if (inputOverride !== null) {
         event.preventDefault()
+        if (!useDirectTerminalKeyInput) {
+          traceTerminalInputData('key-override', inputOverride)
+          ptyInput.write(inputOverride)
+          if (terminalType === 'code-agent') {
+            workspaceStore.markHasUserInput(terminalId)
+          }
+        }
         return false
       }
 

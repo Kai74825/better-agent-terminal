@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 const tauriConfig = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'))
 const nsis = tauriConfig?.bundle?.windows?.nsis
 
-assert.equal(nsis?.installMode, 'currentUser', 'Tauri NSIS must keep the per-user install mode')
+assert.equal(nsis?.installMode, 'perMachine', 'Tauri NSIS must install under Program Files by default')
 assert.equal(nsis?.template, 'windows/installer.nsi', 'Tauri NSIS must use the project installer template')
 assert.equal(nsis?.installerHooks, 'windows/nsis-hooks.nsh', 'Tauri NSIS must load the installer hook')
 
@@ -14,7 +14,7 @@ const template = await readFile(new URL('../src-tauri/windows/installer.nsi', im
 assert.match(
   hook,
   /LOCALAPPDATA\\Programs\\BetterAgentTerminal/,
-  'Tauri NSIS default install directory should stay under the per-user Programs directory',
+  'Tauri NSIS hook should keep migrating the earlier per-user Tauri default directory',
 )
 assert.match(
   hook,
@@ -23,13 +23,13 @@ assert.match(
 )
 assert.match(
   template,
-  /StrCpy \$INSTDIR "\$LOCALAPPDATA\\Programs\\\$\{PRODUCTNAME\}"/,
-  'Tauri NSIS template should default current-user installs to Electron Builder location',
+  /StrCpy \$INSTDIR "\$PROGRAMFILES64\\\$\{PRODUCTNAME\}"/,
+  'Tauri NSIS template should default per-machine x64/arm64 installs to Program Files',
 )
 assert.match(
   template,
-  /Call RestorePreviousInstallLocation[\s\S]*\$INSTDIR == "\$LOCALAPPDATA\\\$\{PRODUCTNAME\}"[\s\S]*StrCpy \$INSTDIR "\$LOCALAPPDATA\\Programs\\\$\{PRODUCTNAME\}"/,
-  'Tauri NSIS template should migrate the earlier Tauri default install location',
+  /StrCpy \$INSTDIR "\$PROGRAMFILES\\\$\{PRODUCTNAME\}"/,
+  'Tauri NSIS template should default per-machine 32-bit installs to Program Files',
 )
 assert.ok(
   template.indexOf('!insertmacro NSIS_HOOK_PREINSTALL') < template.indexOf('SetOutPath $INSTDIR'),
@@ -47,7 +47,7 @@ assert.doesNotMatch(
 )
 assert.match(
   template,
-  /skip Tauri's default uninstall\/reinstall prompt/,
+  /keeps older installs in place during Tauri upgrades/,
   'Tauri NSIS template should document why the reinstall page is disabled',
 )
 

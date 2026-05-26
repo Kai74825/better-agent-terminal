@@ -12,6 +12,7 @@ import {
   shouldTraceTerminalInputData,
   shouldTraceTerminalKeyEvent,
   shouldBlockForImeComposition,
+  shouldUseDirectTerminalKeyInput,
 } from '../renderer/src/utils/terminal-key-input'
 
 function deferred() {
@@ -132,6 +133,9 @@ async function main() {
     )
     assert.equal(getExpectedPlainBackspaceInput('darwin'), '\x7f')
     assert.equal(getExpectedPlainBackspaceInput('win32'), null)
+    assert.equal(shouldUseDirectTerminalKeyInput('darwin'), true)
+    assert.equal(shouldUseDirectTerminalKeyInput('linux'), true)
+    assert.equal(shouldUseDirectTerminalKeyInput('win32'), false)
     assert.equal(
       getTerminalKeyInputOverride({
         type: 'keydown',
