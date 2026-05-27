@@ -1077,6 +1077,12 @@ fn found_active_turn_from_interrupt_error(message: &str) -> Option<String> {
     }
 }
 
+fn is_no_active_turn_interrupt_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("no active turn to interrupt")
+        || normalized.contains("expected active turn id") && normalized.contains("found none")
+}
+
 fn reasoning_text_from_item(item: &Value) -> String {
     if item_type(item) != Some("reasoning") {
         return String::new();
@@ -1263,13 +1269,14 @@ fn codex_history_items_from_content(session_id: &str, content: &str) -> Vec<Valu
                         .get("call_id")
                         .and_then(Value::as_str)
                         .unwrap_or("hist-web-search");
+                    let input = web_search_input(payload);
                     upsert_history_tool_call(
                         &mut items,
                         json!({
                             "id": call_id,
                             "sessionId": session_id,
                             "toolName": "WebSearch",
-                            "input": payload.get("action").cloned().unwrap_or_else(|| json!({})),
+                            "input": input,
                             "status": "completed",
                             "result": history_event_result(payload),
                             "timestamp": timestamp,
@@ -1471,6 +1478,7 @@ fn item_type(item: &Value) -> Option<&str> {
 fn item_id(item: &Value) -> String {
     item.get("id")
         .and_then(Value::as_str)
+        .or_else(|| item.get("call_id").and_then(Value::as_str))
         .unwrap_or("codex-item")
         .to_string()
 }
@@ -1512,6 +1520,38 @@ fn tool_status(item: &Value) -> &'static str {
         Some("completed") => "completed",
         _ => "running",
     }
+}
+
+fn completed_tool_status(item: &Value) -> &'static str {
+    match item.get("status").and_then(Value::as_str) {
+        Some("failed" | "declined") => "error",
+        Some("running") if item_type(item) != Some("webSearch") => "running",
+        _ => "completed",
+    }
+}
+
+fn tool_result_value(item: &Value) -> Option<Value> {
+    item.get("aggregatedOutput")
+        .or_else(|| item.get("result"))
+        .or_else(|| item.get("error"))
+        .cloned()
+}
+
+fn completed_tool_result(item: &Value) -> Value {
+    let mut tool_result = json!({
+        "id": item_id(item),
+        "status": completed_tool_status(item),
+        "result": tool_result_value(item),
+    });
+
+    if item_type(item) == Some("webSearch") {
+        let input = web_search_input(item);
+        if input.as_object().is_some_and(|obj| !obj.is_empty()) {
+            tool_result["input"] = input;
+        }
+    }
+
+    tool_result
 }
 
 fn push_session_item(session: &mut CodexSession, item: Value) {
@@ -2260,6 +2300,16 @@ impl CodexAppServerState {
                                     continue;
                                 }
                             }
+                        }
+                        if is_no_active_turn_interrupt_error(&err) {
+                            log_codex(
+                                app,
+                                &session_id,
+                                format!(
+                                    "replacement turn/interrupt found no active remote turn; continuing with new turn after clearing stale local turn={turn_to_interrupt}"
+                                ),
+                            );
+                            break;
                         }
                         cleanup_temp_images(temp_image_paths);
                         log_codex(
@@ -3475,14 +3525,7 @@ fn handle_item_completed(
             emit(app, "claude:tool-result", session_id, "result", tool_result);
         }
         Some("fileChange" | "mcpToolCall" | "webSearch") => {
-            let tool_result = json!({
-                "id": item_id(item),
-                "status": tool_status(item),
-                "result": item.get("aggregatedOutput")
-                    .or_else(|| item.get("result"))
-                    .or_else(|| item.get("error"))
-                    .cloned(),
-            });
+            let tool_result = completed_tool_result(item);
             if let Some(session) = state
                 .inner
                 .sessions
@@ -3807,6 +3850,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_interrupt_error_detects_no_active_turn() {
+        assert!(is_no_active_turn_interrupt_error(
+            "no active turn to interrupt"
+        ));
+        assert!(is_no_active_turn_interrupt_error(
+            "expected active turn id old-turn but found none"
+        ));
+        assert!(!is_no_active_turn_interrupt_error(
+            "expected active turn id old-turn but found new-turn"
+        ));
+        assert!(!is_no_active_turn_interrupt_error(
+            "request timed out while interrupting turn"
+        ));
+    }
+
+    #[test]
     fn codex_reasoning_text_prefers_summary() {
         let text = reasoning_text_from_item(&json!({
             "type": "reasoning",
@@ -4126,6 +4185,67 @@ mod tests {
         assert_eq!(items[1]["toolName"], "apply_patch");
         assert_eq!(items[1]["input"]["input"], "*** Begin Patch");
         assert_eq!(items[1]["result"], "Success");
+    }
+
+    #[test]
+    fn codex_item_id_falls_back_to_call_id() {
+        assert_eq!(item_id(&json!({"call_id": "ws-full-id"})), "ws-full-id");
+    }
+
+    #[test]
+    fn codex_completed_web_search_result_normalizes_status_and_input() {
+        let search_result = completed_tool_result(&json!({
+            "type": "webSearch",
+            "call_id": "ws-search",
+            "query": "IDEXX InterLink integration",
+            "action": {
+                "type": "search",
+                "queries": ["IDEXX InterLink integration"]
+            }
+        }));
+
+        assert_eq!(search_result["id"], "ws-search");
+        assert_eq!(search_result["status"], "completed");
+        assert_eq!(
+            search_result["input"],
+            json!({"query": "IDEXX InterLink integration"})
+        );
+        assert!(search_result["result"].is_null());
+
+        let open_result = completed_tool_result(&json!({
+            "type": "webSearch",
+            "call_id": "ws-open",
+            "action": {
+                "type": "open_page",
+                "url": "https://example.com/report.pdf"
+            }
+        }));
+
+        assert_eq!(open_result["id"], "ws-open");
+        assert_eq!(open_result["status"], "completed");
+        assert_eq!(
+            open_result["input"],
+            json!({"url": "https://example.com/report.pdf"})
+        );
+    }
+
+    #[test]
+    fn codex_history_loader_normalizes_web_search_end_input() {
+        let content = r#"
+{"timestamp":"2026-05-11T00:00:00Z","type":"session_meta","payload":{"id":"thread-1"}}
+{"timestamp":"2026-05-11T00:00:01Z","type":"event_msg","payload":{"type":"web_search_end","call_id":"ws-1","query":"IDEXX InterLink integration","action":{"type":"search","queries":["IDEXX InterLink integration"]}}}
+"#;
+
+        let items = codex_history_items_from_content("s-1", content);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], "ws-1");
+        assert_eq!(items[0]["sessionId"], "s-1");
+        assert_eq!(items[0]["toolName"], "WebSearch");
+        assert_eq!(
+            items[0]["input"],
+            json!({"query": "IDEXX InterLink integration"})
+        );
+        assert_eq!(items[0]["status"], "completed");
     }
 
     #[test]
