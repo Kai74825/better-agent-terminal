@@ -801,6 +801,10 @@ fn log_codex(app: &AppHandle, session_id: &str, message: impl AsRef<str>) {
     );
 }
 
+fn is_high_frequency_delta_notification(method: &str) -> bool {
+    method.contains("Delta") || method.contains("delta")
+}
+
 fn make_user_message(session_id: &str, prompt: &str, image_count: usize) -> Value {
     let suffix = if image_count > 0 {
         format!(
@@ -1719,6 +1723,169 @@ impl CodexAppServerState {
         None
     }
 
+    fn take_thread_ownership(
+        &self,
+        app: &AppHandle,
+        thread_id: &str,
+        owner_session_id: &str,
+    ) -> Vec<String> {
+        let mut status_updates: Vec<(String, Value)> = Vec::new();
+        let mut remote_turns_to_interrupt: Vec<String> = Vec::new();
+        let mut ownership_logs: Vec<String> = Vec::new();
+
+        {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let mut owner_ignored_turns: Vec<String> = Vec::new();
+
+            for (session_id, session) in sessions.iter_mut() {
+                if session_id == owner_session_id {
+                    continue;
+                }
+                if session.thread_id.as_deref() != Some(thread_id) {
+                    continue;
+                }
+
+                let was_active = session.is_running
+                    || session.is_resting
+                    || session.abort_requested
+                    || session.active_turn_id.is_some()
+                    || session.active_turn_key.is_some()
+                    || session.runtime_status.is_some()
+                    || session.runtime_message.is_some();
+
+                if let Some(turn_id) = session.active_turn_id.clone() {
+                    remember_ignored_turn(session, turn_id.clone());
+                    if !owner_ignored_turns.iter().any(|id| id == &turn_id) {
+                        owner_ignored_turns.push(turn_id.clone());
+                    }
+                    if !remote_turns_to_interrupt.iter().any(|id| id == &turn_id) {
+                        remote_turns_to_interrupt.push(turn_id.clone());
+                    }
+                    ownership_logs.push(format!(
+                        "thread ownership transferred thread={thread_id} from session={session_id} activeTurn={turn_id}"
+                    ));
+                } else if let Some(turn_key) = session.active_turn_key.clone() {
+                    remember_ignored_turn(session, turn_key.clone());
+                    if !owner_ignored_turns.iter().any(|id| id == &turn_key) {
+                        owner_ignored_turns.push(turn_key);
+                    }
+                }
+
+                session.is_running = false;
+                session.is_resting = false;
+                session.abort_requested = false;
+                session.active_turn_id = None;
+                session.active_turn_key = None;
+                let had_runtime_status = clear_runtime_status_if_set(session);
+
+                if was_active || had_runtime_status {
+                    status_updates.push((session_id.clone(), session.metadata()));
+                }
+            }
+
+            if let Some(owner) = sessions.get_mut(owner_session_id) {
+                owner.thread_id = Some(thread_id.to_string());
+                for turn_id in owner_ignored_turns {
+                    remember_ignored_turn(owner, turn_id);
+                }
+            }
+        }
+
+        self.inner
+            .thread_to_session
+            .lock()
+            .expect("codex thread map lock")
+            .insert(thread_id.to_string(), owner_session_id.to_string());
+
+        for (session_id, metadata) in status_updates {
+            emit(app, "claude:status", &session_id, "meta", metadata);
+        }
+        for message in ownership_logs {
+            log_codex(app, owner_session_id, message);
+        }
+
+        remote_turns_to_interrupt
+    }
+
+    fn interrupt_turn_for_replacement(
+        &self,
+        app: &AppHandle,
+        connection: &CodexConnection,
+        session_id: &str,
+        thread_id: &str,
+        turn_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut turns_to_ignore = vec![turn_id.to_string()];
+        let mut turn_to_interrupt = turn_id.to_string();
+        let mut retried_found_turn = false;
+
+        loop {
+            match connection.request_logged(
+                app,
+                session_id,
+                "turn/interrupt",
+                json!({ "threadId": thread_id, "turnId": turn_to_interrupt.clone() }),
+                REQUEST_TIMEOUT,
+            ) {
+                Ok(_) => {
+                    log_codex(
+                        app,
+                        session_id,
+                        format!("replacement turn/interrupt ok turn={turn_to_interrupt}"),
+                    );
+                    break;
+                }
+                Err(err) => {
+                    if !retried_found_turn {
+                        if let Some(found_turn_id) = found_active_turn_from_interrupt_error(&err) {
+                            if found_turn_id != turn_to_interrupt {
+                                log_codex(
+                                    app,
+                                    session_id,
+                                    format!(
+                                        "replacement turn/interrupt found active turn mismatch; retrying found turn={found_turn_id}"
+                                    ),
+                                );
+                                turns_to_ignore.push(found_turn_id.clone());
+                                turn_to_interrupt = found_turn_id;
+                                retried_found_turn = true;
+                                continue;
+                            }
+                        }
+                    }
+                    if is_no_active_turn_interrupt_error(&err) {
+                        log_codex(
+                            app,
+                            session_id,
+                            format!(
+                                "replacement turn/interrupt found no active remote turn; continuing after clearing stale local turn={turn_to_interrupt}"
+                            ),
+                        );
+                        break;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(turns_to_ignore)
+    }
+
+    fn remove_thread_owner_if_session(&self, thread_id: &str, session_id: &str) {
+        let mut thread_map = self
+            .inner
+            .thread_to_session
+            .lock()
+            .expect("codex thread map lock");
+        if thread_map
+            .get(thread_id)
+            .map(|owner| owner == session_id)
+            .unwrap_or(false)
+        {
+            thread_map.remove(thread_id);
+        }
+    }
+
     fn clear_connection_if_pid(&self, pid: u32) -> bool {
         let Ok(mut guard) = self.inner.connection.lock() else {
             return false;
@@ -1985,11 +2152,7 @@ impl CodexAppServerState {
                 }
             }
         }
-        self.inner
-            .thread_to_session
-            .lock()
-            .expect("codex thread map lock")
-            .insert(thread_id.clone(), session_id.clone());
+        self.take_thread_ownership(app, &thread_id, &session_id);
 
         if let Some(prompt) = options.get("prompt").and_then(Value::as_str) {
             if !prompt.trim().is_empty() {
@@ -2096,11 +2259,34 @@ impl CodexAppServerState {
             .lock()
             .expect("codex sessions lock")
             .insert(session_id.clone(), session.clone());
-        self.inner
-            .thread_to_session
-            .lock()
-            .expect("codex thread map lock")
-            .insert(sdk_session_id.clone(), session_id.clone());
+        let takeover_turns = self.take_thread_ownership(app, &sdk_session_id, &session_id);
+        let mut takeover_turns_to_remember: Vec<String> = Vec::new();
+        for turn_id in takeover_turns {
+            match self.interrupt_turn_for_replacement(
+                app,
+                &connection,
+                &session_id,
+                &sdk_session_id,
+                &turn_id,
+            ) {
+                Ok(turns_to_ignore) => takeover_turns_to_remember.extend(turns_to_ignore),
+                Err(err) => log_codex(
+                    app,
+                    &session_id,
+                    format!(
+                        "thread takeover turn/interrupt failed during resume; continuing thread={sdk_session_id} turn={turn_id} error={err}"
+                    ),
+                ),
+            }
+        }
+        if !takeover_turns_to_remember.is_empty() {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            if let Some(session) = sessions.get_mut(&session_id) {
+                for turn_id in takeover_turns_to_remember {
+                    remember_ignored_turn(session, turn_id);
+                }
+            }
+        }
         emit(
             app,
             "claude:status",
@@ -2262,71 +2448,58 @@ impl CodexAppServerState {
                 return Err(bridge_error(err));
             }
         };
-        if let Some((interrupt_thread_id, interrupt_turn_id)) = interrupted_turn {
-            let mut turns_to_ignore = vec![interrupt_turn_id.clone()];
-            let mut turn_to_interrupt = interrupt_turn_id;
-            let mut retried_found_turn = false;
-            loop {
-                match connection.request_logged(
-                    app,
-                    &session_id,
-                    "turn/interrupt",
-                    json!({ "threadId": interrupt_thread_id, "turnId": turn_to_interrupt }),
-                    REQUEST_TIMEOUT,
-                ) {
-                    Ok(_) => {
-                        log_codex(
-                            app,
-                            &session_id,
-                            format!("replacement turn/interrupt ok turn={turn_to_interrupt}"),
-                        );
-                        break;
-                    }
-                    Err(err) => {
-                        if !retried_found_turn {
-                            if let Some(found_turn_id) = found_active_turn_from_interrupt_error(&err)
-                            {
-                                if found_turn_id != turn_to_interrupt {
-                                    log_codex(
-                                        app,
-                                        &session_id,
-                                        format!(
-                                            "replacement turn/interrupt found active turn mismatch; retrying found turn={found_turn_id}"
-                                        ),
-                                    );
-                                    turns_to_ignore.push(found_turn_id.clone());
-                                    turn_to_interrupt = found_turn_id;
-                                    retried_found_turn = true;
-                                    continue;
-                                }
-                            }
-                        }
-                        if is_no_active_turn_interrupt_error(&err) {
-                            log_codex(
-                                app,
-                                &session_id,
-                                format!(
-                                    "replacement turn/interrupt found no active remote turn; continuing with new turn after clearing stale local turn={turn_to_interrupt}"
-                                ),
-                            );
-                            break;
-                        }
-                        cleanup_temp_images(temp_image_paths);
-                        log_codex(
-                            app,
-                            &session_id,
-                            format!("replacement turn/interrupt failed before turn/start: {err}"),
-                        );
-                        return Ok(json!({
-                            "ok": false,
-                            "error": format!("Codex turn is still running and could not be interrupted: {err}")
-                        }));
-                    }
+        let takeover_turns = self.take_thread_ownership(app, &thread_id, &session_id);
+        let mut turns_to_remember: Vec<String> = Vec::new();
+        for turn_id in takeover_turns {
+            match self.interrupt_turn_for_replacement(
+                app,
+                &connection,
+                &session_id,
+                &thread_id,
+                &turn_id,
+            ) {
+                Ok(turns_to_ignore) => turns_to_remember.extend(turns_to_ignore),
+                Err(err) => {
+                    cleanup_temp_images(temp_image_paths);
+                    log_codex(
+                        app,
+                        &session_id,
+                        format!("thread takeover turn/interrupt failed before turn/start: {err}"),
+                    );
+                    return Ok(json!({
+                        "ok": false,
+                        "error": format!("Codex turn is still running and could not be interrupted: {err}")
+                    }));
                 }
             }
+        }
+        if let Some((interrupt_thread_id, interrupt_turn_id)) = interrupted_turn {
+            match self.interrupt_turn_for_replacement(
+                app,
+                &connection,
+                &session_id,
+                &interrupt_thread_id,
+                &interrupt_turn_id,
+            ) {
+                Ok(turns_to_ignore) => turns_to_remember.extend(turns_to_ignore),
+                Err(err) => {
+                    cleanup_temp_images(temp_image_paths);
+                    log_codex(
+                        app,
+                        &session_id,
+                        format!("replacement turn/interrupt failed before turn/start: {err}"),
+                    );
+                    return Ok(json!({
+                        "ok": false,
+                        "error": format!("Codex turn is still running and could not be interrupted: {err}")
+                    }));
+                }
+            }
+        }
+        if !turns_to_remember.is_empty() {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             if let Some(session) = sessions.get_mut(&session_id) {
-                for turn_id in turns_to_ignore {
+                for turn_id in turns_to_remember {
                     remember_ignored_turn(session, turn_id);
                 }
             }
@@ -2349,8 +2522,10 @@ impl CodexAppServerState {
             session.is_resting = false;
             session.active_turn_id = None;
             session.num_turns += 1;
-            session.active_turn_key =
-                Some(format!("local-{}-{}", session.session_id, session.num_turns));
+            session.active_turn_key = Some(format!(
+                "local-{}-{}",
+                session.session_id, session.num_turns
+            ));
             session.last_turn_started_at = Some(Instant::now());
             session.last_turn_first_token_ms = None;
             session.last_turn_duration_ms = None;
@@ -2434,11 +2609,7 @@ impl CodexAppServerState {
                                 &session_id,
                                 format!("thread/resume ok; retrying turn/start thread={thread_id}"),
                             );
-                            self.inner
-                                .thread_to_session
-                                .lock()
-                                .expect("codex thread map lock")
-                                .insert(thread_id.clone(), session_id.clone());
+                            self.take_thread_ownership(app, &thread_id, &session_id);
                             match connection.request_logged(
                                 app,
                                 &session_id,
@@ -2624,11 +2795,7 @@ impl CodexAppServerState {
         if let Some(mut session) = removed {
             cleanup_session_temp_images(&mut session);
             if let Some(thread_id) = session.thread_id {
-                self.inner
-                    .thread_to_session
-                    .lock()
-                    .expect("codex thread map lock")
-                    .remove(&thread_id);
+                self.remove_thread_owner_if_session(&thread_id, &session_id);
             }
             json!({ "ok": true, "existed": true })
         } else {
@@ -2651,11 +2818,7 @@ impl CodexAppServerState {
             )
         };
         if let Some(thread_id) = thread_id {
-            self.inner
-                .thread_to_session
-                .lock()
-                .expect("codex thread map lock")
-                .remove(&thread_id);
+            self.remove_thread_owner_if_session(&thread_id, &session_id);
         }
         let connection = self.ensure_connection(app).map_err(bridge_error)?;
         let response = connection
@@ -2995,14 +3158,16 @@ fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &st
     if let Some((turn_id, active_turn_id)) =
         state.stale_turn_notification(&session_id, method, &params)
     {
-        log_codex(
-            app,
-            &session_id,
-            format!(
-                "notification {method} ignored for stale turn={turn_id} activeTurn={}",
-                active_turn_id.as_deref().unwrap_or("none")
-            ),
-        );
+        if !is_high_frequency_delta_notification(method) {
+            log_codex(
+                app,
+                &session_id,
+                format!(
+                    "notification {method} ignored for stale turn={turn_id} activeTurn={}",
+                    active_turn_id.as_deref().unwrap_or("none")
+                ),
+            );
+        }
         return;
     }
     match method {
@@ -3842,9 +4007,14 @@ mod tests {
             .as_deref(),
             Some("019e5e58-d5ed-7bd1-8e8a-a6e3d2b836b7")
         );
-        assert_eq!(found_active_turn_from_interrupt_error("turn already completed"), None);
         assert_eq!(
-            found_active_turn_from_interrupt_error("expected active turn id old-turn but found none"),
+            found_active_turn_from_interrupt_error("turn already completed"),
+            None
+        );
+        assert_eq!(
+            found_active_turn_from_interrupt_error(
+                "expected active turn id old-turn but found none"
+            ),
             None
         );
     }
