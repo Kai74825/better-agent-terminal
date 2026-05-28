@@ -39,8 +39,13 @@ function isTextFile(name: string): boolean {
 }
 
 function formatDate(dateStr: string): string {
+  const legacyGitDate = dateStr.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{2})(\d{2})$/)
+  const normalizedDate = legacyGitDate
+    ? `${legacyGitDate[1]}T${legacyGitDate[2]}${legacyGitDate[3]}:${legacyGitDate[4]}`
+    : dateStr
   try {
-    const d = new Date(dateStr)
+    const d = new Date(normalizedDate)
+    if (!Number.isFinite(d.getTime())) return dateStr
     const now = new Date()
     const diffMs = now.getTime() - d.getTime()
     const diffMins = Math.floor(diffMs / 60000)

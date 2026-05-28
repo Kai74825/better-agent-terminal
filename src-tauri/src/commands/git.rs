@@ -168,9 +168,10 @@ pub fn parse_github_url(remote: &str) -> Option<String> {
     None
 }
 
-// `git log --pretty=format:%H||%an||%ai||%s` — keep the delimiter
+// `git log --pretty=format:%H||%an||%aI||%s` — keep the delimiter
 // in sync with the Electron handler so the parser is bit-for-bit
-// the same.
+// the same. Use strict ISO-8601 dates so WebViews can parse them
+// consistently across platforms.
 pub fn parse_log(raw: &str) -> Vec<GitLogEntry> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -373,7 +374,7 @@ pub(crate) async fn git_get_log_native(cwd: String, count: Option<i64>) -> Vec<G
     let n_str = n.to_string();
     let args = vec![
         "log".into(),
-        "--pretty=format:%H||%an||%ai||%s".into(),
+        "--pretty=format:%H||%an||%aI||%s".into(),
         "-n".into(),
         n_str,
     ];
