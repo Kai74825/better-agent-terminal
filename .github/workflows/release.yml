@@ -524,6 +524,15 @@ jobs:
           event-type: update-cask
           client-payload: '{"version": "${{ steps.version.outputs.VERSION }}"}'
 
+      - name: Update Homebrew tap (pre-release)
+        if: ${{ contains(env.RELEASE_TAG, '-pre') }}
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          repository: tonyq-org/homebrew-tap
+          event-type: update-cask-pre
+          client-payload: '{"version": "${{ steps.version.outputs.VERSION }}"}'
+
   choco:
     needs: [build, release]
     runs-on: windows-latest
