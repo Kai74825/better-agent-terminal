@@ -302,6 +302,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       : 'on-request'
   })
   const [effortLevel, setEffortLevel] = useState<string>(() => {
+    // Per-terminal effort/ultracode persists across restarts (stored in agentParams).
+    // Falls back to the global default only when this terminal has no saved choice.
+    const persisted = normalizedAgentParams?.effort
+    if (typeof persisted === 'string' && (CLAUDE_EFFORT_MODES as readonly string[]).includes(persisted)) {
+      return persisted
+    }
     return settingsStore.getSettings().defaultEffort || 'high'
   })
   const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
@@ -2642,6 +2648,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const handleEffortChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value
     setEffortLevel(next)
+    workspaceStore.updateTerminalAgentParams(sessionId, { effort: next })
     await host.claude.setEffort(sessionId, next)
   }, [sessionId])
 
