@@ -4,8 +4,8 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isMessageItem, isToolCall } from '../types/claude-agent'
-import type { CodexApprovalPolicy, CodexEffortLevel, CodexSandboxMode, EffortLevel } from '../types'
-import { CODEX_APPROVAL_POLICIES, CODEX_EFFORT_LEVELS, CODEX_SANDBOX_MODES, EFFORT_LEVELS } from '../types'
+import type { CodexApprovalPolicy, CodexEffortLevel, CodexSandboxMode } from '../types'
+import { CLAUDE_EFFORT_MODES, CODEX_APPROVAL_POLICIES, CODEX_EFFORT_LEVELS, CODEX_SANDBOX_MODES, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
 import { normalizeAgentParams } from '../types/agent-profiles'
 import { settingsStore, useSettings } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
@@ -364,7 +364,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     if (showResumeList) void refreshResumeSessions()
   }, [showResumeList, refreshResumeSessions])
   const effortOptions = useMemo(
-    () => includeCurrentOption(isCodexSession ? availableEfforts : EFFORT_LEVELS, effortLevel),
+    () => includeCurrentOption(isCodexSession ? availableEfforts : CLAUDE_EFFORT_MODES, effortLevel),
     [availableEfforts, effortLevel, isCodexSession],
   )
   const codexSandboxModeOptions = useMemo(
@@ -1610,9 +1610,13 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       const effectiveModel = isCodexSession
         ? resolveCodexModel(currentModel || savedModel, globalSettings.defaultCodexModel)
         : (currentModel || savedModel || globalSettings.defaultClaudeModel || '')
-      const effectiveEffort = isCodexSession
+      const effectiveEffortMode = isCodexSession
         ? effortLevel
         : (globalSettings.defaultEffort || 'high')
+      const effectiveEffort = isCodexSession
+        ? effectiveEffortMode
+        : (effortLevelForClaudeMode(effectiveEffortMode) || 'high')
+      const effectiveUltracode = !isCodexSession && isUltracodeEffortMode(effectiveEffortMode)
 
       const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
       if (existingState) {
@@ -1641,7 +1645,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
             codexSandboxMode,
             codexApprovalPolicy,
             permissionMode,
-            effectiveEffort as EffortLevel,
+            effectiveEffort,
+            effectiveUltracode ? true : undefined,
           ) as { stale?: boolean } | null
           if (!resumeResult?.stale) return
           dlog(`${stag} ensureSessionStarted: stale sdkSessionId=${savedSdkSessionId.slice(0, 8)}; starting fresh session`)
@@ -1654,7 +1659,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         cwd,
         permissionMode,
         model: effectiveModel || undefined,
-        effort: effectiveEffort as EffortLevel,
+        effort: effectiveEffort,
+        ...(effectiveUltracode ? { ultracode: true } : {}),
         apiVersion,
         agentPreset: terminalState?.agentPreset,
         ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
@@ -1942,6 +1948,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
     const resumeUsesWorktree = terminal?.agentPreset === 'codex-agent-worktree' || !!terminal?.worktreePath
     const resumeModel = currentModel || settingsStore.getSettings().defaultCodexModel || DEFAULT_CODEX_MODEL
+    const resumeEffort = isCodexSession ? effortLevel : (effortLevelForClaudeMode(effortLevel) || 'high')
     await host.claude.resumeSession(
       sessionId,
       sdkSessionId,
@@ -1955,7 +1962,8 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       codexSandboxMode,
       codexApprovalPolicy,
       permissionMode,
-      effortLevel as EffortLevel
+      resumeEffort,
+      !isCodexSession && isUltracodeEffortMode(effortLevel) ? true : undefined,
     )
     workspaceStore.setTerminalSdkSessionId(sessionId, sdkSessionId)
   }, [sessionId, cwd, isV2Session, terminal?.agentPreset, terminal?.worktreePath, terminal?.worktreeBranch, currentModel, codexSandboxMode, codexApprovalPolicy, permissionMode, effortLevel])

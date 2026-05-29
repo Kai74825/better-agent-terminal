@@ -4,8 +4,8 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isMessageItem, isToolCall } from '../types/claude-agent'
-import type { CodexApprovalPolicy, CodexSandboxMode, EffortLevel } from '../types'
-import { CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES, EFFORT_LEVELS } from '../types'
+import type { CodexApprovalPolicy, CodexSandboxMode } from '../types'
+import { CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES, EFFORT_LEVELS, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
 import { normalizeAgentParams } from '../types/agent-profiles'
 import { settingsStore, useSettings } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
@@ -1477,7 +1477,9 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       const useWorktree = terminalState?.agentPreset === 'claude-code-worktree' || !!terminalState?.worktreePath
       const globalSettings = settingsStore.getSettings()
       const effectiveModel = normalizeClaudeModelSelection(currentModel || savedModel || globalSettings.defaultClaudeModel)
-      const effectiveEffort = effortLevel || globalSettings.defaultEffort || 'high'
+      const effectiveEffortMode = effortLevel || globalSettings.defaultEffort || 'high'
+      const effectiveEffort = effortLevelForClaudeMode(effectiveEffortMode) || 'high'
+      const effectiveUltracode = isUltracodeEffortMode(effectiveEffortMode)
 
       const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
       if (existingState) {
@@ -1506,7 +1508,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             undefined,
             undefined,
             permissionMode,
-            effectiveEffort as EffortLevel,
+            effectiveEffort,
+            effectiveUltracode ? true : undefined,
           ) as ResumeSessionResult | null
           if (!resumeResult?.stale) return
           dlog(`${stag} ensureSessionStarted: stale sdkSessionId=${savedSdkSessionId.slice(0, 8)}; starting fresh session`)
@@ -1519,7 +1522,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         cwd,
         permissionMode,
         model: effectiveModel,
-        effort: effectiveEffort as EffortLevel,
+        effort: effectiveEffort,
+        ...(effectiveUltracode ? { ultracode: true } : {}),
         apiVersion,
         agentPreset: terminalState?.agentPreset,
         ...(isCodexSession ? { codexSandboxMode, codexApprovalPolicy } : {}),
@@ -1841,6 +1845,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     historyLoadedRef.current = true
     const apiVersion = isV2Session ? 'v2' as const : 'v1' as const
     const resumeModel = currentModel || settingsStore.getSettings().defaultClaudeModel || undefined
+    const resumeEffort = effortLevelForClaudeMode(effortLevel) || 'high'
     const result = await host.claude.resumeSession(
       sessionId,
       sdkSessionId,
@@ -1854,7 +1859,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       undefined,
       undefined,
       permissionMode,
-      effortLevel as EffortLevel,
+      resumeEffort,
+      isUltracodeEffortMode(effortLevel) ? true : undefined,
     ) as ResumeSessionResult | null
     if (result?.stale) {
       workspaceStore.setTerminalSdkSessionId(sessionId, undefined)

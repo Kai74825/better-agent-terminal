@@ -184,9 +184,13 @@ async function main() {
   const fakeClaudeJs = join(fakeBinDir, 'claude.js')
   const fakeDataDir = mkdtempSync(join(tmpdir(), 'sidecar-channel-data-'))
   const bridgeOut = join(fakeBinDir, 'bridge-url.txt')
+  const argsOut = join(fakeBinDir, 'claude-args.json')
   const script = `#!/usr/bin/env node
 const fs = require('node:fs')
 const args = process.argv.slice(2)
+if (process.env.FAKE_CLAUDE_ARGS_OUT) {
+  fs.writeFileSync(process.env.FAKE_CLAUDE_ARGS_OUT, JSON.stringify(args))
+}
 if (args[0] === '--version') {
   console.log('2.1.119 (Claude Code)')
   process.exit(0)
@@ -298,6 +302,7 @@ setInterval(() => {}, 1000)
       await stopClaudeChannelSession({ sessionId: 'channel-drop-1' }).catch(() => {})
       rmSync(bridgeOut, { force: true })
 
+      process.env.FAKE_CLAUDE_ARGS_OUT = argsOut
       const started = await startClaudeChannelSession({
         sessionId: 'channel-life-1',
         cliPath: fakeClaude,
@@ -305,11 +310,16 @@ setInterval(() => {}, 1000)
         workspaceId: 'workspace-1',
         model: 'claude-sonnet-4-6',
         permissionMode: 'default',
-        effort: 'high',
+        effort: 'xhigh',
+        ultracode: true,
       })
       assert.equal(started.ok, true)
       assert.equal(started.status, 'ready')
       assert.equal(started.channelStatus, 'connected')
+      const startedArgs = JSON.parse(readFileSync(argsOut, 'utf8'))
+      assert.equal(startedArgs[startedArgs.indexOf('--effort') + 1], 'xhigh')
+      assert.equal(startedArgs[startedArgs.indexOf('--settings') + 1], '{"ultracode":true}')
+      delete process.env.FAKE_CLAUDE_ARGS_OUT
 
       let bridgeUrl = ''
       for (let i = 0; i < 50; i += 1) {

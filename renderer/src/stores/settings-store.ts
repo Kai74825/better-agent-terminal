@@ -1,5 +1,5 @@
 import { host } from '../host-api'
-import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, EffortLevel, CodexEffortLevel } from '../types'
+import type { AppSettings, ShellType, FontType, ColorPresetId, EnvVariable, AgentCommandType, StatuslineItemConfig, StatuslineItemId, LanguageCode, ClaudeEffortMode, CodexEffortLevel } from '../types'
 import type { AgentPresetId } from '../types/agent-presets'
 import { getAgentPreset } from '../types/agent-presets'
 import { CODEX_EFFORT_LEVELS, FONT_OPTIONS, COLOR_PRESETS, AGENT_COMMAND_OPTIONS, STATUSLINE_ITEMS } from '../types'
@@ -282,7 +282,7 @@ class SettingsStore {
     this.save()
   }
 
-  setDefaultEffort(effort: EffortLevel): void {
+  setDefaultEffort(effort: ClaudeEffortMode): void {
     this.settings = { ...this.settings, defaultEffort: effort }
     this.notify()
     this.save()

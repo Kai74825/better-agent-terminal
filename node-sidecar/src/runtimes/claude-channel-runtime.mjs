@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import { sendEvent } from '../lib/protocol.mjs'
 import { log, warn } from '../lib/logger.mjs'
+import { normalizeClaudeEffortMode, runtimeEffortForMode, isUltracodeMode } from '../lib/claude-effort.mjs'
 import { resolveDataDir } from '../lib/data-paths.mjs'
 import { isBatDebugEnabled, probeClaudeChannelCapabilities } from './claude-channel-capabilities.mjs'
 import { writeClaudeChannelServerScript } from './claude-channel-server.mjs'
@@ -205,7 +206,11 @@ function buildClaudeArgs(session, files) {
     `BAT Channel ${session.sessionId.slice(0, 8)}`,
   ]
   if (session.model) args.push('--model', session.model)
-  if (session.effort) args.push('--effort', session.effort)
+  const runtimeEffort = runtimeEffortForMode(session.effort)
+  if (runtimeEffort) args.push('--effort', runtimeEffort)
+  if (isUltracodeMode(session.effort) || session.ultracode === true) {
+    args.push('--settings', JSON.stringify({ ultracode: true }))
+  }
   if (session.permissionMode) args.push('--permission-mode', session.permissionMode)
   return args
 }
@@ -540,13 +545,15 @@ export async function startClaudeChannelSession(params = {}) {
     }
   }
 
+  const effortMode = normalizeClaudeEffortMode(params.effort, params.ultracode === true)
   const session = {
     sessionId,
     cwd: String(params.cwd || process.cwd()),
     workspaceId: params.workspaceId || null,
     cliPath,
     model: params.model || null,
-    effort: params.effort || null,
+    effort: effortMode,
+    ultracode: isUltracodeMode(effortMode),
     permissionMode: params.permissionMode || null,
     status: 'starting',
     capabilities,

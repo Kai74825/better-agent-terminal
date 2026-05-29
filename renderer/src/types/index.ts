@@ -28,6 +28,17 @@ export interface Workspace {
 // xhigh requires Claude Code CLI >= 2.1.111.
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type EffortLevel = typeof EFFORT_LEVELS[number]
+export const CLAUDE_EFFORT_MODES = [...EFFORT_LEVELS, 'ultracode'] as const
+export type ClaudeEffortMode = typeof CLAUDE_EFFORT_MODES[number]
+
+export function effortLevelForClaudeMode(mode?: string): EffortLevel | undefined {
+  if (mode === 'ultracode') return 'xhigh'
+  return EFFORT_LEVELS.includes(mode as EffortLevel) ? mode as EffortLevel : undefined
+}
+
+export function isUltracodeEffortMode(mode?: string): boolean {
+  return mode === 'ultracode'
+}
 
 export const CODEX_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
 export type CodexEffortLevel = typeof CODEX_EFFORT_LEVELS[number]
@@ -253,7 +264,7 @@ export interface AppSettings {
   defaultClaudeModelCustom?: boolean;  // Claude 模型欄位是否使用自訂輸入模式
   defaultCodexModel?: string;   // Codex 預設模型（空 = 使用 Agent 自己的預設）
   defaultCodexModelCustom?: boolean;   // Codex 模型欄位是否使用自訂輸入模式
-  defaultEffort?: EffortLevel;  // Claude 預設 effort level
+  defaultEffort?: ClaudeEffortMode;  // Claude 預設 effort/mode
   defaultCodexEffort?: CodexEffortLevel;  // Codex 預設 effort level
   showDockBadge?: boolean;               // Dock 圖示顯示待處理數量
   notifyOnComplete?: boolean;           // Agent 完成時發送系統通知

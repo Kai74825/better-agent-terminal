@@ -914,6 +914,7 @@ function createTauriHost(): BatAppAPI {
             codexApprovalPolicy?: 'untrusted' | 'on-request' | 'never',
             permissionMode?: string,
             effort?: string,
+            ultracode?: boolean,
           ) => getInvoke()<unknown>('claude_resume_session', {
             sessionId,
             sdkSessionId,
@@ -927,6 +928,7 @@ function createTauriHost(): BatAppAPI {
               ...(codexApprovalPolicy ? { codexApprovalPolicy } : {}),
               ...(permissionMode ? { permissionMode } : {}),
               ...(effort ? { effort } : {}),
+              ...(ultracode ? { ultracode } : {}),
             }),
           })
         }

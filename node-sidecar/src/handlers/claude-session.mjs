@@ -16,8 +16,17 @@ import {
   clearSessionStream,
   resetSessionTranscript,
 } from '../lib/state.mjs'
+import { normalizeClaudeEffortMode, isUltracodeMode } from '../lib/claude-effort.mjs'
 import { expectedContextWindowForModel } from '../lib/models.mjs'
 import { closeLiveQuery } from './claude-send.mjs'
+
+function applyEffortOptions(session, options) {
+  const mode = normalizeClaudeEffortMode(options?.effort, options?.ultracode === true)
+  if (mode) {
+    session.effort = mode
+    session.ultracode = isUltracodeMode(mode)
+  }
+}
 import { loadSessionHistory } from './claude-history.mjs'
 import { warn as logWarn } from '../lib/logger.mjs'
 import { worktreeRehydrate } from './worktree.mjs'
@@ -92,7 +101,7 @@ registerHandler('claude.startSession', async (params) => {
   if (s.options && typeof s.options === 'object') {
     if (typeof s.options.model === 'string') s.model = s.options.model
     if (typeof s.options.permissionMode === 'string') s.permissionMode = s.options.permissionMode
-    if (typeof s.options.effort === 'string') s.effort = s.options.effort
+    applyEffortOptions(s, s.options)
     if (typeof s.options.autoCompactWindow === 'number') s.autoCompactWindow = s.options.autoCompactWindow
     if (typeof s.options.codexSandboxMode === 'string') s.codexSandboxMode = s.options.codexSandboxMode
     if (typeof s.options.codexApprovalPolicy === 'string') s.codexApprovalPolicy = s.options.codexApprovalPolicy
@@ -155,7 +164,7 @@ registerHandler('claude.resumeSession', async (params) => {
     }
     if (typeof s.options.model === 'string') s.model = s.options.model
     if (typeof s.options.permissionMode === 'string') s.permissionMode = s.options.permissionMode
-    if (typeof s.options.effort === 'string') s.effort = s.options.effort
+    applyEffortOptions(s, s.options)
     if (typeof s.options.autoCompactWindow === 'number') s.autoCompactWindow = s.options.autoCompactWindow
     if (typeof s.options.codexSandboxMode === 'string') s.codexSandboxMode = s.options.codexSandboxMode
     if (typeof s.options.codexApprovalPolicy === 'string') s.codexApprovalPolicy = s.options.codexApprovalPolicy
@@ -384,7 +393,7 @@ registerHandler('claude.setEffort', async (params) => {
   if (typeof sessionId !== 'string' || !sessionId) return false
   if (isCodexSession(sessionId)) return setCodexEffort(params)
   const s = ensureSession(sessionId)
-  if (typeof params?.effort === 'string') s.effort = params.effort
+  applyEffortOptions(s, params)
   return true
 })
 
@@ -417,6 +426,7 @@ registerHandler('claude.getSessionState', async (params) => {
     permissionMode: s.permissionMode,
     model: s.model,
     effort: s.effort,
+    ultracode: s.ultracode === true,
     autoCompactWindow: s.autoCompactWindow,
     codexSandboxMode: s.codexSandboxMode,
     codexApprovalPolicy: s.codexApprovalPolicy,

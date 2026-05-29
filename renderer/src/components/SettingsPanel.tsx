@@ -3,8 +3,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
 import QRCode from 'qrcode'
-import type { AppSettings, ShellType, FontType, ColorPresetId, StatuslineItemConfig, LanguageCode, EffortLevel, CodexEffortLevel } from '../types'
-import { FONT_OPTIONS, COLOR_PRESETS, SHELL_OPTIONS, STATUSLINE_ITEMS, EFFORT_LEVELS, CODEX_EFFORT_LEVELS } from '../types'
+import type { AppSettings, ShellType, FontType, ColorPresetId, StatuslineItemConfig, LanguageCode, ClaudeEffortMode, CodexEffortLevel } from '../types'
+import { FONT_OPTIONS, COLOR_PRESETS, SHELL_OPTIONS, STATUSLINE_ITEMS, CLAUDE_EFFORT_MODES, CODEX_EFFORT_LEVELS } from '../types'
 import { settingsStore, parseStatuslineTemplate, exportStatuslineTemplate } from '../stores/settings-store'
 import { EnvVarEditor } from './EnvVarEditor'
 import { AgentPresetId, getVisiblePresets } from '../types/agent-presets'
@@ -812,11 +812,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                   <label>{t('settings.defaultClaudeEffort')}</label>
                   <select
                     value={settings.defaultEffort || 'high'}
-                    onChange={e => settingsStore.setDefaultEffort(e.target.value as EffortLevel)}
+                    onChange={e => settingsStore.setDefaultEffort(e.target.value as ClaudeEffortMode)}
                   >
-                    {EFFORT_LEVELS.map(level => (
+                    {CLAUDE_EFFORT_MODES.map(level => (
                       <option key={level} value={level}>
-                        {level.charAt(0).toUpperCase() + level.slice(1)}{level === 'max' ? ' (Opus only)' : ''}
+                        {level === 'ultracode' ? 'Ultracode (dynamic workflows)' : `${level.charAt(0).toUpperCase() + level.slice(1)}${level === 'max' ? ' (Opus only)' : ''}`}
                       </option>
                     ))}
                   </select>

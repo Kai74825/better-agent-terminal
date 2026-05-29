@@ -17,12 +17,12 @@ async function main() {
   )
   assert.match(
     source,
-    /const resumeResult = await host\.claude\.resumeSession\([\s\S]*effectiveModel \|\| savedModel[\s\S]*permissionMode,\s*effectiveEffort as EffortLevel[\s\S]*\) as \{ stale\?: boolean \} \| null/,
+    /const resumeResult = await host\.claude\.resumeSession\([\s\S]*effectiveModel \|\| savedModel[\s\S]*permissionMode,\s*effectiveEffort[\s\S]*\) as \{ stale\?: boolean \} \| null/,
     'Codex auto-resume should preserve effective model, permission mode, and effort',
   )
   assert.match(
     source,
-    /const resumeModel = currentModel[\s\S]*resumeModel[\s\S]*codexSandboxMode[\s\S]*codexApprovalPolicy[\s\S]*permissionMode[\s\S]*effortLevel as EffortLevel/,
+    /const resumeModel = currentModel[\s\S]*resumeModel[\s\S]*codexSandboxMode[\s\S]*codexApprovalPolicy[\s\S]*permissionMode[\s\S]*resumeEffort/,
     'Codex manual resume should preserve current model, sandbox, approval, permission mode, and effort',
   )
   for (const [name, panelSource] of [['Codex', source], ['Claude', claudeSource]] as const) {

@@ -940,6 +940,13 @@ async function inProcess() {
     params: { sessionId: 'state-1', model: 'claude-haiku-4-5-20251001', autoCompactWindow: 100000 } })
   await dispatch({ jsonrpc: '2.0', id: 207, method: 'claude.setEffort',
     params: { sessionId: 'state-1', effort: 'high' } })
+  await dispatch({ jsonrpc: '2.0', id: 2070, method: 'claude.setEffort',
+    params: { sessionId: 'state-1', effort: 'ultracode' } })
+  const ultracodeMeta = await dispatch({ jsonrpc: '2.0', id: 20701, method: 'claude.getSessionMeta', params: { sessionId: 'state-1' } })
+  assert.equal(ultracodeMeta.result.effort, 'ultracode')
+  assert.equal(ultracodeMeta.result.ultracode, true)
+  await dispatch({ jsonrpc: '2.0', id: 20702, method: 'claude.setEffort',
+    params: { sessionId: 'state-1', effort: 'high' } })
   const sandboxSet = await dispatch({ jsonrpc: '2.0', id: 2071, method: 'claude.setCodexSandboxMode',
     params: { sessionId: 'state-1', mode: 'danger-full-access' } })
   assert.equal(sandboxSet.result, true)
@@ -2381,7 +2388,8 @@ async function inProcess() {
         model: 'claude-opus-4-7:auto-compact-200k',
         autoCompactWindow: 200000,
         permissionMode: 'bypassPermissions',
-        effort: 'high',
+        effort: 'xhigh',
+        ultracode: true,
       } } })
     await dispatch({ jsonrpc: '2.0', id: 231, method: 'claude.sendMessage',
       params: { sessionId: 'parity-1', prompt: 'hello' } })
@@ -2398,7 +2406,8 @@ async function inProcess() {
     assert.equal(opts.agentProgressSummaries, true)
     assert.deepEqual(opts.toolConfig, { askUserQuestion: { previewFormat: 'html' } })
     // Effort + permission + bypass mapping.
-    assert.equal(opts.effort, 'high')
+    assert.equal(opts.effort, 'xhigh')
+    assert.deepEqual(opts.settings, { ultracode: true })
     assert.equal(opts.permissionMode, 'bypassPermissions')
     assert.equal(opts.allowDangerouslySkipPermissions, true)
     // sdkModelForClaudeSelection maps the preset to the base id.

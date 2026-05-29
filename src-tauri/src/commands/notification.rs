@@ -255,7 +255,13 @@ pub fn register_agent_session_from_options(
     let agent_kind = options.and_then(agent_kind_from_options);
     let model = options.and_then(|value| string_option(value, "model"));
     let permission_mode = options.and_then(|value| string_option(value, "permissionMode"));
-    let effort = options.and_then(|value| string_option(value, "effort"));
+    let effort = options.and_then(|value| {
+        if value.get("ultracode").and_then(Value::as_bool) == Some(true) {
+            Some("ultracode".to_string())
+        } else {
+            string_option(value, "effort")
+        }
+    });
     let auto_compact_window = options.and_then(|value| value.get("autoCompactWindow")?.as_i64());
     let sdk_session_id = options.and_then(|value| string_option(value, "sdkSessionId"));
     let codex_sandbox_mode = options.and_then(|value| string_option(value, "codexSandboxMode"));

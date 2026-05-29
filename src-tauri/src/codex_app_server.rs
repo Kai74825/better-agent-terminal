@@ -3544,10 +3544,7 @@ fn handle_item_started(
             emit(app, "claude:tool-use", session_id, "toolCall", tool_call);
         }
         Some("fileChange") => {
-            let changes = item
-                .get("changes")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
+            let changes = item.get("changes").cloned().unwrap_or_else(|| json!([]));
             let path = item
                 .get("changes")
                 .and_then(Value::as_array)

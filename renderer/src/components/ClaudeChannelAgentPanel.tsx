@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { host } from '../host-api'
 import { settingsStore } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
-import { EFFORT_LEVELS } from '../types'
+import { CLAUDE_EFFORT_MODES, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
 import {
   CLAUDE_BUILTIN_MODELS,
   autoCompactWindowForClaudeSelection,
@@ -138,7 +138,9 @@ export const ClaudeChannelAgentPanel = memo(function ClaudeChannelAgentPanel({
         const sdkModel = sdkModelForClaudeSelection(selected.model)
         if (detectedCaps.supportsModel && sdkModel) options.model = sdkModel
         if (detectedCaps.supportsPermissionMode && selected.permissionMode) options.permissionMode = selected.permissionMode
-        if (detectedCaps.supportsThinkingEffort && selected.effort) options.effort = selected.effort
+        const runtimeEffort = effortLevelForClaudeMode(selected.effort)
+        if (detectedCaps.supportsThinkingEffort && runtimeEffort) options.effort = runtimeEffort
+        if (isUltracodeEffortMode(selected.effort)) options.ultracode = true
         const compactWindow = autoCompactWindowForClaudeSelection(selected.model, settingsStore.getSettings().autoCompactWindow)
         if (detectedCaps.supportsCompactWindow && compactWindow) {
           options.autoCompactWindow = compactWindow
@@ -212,7 +214,7 @@ export const ClaudeChannelAgentPanel = memo(function ClaudeChannelAgentPanel({
     setControls(prev => ({ ...prev, [key]: value }))
   }, [])
 
-  const effortOptions = useMemo(() => includeCurrentOption(EFFORT_LEVELS, controls.effort), [controls.effort])
+  const effortOptions = useMemo(() => includeCurrentOption(CLAUDE_EFFORT_MODES, controls.effort), [controls.effort])
   const currentModelLabel = useMemo(() => displayNameForClaudeSelection(controls.model), [controls.model])
   const currentSdkModel = useMemo(() => sdkModelForClaudeSelection(controls.model) || controls.model, [controls.model])
   const modelOptions = useMemo(() => {

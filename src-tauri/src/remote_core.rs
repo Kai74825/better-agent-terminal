@@ -281,25 +281,35 @@ pub fn legacy_v1_args_to_params(channel: &str, args: &[Value]) -> Value {
             "sessionId": args.first().cloned().unwrap_or(Value::Null),
             "options": args.get(1).cloned().unwrap_or(Value::Null),
         }),
-        "claude:resume-session" => json!({
-            "sessionId": args.first().cloned().unwrap_or(Value::Null),
-            "sdkSessionId": args.get(1).cloned().unwrap_or(Value::Null),
-            "options": strip_null_fields(json!({
-                "cwd": args.get(2).cloned().unwrap_or(Value::Null),
-                "model": args.get(3).cloned().unwrap_or(Value::Null),
-                "apiVersion": args.get(4).cloned().unwrap_or(Value::Null),
-                "useWorktree": args.get(5).cloned().unwrap_or(Value::Null),
-                "worktreePath": args.get(6).cloned().unwrap_or(Value::Null),
-                "worktreeBranch": args.get(7).cloned().unwrap_or(Value::Null),
-                "agentPreset": args.get(8).cloned().unwrap_or(Value::Null),
-                "codexSandboxMode": args.get(9).cloned().unwrap_or(Value::Null),
-                "codexApprovalPolicy": args.get(10).cloned().unwrap_or(Value::Null),
-                "permissionMode": args.get(11).cloned().unwrap_or(Value::Null),
-                "effort": args.get(12).cloned().unwrap_or(Value::Null),
-                "workspaceId": args.get(13).cloned().unwrap_or(Value::Null),
-                "workspaceName": args.get(14).cloned().unwrap_or(Value::Null),
-            })),
-        }),
+        "claude:resume-session" => {
+            let has_ultracode_slot = args.len() >= 16
+                || args
+                    .get(13)
+                    .map(|value| value.is_boolean() || value.is_null())
+                    .unwrap_or(false);
+            let workspace_id_idx = if has_ultracode_slot { 14 } else { 13 };
+            let workspace_name_idx = if has_ultracode_slot { 15 } else { 14 };
+            json!({
+                "sessionId": args.first().cloned().unwrap_or(Value::Null),
+                "sdkSessionId": args.get(1).cloned().unwrap_or(Value::Null),
+                "options": strip_null_fields(json!({
+                    "cwd": args.get(2).cloned().unwrap_or(Value::Null),
+                    "model": args.get(3).cloned().unwrap_or(Value::Null),
+                    "apiVersion": args.get(4).cloned().unwrap_or(Value::Null),
+                    "useWorktree": args.get(5).cloned().unwrap_or(Value::Null),
+                    "worktreePath": args.get(6).cloned().unwrap_or(Value::Null),
+                    "worktreeBranch": args.get(7).cloned().unwrap_or(Value::Null),
+                    "agentPreset": args.get(8).cloned().unwrap_or(Value::Null),
+                    "codexSandboxMode": args.get(9).cloned().unwrap_or(Value::Null),
+                    "codexApprovalPolicy": args.get(10).cloned().unwrap_or(Value::Null),
+                    "permissionMode": args.get(11).cloned().unwrap_or(Value::Null),
+                    "effort": args.get(12).cloned().unwrap_or(Value::Null),
+                    "ultracode": if has_ultracode_slot { args.get(13).cloned().unwrap_or(Value::Null) } else { Value::Null },
+                    "workspaceId": args.get(workspace_id_idx).cloned().unwrap_or(Value::Null),
+                    "workspaceName": args.get(workspace_name_idx).cloned().unwrap_or(Value::Null),
+                })),
+            })
+        }
         _ => legacy_v1_param_keys(channel)
             .map(|keys| object_from_keys(keys, args))
             .unwrap_or_else(|| args.first().cloned().unwrap_or(Value::Null)),
@@ -639,6 +649,40 @@ mod tests {
                 "sdkSessionId": "sdk1",
                 "options": {
                     "cwd": "/repo",
+                    "workspaceId": "ws-7",
+                    "workspaceName": "Plan 5.3.7",
+                },
+            })
+        );
+        assert_eq!(
+            legacy_v1_args_to_params(
+                "claude:resume-session",
+                &[
+                    json!("s1"),
+                    json!("sdk1"),
+                    json!("/repo"),
+                    Value::Null, // model
+                    Value::Null, // apiVersion
+                    Value::Null, // useWorktree
+                    Value::Null, // worktreePath
+                    Value::Null, // worktreeBranch
+                    Value::Null, // agentPreset
+                    Value::Null, // codexSandboxMode
+                    Value::Null, // codexApprovalPolicy
+                    Value::Null, // permissionMode
+                    json!("xhigh"),
+                    json!(true),
+                    json!("ws-7"),
+                    json!("Plan 5.3.7"),
+                ]
+            ),
+            json!({
+                "sessionId": "s1",
+                "sdkSessionId": "sdk1",
+                "options": {
+                    "cwd": "/repo",
+                    "effort": "xhigh",
+                    "ultracode": true,
                     "workspaceId": "ws-7",
                     "workspaceName": "Plan 5.3.7",
                 },

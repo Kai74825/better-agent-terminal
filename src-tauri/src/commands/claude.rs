@@ -1766,7 +1766,7 @@ pub(crate) fn supported_agents_native(cwd: &Path) -> Vec<AgentScanEntry> {
 }
 
 pub(crate) fn claude_supported_efforts_native() -> Value {
-    json!(["low", "medium", "high", "xhigh", "max"])
+    json!(["low", "medium", "high", "xhigh", "max", "ultracode"])
 }
 
 pub(crate) fn codex_supported_sandbox_modes_native() -> Value {
@@ -4300,6 +4300,7 @@ pub async fn claude_resume_session(
             option_field(&options, "codexApprovalPolicy"),
             option_field(&options, "permissionMode"),
             option_field(&options, "effort"),
+            option_field(&options, "ultracode"),
             option_field(&options, "workspaceId"),
             option_field(&options, "workspaceName"),
         ],

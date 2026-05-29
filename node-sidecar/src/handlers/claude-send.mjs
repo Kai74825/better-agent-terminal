@@ -33,6 +33,7 @@ import {
 } from '../lib/state.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { info as logInfo, warn as logWarn } from '../lib/logger.mjs'
+import { runtimeEffortForMode, isUltracodeMode } from '../lib/claude-effort.mjs'
 import { sdkModelForClaudeSelection } from '../lib/models.mjs'
 import { loadInstalledPlugins, dataUrlToContentBlock } from '../lib/plugins.mjs'
 import { resolveClaudeCliBinaryWithInstall } from './claude-auth.mjs'
@@ -502,7 +503,11 @@ async function buildQueryOptions(s, sessionId, prompt) {
   }
   if (sdkMode && sdkMode !== 'default') queryOptions.permissionMode = sdkMode
   if (s.permissionMode === 'bypassPermissions') queryOptions.allowDangerouslySkipPermissions = true
-  if (s.effort) queryOptions.effort = s.effort
+  const runtimeEffort = runtimeEffortForMode(s.effort)
+  if (runtimeEffort) queryOptions.effort = runtimeEffort
+  if (isUltracodeMode(s.effort) || s.ultracode === true) {
+    queryOptions.settings = { ultracode: true }
+  }
   if (sdkModel) queryOptions.model = sdkModel
   if (claudeCodePath) queryOptions.pathToClaudeCodeExecutable = claudeCodePath
   const installedPlugins = await loadInstalledPlugins()
