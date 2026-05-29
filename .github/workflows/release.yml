@@ -317,18 +317,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-node-runtime-
 
-      - name: Cache prepared sidecar resources
+      - name: Cache sidecar native modules
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
         continue-on-error: true
-        id: sidecar-resource-cache
+        id: sidecar-native-modules-cache
         uses: actions/cache@v4
         with:
-          path: |
-            node-sidecar/dist
-            node-sidecar/dist-node_modules
-          key: ${{ runner.os }}-${{ matrix.arch }}-sidecar-resources-${{ steps.tauri-resource-cache-keys.outputs.sidecar_resources }}
+          path: node-sidecar/dist-node_modules
+          key: ${{ runner.os }}-${{ matrix.arch }}-sidecar-native-modules-${{ steps.tauri-resource-cache-keys.outputs.sidecar_native_modules }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-sidecar-resources-
+            ${{ runner.os }}-${{ matrix.arch }}-sidecar-native-modules-
 
       - name: Cache prepared Codex runtime
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.bundle_mode == 'all-in-one'
@@ -393,12 +391,12 @@ jobs:
             pnpm run verify:tauri-preview-readiness:lightweight
           else
             node scripts/fetch-node-runtime.mjs
-            if [[ "${{ steps.sidecar-resource-cache.outputs.cache-hit }}" == "true" ]]; then
-              echo "Prepared sidecar resources restored from cache."
+            pnpm --dir node-sidecar install --frozen-lockfile --prefer-offline
+            pnpm run build:tauri-sidecar
+            if [[ "${{ steps.sidecar-native-modules-cache.outputs.cache-hit }}" == "true" ]]; then
+              echo "Prepared sidecar native modules restored from cache."
             else
-              pnpm --dir node-sidecar install --frozen-lockfile --prefer-offline
               pnpm run prune:tauri-sidecar
-              pnpm run build:tauri-sidecar
               pnpm run prepare:tauri-sidecar-node-modules
             fi
             if [[ "${{ steps.codex-runtime-cache.outputs.cache-hit }}" == "true" ]]; then

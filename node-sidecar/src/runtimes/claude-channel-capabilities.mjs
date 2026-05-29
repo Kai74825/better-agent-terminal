@@ -40,6 +40,7 @@ function runCli(cliPath, args, timeoutMs = 5000) {
       child = spawn(cliPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, NO_COLOR: '1' },
+        shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(cliPath),
       })
     } catch (err) {
       resolve({ ok: false, stdout: '', stderr: err instanceof Error ? err.message : String(err), code: null })

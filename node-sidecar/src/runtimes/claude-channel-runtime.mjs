@@ -17,6 +17,7 @@ const CHANNEL_READY_TIMEOUT_MS = 5_000
 const STDERR_TAIL_LIMIT = 4000
 const ENDED_SESSION_TTL_MS = 10 * 60 * 1000
 const ENDED_SESSION_LIMIT = 100
+const PROCESS_EXIT_CLEANUP_TIMEOUT_MS = 2_000
 
 function requireDebug() {
   if (!isBatDebugEnabled()) {
@@ -322,6 +323,27 @@ function onProcessError(session, listener) {
   }
 }
 
+function waitForProcessExit(session, timeoutMs = PROCESS_EXIT_CLEANUP_TIMEOUT_MS) {
+  if (!session.child || session.processExited || session.processErrored) return Promise.resolve()
+  return new Promise(resolve => {
+    let offExit = () => {}
+    let offError = () => {}
+    const timer = setTimeout(() => {
+      offExit()
+      offError()
+      resolve()
+    }, timeoutMs)
+    const finish = () => {
+      clearTimeout(timer)
+      offExit()
+      offError()
+      resolve()
+    }
+    offExit = onProcessExit(session, finish)
+    offError = onProcessError(session, finish)
+  })
+}
+
 async function loadNodePty() {
   if (process.env.BAT_CLAUDE_CHANNEL_DISABLE_PTY === '1') return null
   try {
@@ -349,7 +371,8 @@ async function spawnClaudeProcess(session, cliPath, args, bridgeUrl) {
       killed: false,
       kill(signal = 'SIGTERM') {
         processHandle.killed = true
-        child.kill(signal)
+        if (process.platform === 'win32') child.kill()
+        else child.kill(signal)
       },
     }
     child.onData(chunk => {
@@ -482,6 +505,7 @@ async function cleanupSession(session) {
   if (session.child && !session.child.killed) {
     try { session.child.kill('SIGTERM') } catch { /* ignore */ }
   }
+  await waitForProcessExit(session)
   if (session.bridgeServer) {
     await new Promise(resolve => {
       try { session.bridgeServer.close(resolve) } catch { resolve() }

@@ -82,19 +82,30 @@ async function hashParts(parts) {
 
 async function computeKeys() {
   const packageJson = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'))
+  const sidecarPackageJson = JSON.parse(await readFile(join(repoRoot, 'node-sidecar', 'package.json'), 'utf8'))
   const pnpmLock = await readFile(join(repoRoot, 'pnpm-lock.yaml'), 'utf8')
   const sidecarLock = await readFile(join(repoRoot, 'node-sidecar', 'pnpm-lock.yaml'), 'utf8')
+  const sidecarClaudeLock = lockExcerpt(sidecarLock, [
+    /@anthropic-ai\/claude-agent-sdk/,
+    /claude-agent-sdk-(darwin|linux|win32)-/,
+  ])
   const codexLock = lockExcerpt(pnpmLock, [
     /@openai\/codex/,
     /codex-(darwin|linux|win32)-/,
   ])
 
-  const sidecarResources = await hashParts([
-    { type: 'file', path: 'scripts/build-node-sidecar.mjs' },
+  const sidecarNativeModules = await hashParts([
     { type: 'file', path: 'scripts/prepare-tauri-sidecar-node-modules.mjs' },
-    { type: 'file', path: 'node-sidecar/package.json' },
-    { type: 'text', name: 'node-sidecar/pnpm-lock-claude', value: sidecarLock },
-    { type: 'dir', path: 'node-sidecar/src' },
+    {
+      type: 'text',
+      name: 'node-sidecar-package-claude-native',
+      value: JSON.stringify({
+        packageManager: packageJson.packageManager,
+        claudeAgentSdk: sidecarPackageJson.dependencies?.['@anthropic-ai/claude-agent-sdk'],
+        supportedArchitectures: packageJson.pnpm?.supportedArchitectures,
+      }),
+    },
+    { type: 'text', name: 'node-sidecar-pnpm-lock-claude-native', value: sidecarClaudeLock },
   ])
 
   const codexRuntime = await hashParts([
@@ -116,7 +127,7 @@ async function computeKeys() {
   ])
 
   return {
-    sidecar_resources: sidecarResources,
+    sidecar_native_modules: sidecarNativeModules,
     codex_runtime: codexRuntime,
     node_runtime: nodeRuntime,
   }

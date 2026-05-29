@@ -13,9 +13,9 @@ const keys = Object.fromEntries(
     .map((line) => line.split('=')),
 )
 
-for (const name of ['sidecar_resources', 'codex_runtime', 'node_runtime']) {
+for (const name of ['sidecar_native_modules', 'codex_runtime', 'node_runtime']) {
   assert.match(keys[name], /^[a-f0-9]{24}$/, `${name} should be a stable short sha256 key`)
 }
 
-assert.notEqual(keys.sidecar_resources, keys.codex_runtime)
+assert.notEqual(keys.sidecar_native_modules, keys.codex_runtime)
 console.log('tauri-resource-cache-keys: passed')
