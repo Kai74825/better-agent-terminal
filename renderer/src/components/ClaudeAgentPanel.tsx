@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import type { ClaudeMessage, ClaudeToolCall } from '../types/claude-agent'
 import { isMessageItem, isToolCall } from '../types/claude-agent'
 import type { CodexApprovalPolicy, CodexSandboxMode } from '../types'
-import { CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES, EFFORT_LEVELS, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
+import { CLAUDE_EFFORT_MODES, CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES, EFFORT_LEVELS, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
 import { normalizeAgentParams } from '../types/agent-profiles'
 import { settingsStore, useSettings } from '../stores/settings-store'
 import { workspaceStore } from '../stores/workspace-store'
@@ -330,8 +330,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     if (showResumeList) void refreshResumeSessions()
   }, [showResumeList, refreshResumeSessions])
   const effortOptions = useMemo(
-    () => includeCurrentOption(availableEfforts, effortLevel),
-    [availableEfforts, effortLevel],
+    () => includeCurrentOption(isCodexSession ? availableEfforts : CLAUDE_EFFORT_MODES, effortLevel),
+    [availableEfforts, effortLevel, isCodexSession],
   )
   const codexSandboxModeOptions = useMemo(
     () => includeCurrentOption(availableCodexSandboxModes, codexSandboxMode),
