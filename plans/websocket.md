@@ -1,6 +1,6 @@
 # Remote WebSocket Protocol V2
 
-Last updated: 2026-05-23
+Last updated: 2026-05-29
 
 This document records the intended Better Agent Terminal remote WebSocket v2 protocol.
 
@@ -333,7 +333,14 @@ agent:set-model
 agent:set-effort
 agent:set-codex-sandbox-mode
 agent:set-codex-approval-policy
+agent:resolve-permission
+agent:resolve-ask-user
 ```
+
+`agent:resolve-permission` and `agent:resolve-ask-user` answer an outstanding host-owned prompt.
+They normalize to `claude:resolve-permission` / `claude:resolve-ask-user` on the host. Params:
+`agent:resolve-permission` takes `sessionId`, `toolUseId`, `result`; `agent:resolve-ask-user` takes
+`sessionId`, `toolUseId`, `answers`.
 
 PTY:
 
@@ -438,6 +445,16 @@ Session lists:
 - If the user is viewing a resume list and the selected session disappears before selection, the client should disable/remove that row and require a fresh selection.
 - If the currently open running session is stopped/aborted/removed by the host, the host should emit the corresponding agent status/error/turn-end event. The client must stop accepting input for that session until it receives or requests a fresh host-owned session state.
 
+Shared prompts and questions (permission / ask-user):
+
+- Permission requests (`agent:permission-request`) and AskUserQuestion prompts (`agent:ask-user`) are host-owned. The host broadcasts them to every connected client, so the same prompt is shown on the host and on all remote windows at once.
+- A logical prompt is identified by its `toolUseId`. Every show and resolved event for one prompt carries the same `sessionId` and `toolUseId`.
+- Any single window (host or any client) may answer. The answering window sends `agent:resolve-permission` / `agent:resolve-ask-user` as an `invoke`. The host applies the answer once against the pending entry keyed by `toolUseId`.
+- After resolving, the host broadcasts `agent:permission-resolved` / `agent:ask-user-resolved` with the same `sessionId` and `toolUseId` to every connected client. On receipt, every other window must close/dismiss the prompt that matches that `toolUseId`. This is what makes an answer on one window dismiss the prompt on all other windows.
+- The resolved broadcast is idempotent. If a second window answers a prompt whose pending entry is already gone (another window answered first), the host still re-broadcasts the resolved event for that `toolUseId` instead of staying silent. This self-heals any window whose first dismiss broadcast was dropped.
+- Clients must scope the dismiss to the matching `toolUseId`. A resolved event whose `toolUseId` does not match the currently shown prompt must be ignored, so an idempotent re-broadcast cannot close a newer prompt that has since opened in the same session.
+- Clients must not treat their own local answer as the authoritative dismiss across windows. The host's resolved broadcast is the canonical dismiss. Temporary local pending UI is allowed while waiting for it.
+
 Required remote implementation behavior:
 
 ```text
@@ -483,6 +500,18 @@ host session state changed
   -> host emits the existing agent event family such as agent:status, agent:error, agent:turn-end, agent:history, or agent:resume-loading
   -> client updates the open session from the host event
   -> if the session is no longer usable, client disables input until a new host-owned session is selected or created
+
+host surfaces a permission/ask-user prompt
+  -> host broadcasts agent:permission-request / agent:ask-user with sessionId and toolUseId
+  -> every connected window shows the prompt for that toolUseId
+
+host or any client answers a shared prompt/question
+  -> answering window invokes agent:resolve-permission / agent:resolve-ask-user on the host
+  -> host resolves the pending entry keyed by toolUseId, applying the answer once
+  -> host broadcasts agent:permission-resolved / agent:ask-user-resolved with the same sessionId and toolUseId
+  -> every other window dismisses the prompt matching that toolUseId
+  -> if a window answers an already-resolved prompt, the host re-broadcasts the resolved event (idempotent) so lagging windows still dismiss
+  -> a resolved event whose toolUseId does not match the shown prompt is ignored so newer prompts stay open
 ```
 
 Implementation notes:
@@ -491,6 +520,7 @@ Implementation notes:
 - `workspace:reload` is the workspace reflection event.
 - Session lists are pull-based today: opening the list must call `agent:list-sessions`.
 - Existing agent runtime events remain the session-state reflection mechanism.
+- `agent:permission-resolved` / `agent:ask-user-resolved` are the shared-prompt dismiss reflection events. They are keyed by `toolUseId`, idempotent, and authoritative over a window's local answer.
 - Message filter state is the exception: it is client-only and is not sent to the host.
 
 ## Event Allowlist

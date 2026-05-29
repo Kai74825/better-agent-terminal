@@ -102,7 +102,14 @@ registerHandler('claude.resolvePermission', async (params) => {
   const session = sessions.get(sessionId)
   if (!session) return false
   const pending = session.pendingPermissions.get(toolUseId)
-  if (!pending) return false
+  // Re-broadcast the dismiss even when the entry is already gone: another
+  // window (host or remote client) may have answered first, and this lets the
+  // still-open prompt on every other window close. Idempotent — the renderer
+  // scopes the dismiss to the matching toolUseId.
+  if (!pending) {
+    sendEvent('claude:permission-resolved', { sessionId, toolUseId })
+    return false
+  }
   session.pendingPermissions.delete(toolUseId)
   try { pending.resolve(result) } catch { /* swallow — caller already gave up */ }
   sendEvent('claude:permission-resolved', { sessionId, toolUseId })
@@ -118,7 +125,14 @@ registerHandler('claude.resolveAskUser', async (params) => {
   const session = sessions.get(sessionId)
   if (!session) return false
   const pending = session.pendingAskUser.get(toolUseId)
-  if (!pending) return false
+  // Re-broadcast the dismiss even when the entry is already gone: another
+  // window (host or remote client) may have answered first, and this lets the
+  // still-open prompt on every other window close. Idempotent — the renderer
+  // scopes the dismiss to the matching toolUseId.
+  if (!pending) {
+    sendEvent('claude:ask-user-resolved', { sessionId, toolUseId })
+    return false
+  }
   session.pendingAskUser.delete(toolUseId)
   // AskUserQuestion expects a PermissionResult with behavior 'allow' and
   // updatedInput containing the original questions plus answers. The SDK

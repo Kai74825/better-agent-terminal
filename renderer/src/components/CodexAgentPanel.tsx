@@ -1356,16 +1356,25 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         setAskOtherText({})
       }),
 
-      api.onAskUserResolved((sid: string, _toolUseId: string) => {
+      api.onAskUserResolved((sid: string, toolUseId: string) => {
         if (sid !== sessionId) return
-        setPendingQuestion(null)
-        setAskAnswers({})
-        setAskOtherText({})
+        // Scope the dismiss to the matching toolUseId so an idempotent
+        // re-broadcast (from a second window answering an already-resolved
+        // question) can't close a newer prompt that has since opened.
+        setPendingQuestion(prev => {
+          if (!prev) return null
+          if (toolUseId && prev.toolUseId && prev.toolUseId !== toolUseId) return prev
+          return null
+        })
       }),
 
-      api.onPermissionResolved((sid: string, _toolUseId: string) => {
+      api.onPermissionResolved((sid: string, toolUseId: string) => {
         if (sid !== sessionId) return
-        setPendingPermission(null)
+        setPendingPermission(prev => {
+          if (!prev) return null
+          if (toolUseId && prev.toolUseId && prev.toolUseId !== toolUseId) return prev
+          return null
+        })
       }),
 
       api.onSessionReset((sid: string) => {
