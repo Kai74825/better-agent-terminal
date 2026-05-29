@@ -258,6 +258,10 @@ function processMessage(s, sessionId, msg) {
     sendEvent('claude:status', { sessionId, meta })
     return
   }
+  if (t === 'system' && (msg.subtype === 'task_started' || msg.subtype === 'task_updated')) {
+    handleTaskMessage(s, sessionId, msg)
+    return
+  }
   if (t === 'rate_limit_event') {
     const info = msg.rate_limit_info
     if (info && typeof info.rateLimitType === 'string' && typeof info.resetsAt === 'number') {
@@ -431,6 +435,17 @@ function processMessage(s, sessionId, msg) {
         numTurns: msg.num_turns ?? s.lastUsage?.numTurns ?? 0,
       }
     }
+    if (s.interruptRequested) {
+      // Turn-only interrupt (1× Esc): the SDK ended this turn but the
+      // subprocess + any background workflow stay alive. Report it as an
+      // 'interrupted' turn-end (not 'error') so the renderer keeps the
+      // session and does not mark running tools as failed.
+      clearSessionStream(s)
+      sendEvent('claude:result', { sessionId, result: msg })
+      debugLog('emit-turn-end', sessionId, { reason: 'interrupted' })
+      sendEvent('claude:turn-end', { sessionId, payload: { reason: 'interrupted', sdkSessionId: msg.session_id } })
+      return
+    }
     if (msg.subtype === 'success') {
       clearSessionStream(s)
       if (typeof msg.result === 'string' && msg.result.trim()) {
@@ -478,6 +493,59 @@ function processMessage(s, sessionId, msg) {
   }
 }
 
+// handleTaskMessage: surface background task / dynamic-workflow lifecycle.
+// The SDK emits these as `system` messages with subtype 'task_started' /
+// 'task_updated'. They are best-effort (the SDK does not guarantee them),
+// but when present they let the renderer show that a workflow / subagent is
+// running — which matters for the interrupt UX (a turn-only interrupt keeps
+// these alive; only a hard stop kills them). We mirror them into
+// s.activeTasks and forward a normalized `claude:task` event.
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'killed'])
+
+function handleTaskMessage(s, sessionId, msg) {
+  if (!s.activeTasks) s.activeTasks = new Map()
+  const taskId = typeof msg.task_id === 'string' ? msg.task_id : null
+  if (!taskId) return
+  let task
+  if (msg.subtype === 'task_started') {
+    const taskType = typeof msg.task_type === 'string' ? msg.task_type : null
+    task = {
+      id: taskId,
+      type: taskType,
+      isWorkflow: taskType === 'local_workflow' || taskType === 'workflow',
+      workflowName: typeof msg.workflow_name === 'string' ? msg.workflow_name : null,
+      subagentType: typeof msg.subagent_type === 'string' ? msg.subagent_type : null,
+      description: typeof msg.description === 'string' ? msg.description : '',
+      status: 'running',
+      startedAt: Date.now(),
+    }
+    if (msg.skip_transcript === true) task.skipTranscript = true
+    s.activeTasks.set(taskId, task)
+  } else {
+    // task_updated: merge the wire-safe patch into the tracked task.
+    const prev = s.activeTasks.get(taskId)
+    const patch = msg.patch && typeof msg.patch === 'object' ? msg.patch : {}
+    task = {
+      id: taskId,
+      type: prev?.type ?? null,
+      isWorkflow: prev?.isWorkflow ?? false,
+      workflowName: prev?.workflowName ?? null,
+      subagentType: prev?.subagentType ?? null,
+      description: typeof patch.description === 'string' ? patch.description : (prev?.description ?? ''),
+      status: typeof patch.status === 'string' ? patch.status : (prev?.status ?? 'running'),
+      startedAt: prev?.startedAt ?? Date.now(),
+      ...(typeof patch.error === 'string' ? { error: patch.error } : {}),
+    }
+    if (TERMINAL_TASK_STATUSES.has(task.status)) {
+      s.activeTasks.delete(taskId)
+    } else {
+      s.activeTasks.set(taskId, task)
+    }
+  }
+  debugLog('emit-task', sessionId, { id: taskId, subtype: msg.subtype, status: task.status, isWorkflow: task.isWorkflow })
+  sendEvent('claude:task', { sessionId, task })
+}
+
 async function buildQueryOptions(s, sessionId, prompt) {
   const cwd = (s.options && typeof s.options === 'object' && typeof s.options.cwd === 'string') ? s.options.cwd : ''
   if (!cwd) {
@@ -506,7 +574,7 @@ async function buildQueryOptions(s, sessionId, prompt) {
   const runtimeEffort = runtimeEffortForMode(s.effort)
   if (runtimeEffort) queryOptions.effort = runtimeEffort
   if (isUltracodeMode(s.effort) || s.ultracode === true) {
-    queryOptions.settings = { ultracode: true }
+    queryOptions.settings = { ultracode: true, enableWorkflows: true }
   }
   if (sdkModel) queryOptions.model = sdkModel
   if (claudeCodePath) queryOptions.pathToClaudeCodeExecutable = claudeCodePath
@@ -595,6 +663,11 @@ export function closeLiveQuery(s) {
   }
   s.liveQuery = null
   s.currentQuery = null
+  s.interruptRequested = false
+  // The subprocess is gone, so any background workflows / subagents it was
+  // running are gone too. Drop the tracked tasks; the renderer clears its
+  // mirror on the 'aborted' / 'error' turn-end that accompanies this.
+  if (s.activeTasks) s.activeTasks.clear()
 }
 
 async function performSendMessage(params) {
@@ -667,6 +740,14 @@ async function performSendMessage(params) {
       s.liveQuery = null
       s.currentQuery = null
     }
+    if (s.interruptRequested) {
+      // Turn-only interrupt: processMessage already emitted the
+      // 'interrupted' turn-end. The subprocess + liveQuery survive.
+      s.interruptRequested = false
+      clearRuntimeStatus(s)
+      logInfo(`claude.sendMessage(${sid}): interrupted (turn-only) elapsedMs=${elapsedMs}`)
+      return { ok: true, interrupted: true }
+    }
     if (result?.subtype === 'success') {
       debugLog('push-resolved', sessionId, {
         elapsedMs,
@@ -683,6 +764,15 @@ async function performSendMessage(params) {
     return { ok: false, error: errMsg }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
+    if (s.interruptRequested) {
+      // Turn-only interrupt surfaced as a throw (no result message): emit
+      // the interrupted turn-end here. Subprocess + liveQuery stay alive.
+      s.interruptRequested = false
+      clearRuntimeStatus(s)
+      logInfo(`claude.sendMessage(${sid}): interrupted (turn-only, via throw)`)
+      sendEvent('claude:turn-end', { sessionId, payload: { reason: 'interrupted' } })
+      return { ok: true, interrupted: true }
+    }
     const aborted = s.abortController?.signal.aborted
       || /aborted/i.test(errMsg)
     if (!aborted) {
@@ -740,6 +830,34 @@ registerHandler('claude.sendMessage', async (params) => {
   })
   s.sendQueue = queued
   return queued
+})
+
+// claude.interruptTurn: soft interrupt (1× Esc). Ends the current turn via
+// the SDK's turn-only interrupt() but keeps the subprocess + LiveQuery
+// alive, so background dynamic workflows / subagents are NOT killed and the
+// user can keep typing to continue. Contrast with claude.abortSession
+// (2× Esc / hard stop), which closes the subprocess.
+registerHandler('claude.interruptTurn', async (params) => {
+  const sessionId = params?.sessionId
+  if (typeof sessionId !== 'string' || !sessionId) {
+    throw new Error('claude.interruptTurn: missing sessionId')
+  }
+  // Codex sessions never reach here — the Rust router maps them to the
+  // codex app-server's turn interrupt before calling the sidecar.
+  const s = sessions.get(sessionId)
+  if (!s || !s.liveQuery || !s.streaming) {
+    return { ok: false, error: 'no active turn to interrupt' }
+  }
+  s.interruptRequested = true
+  try {
+    await s.liveQuery.interrupt()
+    return { ok: true }
+  } catch (err) {
+    s.interruptRequested = false
+    const msg = err instanceof Error ? err.message : String(err)
+    logWarn(`claude.interruptTurn(${shortSessionId(sessionId)}): ${msg}`)
+    return { ok: false, error: msg }
+  }
 })
 
 // claude.stopTask: cancel a running sub-agent / Agent tool by its

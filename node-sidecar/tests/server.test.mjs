@@ -1345,6 +1345,84 @@ async function inProcess() {
     mod.sessions.get('stop-1')?.liveQuery?.close()
   }
 
+  // claude.interruptTurn: soft interrupt. Forwards to the generator's
+  // turn-only interrupt() and emits a 'interrupted' turn-end WITHOUT closing
+  // the subprocess, so background workflows survive. Also exercises the
+  // task_started -> claude:task surfacing.
+  const interruptCalls = { interrupt: 0, close: 0 }
+  let releaseInterruptResult
+  let interruptTurnStartedResolve
+  const interruptTurnStarted = new Promise(resolve => { interruptTurnStartedResolve = resolve })
+  const interruptEvents = []
+  const restoreInterruptSend = mod.__setSendEventForTests((name, payload) => {
+    interruptEvents.push({ name, payload })
+  })
+  const fakeSdkInterrupt = {
+    query({ prompt }) {
+      const userIter = prompt[Symbol.asyncIterator]()
+      const gen = (async function*() {
+        // Streaming-input generator: stays alive across turns, awaiting the
+        // next pushed message. A turn-only interrupt must NOT end it.
+        while (true) {
+          const next = await userIter.next()
+          if (next.done) return
+          yield { type: 'system', subtype: 'init', session_id: 'sdk-int' }
+          yield { type: 'system', subtype: 'task_started', task_id: 't1', task_type: 'local_workflow', workflow_name: 'spec', description: 'run spec', session_id: 'sdk-int' }
+          interruptTurnStartedResolve()
+          await new Promise(resolve => { releaseInterruptResult = resolve })
+          yield { type: 'result', subtype: 'error_during_execution', session_id: 'sdk-int', stop_reason: 'interrupted' }
+        }
+      })()
+      gen.interrupt = async () => { interruptCalls.interrupt++; releaseInterruptResult?.() }
+      gen.close = () => { interruptCalls.close++; releaseInterruptResult?.() }
+      return gen
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkInterrupt)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 271, method: 'claude.startSession',
+      params: { sessionId: 'int-1', options: { cwd: '/i' } } })
+    // No active turn → reports failure rather than throwing.
+    const earlyInt = await dispatch({ jsonrpc: '2.0', id: 272, method: 'claude.interruptTurn',
+      params: { sessionId: 'int-1' } })
+    assert.equal(earlyInt.result.ok, false)
+    assert.match(earlyInt.result.error, /no active turn/)
+
+    const intSend = dispatch({ jsonrpc: '2.0', id: 273, method: 'claude.sendMessage',
+      params: { sessionId: 'int-1', prompt: 'hello' } })
+    await interruptTurnStarted
+
+    // task_started must surface as claude:task with workflow metadata.
+    const taskEvent = interruptEvents.find(e => e.name === 'claude:task')
+    assert.ok(taskEvent, 'task_started must emit claude:task')
+    assert.equal(taskEvent.payload.task.isWorkflow, true)
+    assert.equal(taskEvent.payload.task.workflowName, 'spec')
+    assert.equal(taskEvent.payload.task.status, 'running')
+
+    const intReply = await dispatch({ jsonrpc: '2.0', id: 274, method: 'claude.interruptTurn',
+      params: { sessionId: 'int-1' } })
+    assert.equal(intReply.result.ok, true)
+    assert.equal(interruptCalls.interrupt, 1, 'interruptTurn must call generator.interrupt()')
+    await intSend
+
+    // Turn-only interrupt: 'interrupted' turn-end, no claude:error, subprocess intact.
+    const turnEnd = interruptEvents.filter(e => e.name === 'claude:turn-end').pop()
+    assert.equal(turnEnd.payload.payload.reason, 'interrupted')
+    assert.ok(!interruptEvents.some(e => e.name === 'claude:error'),
+      'a turn-only interrupt must not emit claude:error')
+    assert.equal(interruptCalls.close, 0, 'interrupt must not close the subprocess')
+    assert.ok(mod.sessions.get('int-1').liveQuery, 'liveQuery survives a turn-only interrupt')
+
+    // Missing sessionId rejects.
+    const noSid = await dispatch({ jsonrpc: '2.0', id: 275, method: 'claude.interruptTurn',
+      params: {} })
+    assert.match(noSid.error?.message || '', /missing sessionId/)
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreInterruptSend()
+    mod.sessions.get('int-1')?.liveQuery?.close()
+  }
+
   // setPermissionMode + setModel forward to the active query's control
   // methods when one is open. autoCompactWindow closes the current query
   // because it is applied through queryOptions.env on the next turn.
@@ -2407,7 +2485,7 @@ async function inProcess() {
     assert.deepEqual(opts.toolConfig, { askUserQuestion: { previewFormat: 'html' } })
     // Effort + permission + bypass mapping.
     assert.equal(opts.effort, 'xhigh')
-    assert.deepEqual(opts.settings, { ultracode: true })
+    assert.deepEqual(opts.settings, { ultracode: true, enableWorkflows: true })
     assert.equal(opts.permissionMode, 'bypassPermissions')
     assert.equal(opts.allowDangerouslySkipPermissions, true)
     // sdkModelForClaudeSelection maps the preset to the base id.

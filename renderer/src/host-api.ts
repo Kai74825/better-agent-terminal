@@ -349,6 +349,7 @@ const CLAUDE_EVENT_PAYLOAD_KEYS: Record<string, string> = {
   onRateLimit: 'info',
   onWorktreeInfo: 'payload',
   onPromptSuggestion: 'suggestion',
+  onTask: 'task',
 }
 
 const CLAUDE_EVENT_PAYLOAD_FALLBACKS = new Set(['onHistory', 'onResumeLoading'])
@@ -839,6 +840,10 @@ function createTauriHost(): BatAppAPI {
           return (sessionId: string) =>
             getInvoke()<unknown>('claude_abort_session', { sessionId })
         }
+        if (key === 'interruptTurn') {
+          return (sessionId: string) =>
+            getInvoke()<unknown>('claude_interrupt_turn', { sessionId })
+        }
         if (key === 'stopTask') {
           return (sessionId: string, taskId: string) =>
             getInvoke()<boolean>('claude_stop_task', { sessionId, taskId })
@@ -1096,6 +1101,11 @@ function createTauriHost(): BatAppAPI {
           onRateLimit: 'claude:rate-limit',
           onWorktreeInfo: 'claude:worktree-info',
           onPromptSuggestion: 'claude:prompt-suggestion',
+          // Background task / dynamic-workflow lifecycle (best-effort; the
+          // SDK does not guarantee these). Lets the panel show whether a
+          // workflow / subagent is running, which matters for the soft vs
+          // hard interrupt UX.
+          onTask: 'claude:task',
         }
         if (eventListeners[key]) {
           const evName = eventListeners[key]

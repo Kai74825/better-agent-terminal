@@ -2382,6 +2382,31 @@ impl ClaudeRuntimeRouter {
         .await
     }
 
+    async fn interrupt_turn(&self, session_id: String) -> Result<Value, BridgeError> {
+        // Soft interrupt (1× Esc): end the current turn but keep the
+        // subprocess / session alive. For codex this is the app-server's
+        // turn interrupt (abort_session), which already keeps the session;
+        // for the SDK runtime it is the sidecar's turn-only interrupt.
+        if self.codex.is_owned(&session_id) {
+            let codex = self.codex.clone();
+            let codex_app = self.app.clone();
+            let codex_session_id = session_id.clone();
+            return tauri::async_runtime::spawn_blocking(move || {
+                codex.abort_session(&codex_app, codex_session_id)
+            })
+            .await
+            .map_err(|err| BridgeError {
+                message: format!("codex app-server interrupt worker failed: {err}"),
+            })?;
+        }
+        self.sidecar_call(
+            "claude.interruptTurn",
+            json!({ "sessionId": session_id }),
+            DEFAULT_TIMEOUT,
+        )
+        .await
+    }
+
     async fn stop_task(&self, session_id: String, task_id: String) -> Result<bool, BridgeError> {
         if self.codex.is_owned(&session_id) {
             let codex = self.codex.clone();
@@ -3087,6 +3112,35 @@ pub async fn claude_abort_session(
     }
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .abort_session(session_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn claude_interrupt_turn(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    codex_state: State<'_, CodexAppServerState>,
+    session_id: String,
+) -> Result<Value, BridgeError> {
+    // Remote clients keep the existing behavior: the host owns the session,
+    // so a soft interrupt is routed through the same remote action as a
+    // hard abort (no remote regression). Local sessions get the real
+    // turn-only interrupt.
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "agent:abort-session",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
+        .interrupt_turn(session_id)
         .await
 }
 

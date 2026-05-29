@@ -318,7 +318,7 @@ setInterval(() => {}, 1000)
       assert.equal(started.channelStatus, 'connected')
       const startedArgs = JSON.parse(readFileSync(argsOut, 'utf8'))
       assert.equal(startedArgs[startedArgs.indexOf('--effort') + 1], 'xhigh')
-      assert.equal(startedArgs[startedArgs.indexOf('--settings') + 1], '{"ultracode":true}')
+      assert.equal(startedArgs[startedArgs.indexOf('--settings') + 1], '{"ultracode":true,"enableWorkflows":true}')
       delete process.env.FAKE_CLAUDE_ARGS_OUT
 
       let bridgeUrl = ''

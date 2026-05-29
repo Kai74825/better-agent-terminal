@@ -118,6 +118,20 @@ interface SlashCommandInfo {
   argumentHint: string
 }
 
+// Mirror of the sidecar's normalized `claude:task` payload. Best-effort:
+// the SDK does not guarantee task lifecycle messages, so this map may stay
+// empty even when a workflow is running.
+interface ClaudeBackgroundTask {
+  id: string
+  type: string | null
+  isWorkflow: boolean
+  workflowName: string | null
+  subagentType: string | null
+  description: string
+  status: string
+  error?: string
+}
+
 interface AskUserQuestion {
   question: string
   header: string
@@ -247,6 +261,17 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const [isStreaming, setIsStreaming] = useState(false)
   const [runtimeWaitNow, setRuntimeWaitNow] = useState(() => Date.now())
   const [isInterrupted, setIsInterrupted] = useState(false)
+  // Background task / dynamic-workflow tracking (best-effort; the SDK does
+  // not guarantee task lifecycle messages). Drives the "background tasks
+  // still running" hint shown after a soft interrupt.
+  const [backgroundTasks, setBackgroundTasks] = useState<Map<string, ClaudeBackgroundTask>>(new Map())
+  const backgroundTaskList = useMemo(() => Array.from(backgroundTasks.values()), [backgroundTasks])
+  const backgroundWorkflowNames = useMemo(
+    () => backgroundTaskList
+      .filter(task => task.isWorkflow)
+      .map(task => task.workflowName || task.description || 'workflow'),
+    [backgroundTaskList],
+  )
   const lastEscRef = useRef(0)
   const streamingTextStore = useRafBatchedString('')
   const streamingThinkingStore = useRafBatchedString('')
@@ -1068,11 +1093,21 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         if (sid !== sessionId) return
         const reason = payload?.reason
         setIsStreaming(false)
-        setIsInterrupted(false)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
         setStreamingText('')
         setStreamingThinking('')
+        if (reason === 'interrupted') {
+          // Soft interrupt: the turn ended but the subprocess + any
+          // background workflow stay alive. Keep the interrupted state
+          // (so the next Esc hard-stops) and leave running tools as-is.
+          setIsInterrupted(true)
+          return
+        }
+        setIsInterrupted(false)
         if (reason === 'aborted' || reason === 'error') {
+          // Hard stop / failure: the subprocess is gone, so background
+          // tasks are gone too.
+          setBackgroundTasks(prev => (prev.size ? new Map() : prev))
           setPendingPermission(null)
           setPendingQuestion(null)
           setMessages(prev => prev.map(m => {
@@ -1135,6 +1170,21 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         setIsStreaming(false)
         setIsInterrupted(false)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
+      }),
+
+      api.onTask((sid: string, task: unknown) => {
+        if (sid !== sessionId) return
+        const t = task as ClaudeBackgroundTask | null | undefined
+        if (!t || typeof t.id !== 'string') return
+        setBackgroundTasks(prev => {
+          const next = new Map(prev)
+          if (t.status === 'completed' || t.status === 'failed' || t.status === 'killed') {
+            next.delete(t.id)
+          } else {
+            next.set(t.id, t)
+          }
+          return next
+        })
       }),
 
       api.onStream((sid: string, data: unknown) => {
@@ -2369,9 +2419,11 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
-    // abortSession (not stopSession) so the session record + options.cwd
-    // survive — user can keep typing to continue this turn.
-    host.claude.abortSession(sessionId)
+    // Soft interrupt (1× Esc): turn-only interrupt that keeps the subprocess
+    // + LiveQuery alive, so background dynamic workflows / subagents are NOT
+    // killed and the user can keep typing to continue. The hard stop (2× Esc)
+    // still goes through abortSession.
+    host.claude.interruptTurn(sessionId)
     setIsInterrupted(true)
     setStreamingText('')
     setStreamingThinking('')
@@ -4438,6 +4490,19 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         style={pendingPermission || pendingQuestion || showResumeList || showModelList ? { display: 'none' } : undefined}
       >
         {/* Prompt suggestion chip */}
+        {backgroundTaskList.length > 0 && (
+          <div className={`claude-bg-tasks${isInterrupted ? ' interrupted' : ''}`}>
+            <span className="claude-bg-tasks-dot" />
+            <span className="claude-bg-tasks-label">
+              {isInterrupted
+                ? `Turn paused · ${backgroundTaskList.length} background ${backgroundTaskList.length === 1 ? 'task' : 'tasks'} still running`
+                : `${backgroundTaskList.length} background ${backgroundTaskList.length === 1 ? 'task' : 'tasks'} running`}
+            </span>
+            {backgroundWorkflowNames.length > 0 && (
+              <span className="claude-bg-tasks-names">{backgroundWorkflowNames.join(', ')}</span>
+            )}
+          </div>
+        )}
         {promptSuggestion && !isStreaming && (
           <div className="claude-prompt-suggestion" onClick={() => {
             setInputValue(promptSuggestion)

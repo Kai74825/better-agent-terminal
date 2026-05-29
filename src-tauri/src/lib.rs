@@ -240,6 +240,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             claude_cmd::claude_send_message,
             claude_cmd::claude_stop_session,
             claude_cmd::claude_abort_session,
+            claude_cmd::claude_interrupt_turn,
             claude_cmd::claude_stop_task,
             claude_cmd::claude_auth_login,
             claude_cmd::claude_auth_logout,

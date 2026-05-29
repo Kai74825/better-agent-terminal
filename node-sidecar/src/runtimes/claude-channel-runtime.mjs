@@ -209,7 +209,7 @@ function buildClaudeArgs(session, files) {
   const runtimeEffort = runtimeEffortForMode(session.effort)
   if (runtimeEffort) args.push('--effort', runtimeEffort)
   if (isUltracodeMode(session.effort) || session.ultracode === true) {
-    args.push('--settings', JSON.stringify({ ultracode: true }))
+    args.push('--settings', JSON.stringify({ ultracode: true, enableWorkflows: true }))
   }
   if (session.permissionMode) args.push('--permission-mode', session.permissionMode)
   return args
