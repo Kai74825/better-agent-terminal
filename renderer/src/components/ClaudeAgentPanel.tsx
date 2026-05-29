@@ -68,6 +68,7 @@ const getAutoCompactWindowForModel = (model: string | undefined, fallback?: numb
 
 function clearRuntimeStatusMeta(meta: SessionMeta | null): SessionMeta | null {
   if (!meta?.runtimeStatus && !meta?.runtimeMessage && !meta?.runtimeStatusStartedAt) return meta
+  host.debug.log(`[Claude] clearRuntimeStatusMeta: clearing runtimeStatus=${meta?.runtimeStatus ?? 'null'} startedAt=${meta?.runtimeStatusStartedAt ?? 'null'}`)
   return { ...meta, runtimeStatus: null, runtimeMessage: null, runtimeStatusStartedAt: null }
 }
 
@@ -1216,10 +1217,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
       api.onStatus((sid: string, meta: unknown) => {
         if (sid !== sessionId) return
-        if (host.debug.isDebugMode === true) {
-          host.debug.log(`${tag} onStatus sdkSessionId=${((meta as unknown as SessionMeta).sdkSessionId || '').slice(0, 8)}`)
-        }
         const m = meta as unknown as SessionMeta
+        if (m.runtimeStatus) {
+          host.debug.log(`${tag} onStatus runtimeStatus=${m.runtimeStatus} startedAt=${m.runtimeStatusStartedAt ?? 'null'} sdkSessionId=${(m.sdkSessionId || '').slice(0, 8)}`)
+        } else if (host.debug.isDebugMode === true) {
+          host.debug.log(`${tag} onStatus sdkSessionId=${(m.sdkSessionId || '').slice(0, 8)}`)
+        }
         setSessionMeta(m)
         // Track cache efficiency history (only push when values change)
         if (m.inputTokens > 0 && m.cacheReadTokens !== undefined) {

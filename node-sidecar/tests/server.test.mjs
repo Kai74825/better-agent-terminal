@@ -1049,14 +1049,19 @@ async function inProcess() {
       params: { sessionId: 'send-1', prompt: 'hi' } })
     assert.equal(sendReply.result.ok, true)
     // Event sequence: local/remote user echo, request progress statuses,
-    // SDK init status, assistant message, result, turn-end (in order).
+    // SDK init status, the responded-clear status (runtimeStatus cleared the
+    // moment the first assistant frame arrives), assistant message, result,
+    // turn-end (in order).
     const events = captured.filter(c => c.name && c.name.startsWith('claude:'))
     const seq = events.map(e => e.name)
-    assert.deepEqual(seq, ['claude:message', 'claude:status', 'claude:status', 'claude:status', 'claude:message', 'claude:result', 'claude:turn-end'])
+    assert.deepEqual(seq, ['claude:message', 'claude:status', 'claude:status', 'claude:status', 'claude:status', 'claude:message', 'claude:result', 'claude:turn-end'])
     assert.equal(events[0].payload.message.role, 'user')
     assert.equal(events[0].payload.message.content, 'hi')
     assert.equal(events[1].payload.meta.runtimeStatus, 'starting')
     assert.equal(events[2].payload.meta.runtimeStatus, 'waiting_for_api')
+    // First assistant frame clears the runtime status so the renderer's
+    // "waiting/compacting (Ns)" banner and its elapsed counter stop.
+    assert.equal(events[4].payload.meta.runtimeStatus, null)
     // status payload.meta.sdkSessionId
     const sdkStatus = events.find(e => e.name === 'claude:status' && e.payload?.meta?.sdkSessionId === 'sdk-sess-abc')
     assert.ok(sdkStatus, 'expected sdk init claude:status with sdkSessionId')
@@ -1089,17 +1094,17 @@ async function inProcess() {
     }
     // Renderer-facing assistant messages are normalized to the same
     // ClaudeMessage shape used in session state.
-    assert.equal(events[4].payload.message.role, 'assistant')
-    assert.equal(events[4].payload.message.content, 'hello back')
-    assert.ok(events[4].payload.message.id.startsWith('assistant-'))
+    assert.equal(events[5].payload.message.role, 'assistant')
+    assert.equal(events[5].payload.message.content, 'hello back')
+    assert.ok(events[5].payload.message.id.startsWith('assistant-'))
     const sendState = await dispatch({ jsonrpc: '2.0', id: 2211, method: 'claude.getSessionState', params: { sessionId: 'send-1' } })
     assert.equal(sendState.result.messages[0].role, 'user')
     assert.equal(sendState.result.messages[0].content, 'hi')
     assert.equal(sendState.result.messages.some(m => m.role === 'assistant' && m.content === 'hello back'), true)
     assert.equal(sendState.result.isStreaming, false)
     // turn-end carries reason + sdkSessionId
-    assert.equal(events[6].payload.payload.reason, 'completed')
-    assert.equal(events[6].payload.payload.sdkSessionId, 'sdk-sess-abc')
+    assert.equal(events[7].payload.payload.reason, 'completed')
+    assert.equal(events[7].payload.payload.sdkSessionId, 'sdk-sess-abc')
 
     // Second sendMessage must pass `resume: 'sdk-sess-abc'` to the SDK
     // (proving multi-turn context preservation).

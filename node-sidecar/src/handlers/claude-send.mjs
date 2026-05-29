@@ -169,17 +169,36 @@ function emitUserEcho(params, sessionId, prompt, images) {
 }
 
 function setRuntimeStatus(s, sessionId, status, message) {
+  const prev = s.runtimeStatus
   s.runtimeStatus = status
   s.runtimeMessage = message
   s.runtimeStatusStartedAt = Date.now()
+  logInfo(`claude.runtimeStatus(${shortSessionId(sessionId)}): set ${prev || 'none'} -> ${status} ctxTokens=${currentContextTokens(s)} compactWindow=${typeof s?.autoCompactWindow === 'number' ? s.autoCompactWindow : 0}`)
   sendEvent('claude:status', { sessionId, meta: buildSessionMeta(s) })
 }
 
-function clearRuntimeStatus(s) {
+function clearRuntimeStatus(s, sessionId) {
   if (!s) return
+  const prev = s.runtimeStatus
   s.runtimeStatus = null
   s.runtimeMessage = null
   s.runtimeStatusStartedAt = null
+  if (prev) logInfo(`claude.runtimeStatus(${shortSessionId(sessionId)}): clear (was ${prev})`)
+}
+
+// The "starting/waiting_for_api/compacting" status is set once when a turn
+// is pushed, but the API has clearly responded the moment the first stream /
+// assistant / tool frame arrives. Clear it then (and broadcast) so the
+// renderer's elapsed counter stops and the banner hides — otherwise it keeps
+// counting from the turn start for the whole (possibly multi-minute) turn.
+function markRuntimeResponded(s, sessionId) {
+  if (!s?.runtimeStatus) return
+  const prev = s.runtimeStatus
+  s.runtimeStatus = null
+  s.runtimeMessage = null
+  s.runtimeStatusStartedAt = null
+  logInfo(`claude.runtimeStatus(${shortSessionId(sessionId)}): responded, cleared (was ${prev})`)
+  sendEvent('claude:status', { sessionId, meta: buildSessionMeta(s) })
 }
 
 function currentContextTokens(s) {
@@ -189,20 +208,6 @@ function currentContextTokens(s) {
     + (u.output_tokens || 0)
     + (u.cache_creation_input_tokens || 0)
     + (u.cache_read_input_tokens || 0)
-}
-
-function pendingApiStatusForSession(s) {
-  const compactWindow = typeof s?.autoCompactWindow === 'number' ? s.autoCompactWindow : 0
-  if (compactWindow > 0 && currentContextTokens(s) >= compactWindow * 0.9) {
-    return {
-      status: 'compacting',
-      message: 'Compacting context; still waiting for Claude API response.',
-    }
-  }
-  return {
-    status: 'waiting_for_api',
-    message: 'Still waiting for Claude API response.',
-  }
 }
 
 function resultErrorMessage(msg) {
@@ -258,6 +263,24 @@ function processMessage(s, sessionId, msg) {
     sendEvent('claude:status', { sessionId, meta })
     return
   }
+  if (t === 'system' && msg.subtype === 'status') {
+    // Real runtime status from the SDK. We only use it to surface accurate
+    // "compacting" (the token-count heuristic produced false positives near
+    // the auto-compact threshold). 'requesting'/null are left to
+    // markRuntimeResponded so we don't re-show the banner mid-turn.
+    if (!msg.parent_tool_use_id && s.streaming && msg.status === 'compacting') {
+      setRuntimeStatus(s, sessionId, 'compacting', 'Compacting context; still waiting for Claude API response.')
+    }
+    if (msg.compact_result === 'failed') {
+      logWarn(`claude.compact(${shortSessionId(sessionId)}): compaction failed${msg.compact_error ? `: ${msg.compact_error}` : ''}`)
+    }
+    return
+  }
+  if (t === 'system' && msg.subtype === 'compact_boundary') {
+    const cm = msg.compact_metadata || {}
+    logInfo(`claude.compact(${shortSessionId(sessionId)}): boundary trigger=${cm.trigger || 'unknown'} preTokens=${cm.pre_tokens ?? '?'} postTokens=${cm.post_tokens ?? '?'} durationMs=${cm.duration_ms ?? '?'}`)
+    return
+  }
   if (t === 'system' && (msg.subtype === 'task_started' || msg.subtype === 'task_updated')) {
     handleTaskMessage(s, sessionId, msg)
     return
@@ -282,6 +305,7 @@ function processMessage(s, sessionId, msg) {
     return
   }
   if (t === 'stream_event') {
+    markRuntimeResponded(s, sessionId)
     const ev = msg.event
     if (ev && (ev.type === 'message_start' || ev.type === 'message_delta')) {
       const u = ev.usage || ev.message?.usage
@@ -325,6 +349,7 @@ function processMessage(s, sessionId, msg) {
     return
   }
   if (t === 'assistant') {
+    markRuntimeResponded(s, sessionId)
     // Flatten SDK content blocks so the renderer's ClaudeMessage shape
     // (flat `thinking` field) is populated even when streaming partials
     // were not observed (e.g. SDK builds without includePartialMessages,
@@ -392,6 +417,7 @@ function processMessage(s, sessionId, msg) {
     return
   }
   if (t === 'user') {
+    markRuntimeResponded(s, sessionId)
     const blocks = msg.message?.content
     if (Array.isArray(blocks)) {
       for (const block of blocks) {
@@ -691,7 +717,7 @@ async function performSendMessage(params) {
   const sdk = await loadAnthropicSdk()
   if (!sdk || typeof sdk.query !== 'function') {
     logWarn(`claude.sendMessage: SDK unavailable, returning stub for session ${sessionId}`)
-    clearRuntimeStatus(s)
+    clearRuntimeStatus(s, sessionId)
     const message = {
       id: `stub-${Date.now()}`,
       sessionId,
@@ -712,7 +738,7 @@ async function performSendMessage(params) {
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
     logWarn(`claude.sendMessage(${sid}): ensureLiveQuery failed: ${errMsg}`)
-    clearRuntimeStatus(s)
+    clearRuntimeStatus(s, sessionId)
     clearSessionStream(s)
     sendEvent('claude:error', { sessionId, error: errMsg })
     sendEvent('claude:turn-end', { sessionId, payload: { reason: 'error' } })
@@ -721,8 +747,9 @@ async function performSendMessage(params) {
 
   const startedAt = Date.now()
   s.streaming = true
-  const pendingStatus = pendingApiStatusForSession(s)
-  setRuntimeStatus(s, sessionId, pendingStatus.status, pendingStatus.message)
+  // Start as a generic "waiting for API"; the SDK upgrades this to
+  // 'compacting' via a system/status frame only when it actually compacts.
+  setRuntimeStatus(s, sessionId, 'waiting_for_api', 'Still waiting for Claude API response.')
   logInfo(`claude.sendMessage(${sid}): start promptLen=${prompt.length} images=${Array.isArray(params?.images) ? params.images.length : 0} liveClosed=${live.isClosed}`)
   debugLog('push-user-message', sessionId, {
     promptLen: prompt.length,
@@ -744,7 +771,7 @@ async function performSendMessage(params) {
       // Turn-only interrupt: processMessage already emitted the
       // 'interrupted' turn-end. The subprocess + liveQuery survive.
       s.interruptRequested = false
-      clearRuntimeStatus(s)
+      clearRuntimeStatus(s, sessionId)
       logInfo(`claude.sendMessage(${sid}): interrupted (turn-only) elapsedMs=${elapsedMs}`)
       return { ok: true, interrupted: true }
     }
@@ -755,12 +782,12 @@ async function performSendMessage(params) {
         stopReason: result.stop_reason || null,
       })
       logInfo(`claude.sendMessage(${sid}): completed ok elapsedMs=${elapsedMs}`)
-      clearRuntimeStatus(s)
+      clearRuntimeStatus(s, sessionId)
       return { ok: true }
     }
     const errMsg = resultErrorMessage(result)
     logWarn(`claude.sendMessage(${sid}): completed error elapsedMs=${elapsedMs} error=${errMsg}`)
-    clearRuntimeStatus(s)
+    clearRuntimeStatus(s, sessionId)
     return { ok: false, error: errMsg }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err)
@@ -768,7 +795,7 @@ async function performSendMessage(params) {
       // Turn-only interrupt surfaced as a throw (no result message): emit
       // the interrupted turn-end here. Subprocess + liveQuery stay alive.
       s.interruptRequested = false
-      clearRuntimeStatus(s)
+      clearRuntimeStatus(s, sessionId)
       logInfo(`claude.sendMessage(${sid}): interrupted (turn-only, via throw)`)
       sendEvent('claude:turn-end', { sessionId, payload: { reason: 'interrupted' } })
       return { ok: true, interrupted: true }
@@ -787,7 +814,7 @@ async function performSendMessage(params) {
       s.liveQuery = null
       s.currentQuery = null
     }
-    clearRuntimeStatus(s)
+    clearRuntimeStatus(s, sessionId)
     return { ok: !aborted, error: aborted ? undefined : errMsg }
   } finally {
     s.streaming = false
