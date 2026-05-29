@@ -16,7 +16,7 @@
 
 use crate::account_store;
 use crate::app_data;
-use crate::codex_app_server::{should_handle_codex, CodexAppServerState};
+use crate::codex_app_server::{active_codex_home, should_handle_codex, CodexAppServerState};
 use crate::commands::app as app_cmd;
 use crate::commands::notification as notification_cmd;
 use crate::commands::profile as profile_cmd;
@@ -1343,7 +1343,10 @@ pub(crate) fn list_sessions_native(cwd: &str, agent_kind: Option<&str>) -> Vec<S
         if cwd.is_empty() {
             return Vec::new();
         }
-        return list_codex_sessions_in_root(&home.join(".codex").join("sessions"), cwd);
+        let codex_home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"));
+        return list_codex_sessions_in_root(&codex_home.join("sessions"), cwd);
     }
     list_claude_sessions_in_projects(cwd, &home.join(".claude").join("projects"))
 }
@@ -3296,6 +3299,33 @@ pub async fn claude_account_mark_warning_shown(
     Ok(Value::Bool(true))
 }
 
+#[tauri::command]
+pub async fn codex_account_info(
+    app: AppHandle,
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    Ok(codex.account_info(&app))
+}
+
+#[tauri::command]
+pub async fn codex_account_list(
+    app: AppHandle,
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    Ok(codex.account_list(&app))
+}
+
+#[tauri::command]
+pub async fn codex_account_switch(
+    app: AppHandle,
+    codex: State<'_, CodexAppServerState>,
+    codex_home: String,
+) -> Result<Value, BridgeError> {
+    codex
+        .switch_account(&app, codex_home)
+        .map_err(|message| BridgeError { message })
+}
+
 // --- read-only metadata ---------------------------------------------------
 
 #[tauri::command]
@@ -3377,6 +3407,12 @@ pub async fn claude_list_sessions(
     .await
     {
         return result;
+    }
+    if agent_kind.as_deref() == Some("codex") {
+        let sessions = active_codex_home(&app)
+            .map(|codex_home| list_codex_sessions_in_root(&codex_home.join("sessions"), &cwd))
+            .unwrap_or_default();
+        return Ok(serde_json::to_value(sessions).unwrap_or_else(|_| json!([])));
     }
     Ok(
         serde_json::to_value(list_sessions_native(&cwd, agent_kind.as_deref()))

@@ -21,6 +21,22 @@ const GitHubPanel = lazy(() => import('./GitHubPanel').then(m => ({ default: m.G
 type WorkspaceTab = 'terminal' | 'files' | 'git' | 'github'
 const TAB_KEY = 'better-terminal-workspace-tab'
 
+type WorkspaceAccountChip = {
+  kind: 'claude' | 'codex'
+  label: string
+  title: string
+  accounts?: CodexAccountEntry[]
+}
+
+type CodexAccountEntry = {
+  id: string
+  label?: string
+  email?: string
+  codexHome: string
+  authenticated?: boolean
+  active?: boolean
+}
+
 function loadWorkspaceTab(): WorkspaceTab {
   try {
     const saved = localStorage.getItem(TAB_KEY)
@@ -167,6 +183,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const [detectedProcfiles, setDetectedProcfiles] = useState<string[]>([])
   const [showProcfilePicker, setShowProcfilePicker] = useState(false)
   const [showQuickPick, setShowQuickPick] = useState(false)
+  const [accountChip, setAccountChip] = useState<WorkspaceAccountChip | null>(null)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const lastRenderSummaryRef = useRef<string>('')
   // Preset IDs the host knows how to start. `null` until fetched — fall back
   // to the local list so menus aren't empty during the brief load window.
@@ -316,6 +334,74 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const regularTerminals = terminals.filter(t => !t.agentPreset || t.agentPreset === 'none')
   const focusedTerminal = terminals.find(t => t.id === focusedTerminalId)
   const isAgentFocused = focusedTerminal?.agentPreset && focusedTerminal.agentPreset !== 'none'
+  const accountTerminal = focusedTerminal || agentTerminal || null
+
+  const refreshAccountChip = useCallback(async () => {
+    const preset = accountTerminal?.agentPreset
+    setAccountMenuOpen(false)
+    if (!preset) {
+      setAccountChip(null)
+      return
+    }
+    if (preset === 'codex-agent' || preset === 'codex-agent-worktree') {
+      try {
+        const result = await host.codex.accountList() as { accounts?: CodexAccountEntry[]; activeCodexHome?: string }
+        const accounts = result.accounts || []
+        const active = accounts.find(account => account.active)
+          || accounts.find(account => account.codexHome === result.activeCodexHome)
+        const label = active?.email || active?.label || 'Codex'
+        setAccountChip({
+          kind: 'codex',
+          label,
+          title: active?.codexHome ? `CODEX_HOME: ${active.codexHome}` : 'Codex account',
+          accounts,
+        })
+      } catch (error) {
+        void host.debug.log(`[WorkspaceView] failed to load Codex account info: ${errorMessage(error)}`)
+        setAccountChip({ kind: 'codex', label: 'Codex', title: 'Codex account' })
+      }
+      return
+    }
+    if (preset === 'claude-code' || preset === 'claude-code-v2' || preset === 'claude-code-worktree' || preset === 'claude-channel') {
+      try {
+        const info = await host.claude.getAccountInfo(accountTerminal.id) as { email?: string; organization?: string; subscriptionType?: string } | null
+        const label = info?.email || info?.organization || 'Claude'
+        setAccountChip({
+          kind: 'claude',
+          label,
+          title: info?.email ? `${info.email} (${info.subscriptionType || 'unknown'})` : 'Claude account',
+        })
+      } catch (error) {
+        void host.debug.log(`[WorkspaceView] failed to load Claude account info: ${errorMessage(error)}`)
+        setAccountChip({ kind: 'claude', label: 'Claude', title: 'Claude account' })
+      }
+      return
+    }
+    setAccountChip(null)
+  }, [accountTerminal?.id, accountTerminal?.agentPreset])
+
+  useEffect(() => {
+    if (!isActive) return
+    void refreshAccountChip()
+    const refresh = () => { void refreshAccountChip() }
+    window.addEventListener('claude-account-switched', refresh)
+    window.addEventListener('codex-account-switched', refresh)
+    return () => {
+      window.removeEventListener('claude-account-switched', refresh)
+      window.removeEventListener('codex-account-switched', refresh)
+    }
+  }, [isActive, refreshAccountChip])
+
+  const handleCodexAccountSwitch = useCallback(async (account: CodexAccountEntry) => {
+    if (account.active) {
+      setAccountMenuOpen(false)
+      return
+    }
+    const result = await host.codex.accountSwitch(account.codexHome) as { success?: boolean }
+    if (result?.success === false) return
+    window.dispatchEvent(new CustomEvent('codex-account-switched', { detail: { codexHome: account.codexHome } }))
+    await refreshAccountChip()
+  }, [refreshAccountChip])
 
   // Initialize terminals when workspace becomes active
   // If terminals were restored from a saved profile, start their PTY/agent processes
@@ -778,6 +864,38 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           >
             {t('workspace.github')}
           </button>
+        )}
+        <div className="workspace-tab-spacer" />
+        {accountChip && (
+          <div className="workspace-account-chip-wrap">
+            <button
+              className={`workspace-account-chip workspace-account-chip-${accountChip.kind}`}
+              title={accountChip.title}
+              onClick={() => {
+                if (accountChip.kind === 'codex' && (accountChip.accounts?.length || 0) > 0) {
+                  setAccountMenuOpen(open => !open)
+                }
+              }}
+            >
+              <span className="workspace-account-kind">{accountChip.kind}</span>
+              <span className="workspace-account-label">{accountChip.label}</span>
+            </button>
+            {accountMenuOpen && accountChip.kind === 'codex' && accountChip.accounts && (
+              <div className="workspace-account-menu">
+                {accountChip.accounts.map(account => (
+                  <button
+                    key={account.codexHome}
+                    className={`workspace-account-menu-item${account.active ? ' active' : ''}`}
+                    onClick={() => { void handleCodexAccountSwitch(account) }}
+                    title={account.codexHome}
+                  >
+                    <span className="workspace-account-menu-label">{account.email || account.label || account.codexHome}</span>
+                    <span className="workspace-account-menu-path">{account.codexHome}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 

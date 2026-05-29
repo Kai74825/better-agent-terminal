@@ -735,6 +735,12 @@ function createTauriHost(): BatAppAPI {
           { cwd, number, body },
         ),
     },
+    codex: {
+      accountInfo: () => getInvoke()<unknown>('codex_account_info'),
+      accountList: () => getInvoke()<unknown>('codex_account_list'),
+      accountSwitch: (codexHome: string) =>
+        getInvoke()<unknown>('codex_account_switch', { codexHome }),
+    },
     git: {
       // Read-only git wrappers — see src-tauri/src/commands/git.rs.
       // The Rust side returns safe defaults (None / empty Vec / empty String)

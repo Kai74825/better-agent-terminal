@@ -12,6 +12,7 @@ use crate::event_hub::publish_runtime_event;
 use crate::sidecar::BridgeError;
 use crate::subprocess::hide_console_window;
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -32,6 +33,7 @@ const DEFAULT_CODEX_CONTEXT_WINDOW: u64 = 1_000_000;
 const DEFAULT_CODEX_REASONING_SUMMARY: &str = "auto";
 const COMMAND_OUTPUT_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 const CODEX_RUNTIME_VERSION: &str = "0.133.0";
+const CODEX_ACCOUNT_STATE_FILE: &str = "codex-account-state.json";
 static CODEX_TEMP_IMAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 type ReplySender = Sender<Result<Value, String>>;
@@ -69,6 +71,12 @@ struct CodexConnection {
     pending: Arc<PendingTable>,
     child: Mutex<Child>,
     pid: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexAccountState {
+    active_codex_home: Option<String>,
 }
 
 impl CodexConnection {
@@ -553,6 +561,138 @@ fn resolve_codex_binary(app: &AppHandle) -> CodexBinary {
     CodexBinary::Wrapper("codex".to_string())
 }
 
+fn home_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().home_dir().ok()
+}
+
+fn default_codex_home(app: &AppHandle) -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home_dir(app).map(|home| home.join(".codex")))
+}
+
+fn codex_account_state_path(app: &AppHandle) -> Option<PathBuf> {
+    app_data::app_data_dir_opt(app).map(|dir| dir.join(CODEX_ACCOUNT_STATE_FILE))
+}
+
+fn read_codex_account_state(app: &AppHandle) -> CodexAccountState {
+    let Some(path) = codex_account_state_path(app) else {
+        return CodexAccountState::default();
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<CodexAccountState>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_codex_account_state(app: &AppHandle, state: &CodexAccountState) -> Result<(), String> {
+    let path = codex_account_state_path(app)
+        .ok_or_else(|| "could not resolve app data dir for Codex account state".to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("could not create Codex account state dir: {err}"))?;
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(state)
+            .map_err(|err| format!("could not encode Codex account state: {err}"))?,
+    )
+    .map_err(|err| format!("could not write Codex account state: {err}"))
+}
+
+pub(crate) fn active_codex_home(app: &AppHandle) -> Option<PathBuf> {
+    read_codex_account_state(app)
+        .active_codex_home
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| default_codex_home(app))
+}
+
+fn codex_home_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Codex")
+        .to_string()
+}
+
+fn codex_auth_summary(codex_home: &Path) -> (Option<String>, Option<String>, bool) {
+    let raw = fs::read_to_string(codex_home.join("auth.json")).ok();
+    let Some(raw) = raw else {
+        return (None, None, false);
+    };
+    let parsed = serde_json::from_str::<Value>(&raw).ok();
+    let email = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("email")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/profile/email").and_then(Value::as_str))
+                .or_else(|| value.pointer("/account/email").and_then(Value::as_str))
+                .or_else(|| value.pointer("/tokens/email").and_then(Value::as_str))
+        })
+        .map(str::to_string);
+    let account_id = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("account_id")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/tokens/account_id").and_then(Value::as_str))
+                .or_else(|| value.pointer("/account/id").and_then(Value::as_str))
+        })
+        .map(str::to_string);
+    (email, account_id, true)
+}
+
+fn codex_account_info_value(app: &AppHandle, codex_home: PathBuf, active: bool) -> Value {
+    let (email, account_id, authenticated) = codex_auth_summary(&codex_home);
+    let label = email
+        .clone()
+        .unwrap_or_else(|| codex_home_label(&codex_home));
+    json!({
+        "id": codex_home.to_string_lossy(),
+        "label": label,
+        "email": email,
+        "accountId": account_id,
+        "codexHome": codex_home.to_string_lossy(),
+        "authenticated": authenticated,
+        "active": active,
+        "isDefault": default_codex_home(app).as_deref() == Some(codex_home.as_path()),
+    })
+}
+
+fn discover_codex_homes(app: &AppHandle) -> Vec<PathBuf> {
+    let mut homes = Vec::new();
+    let mut push_home = |path: Option<PathBuf>| {
+        if let Some(path) = path {
+            if !homes.iter().any(|existing| existing == &path) {
+                homes.push(path);
+            }
+        }
+    };
+
+    push_home(active_codex_home(app));
+    push_home(default_codex_home(app));
+
+    if let Some(home) = home_dir(app) {
+        if let Ok(entries) = fs::read_dir(home) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if name == ".codex" || name.starts_with(".codex-") {
+                    push_home(Some(path));
+                }
+            }
+        }
+    }
+
+    homes
+}
+
 fn build_codex_command(app: &AppHandle) -> Command {
     let mut codex_path_dir: Option<PathBuf> = None;
     let mut command = match resolve_codex_binary(app) {
@@ -579,6 +719,9 @@ fn build_codex_command(app: &AppHandle) -> Command {
     };
     if let Some(api_key) = codex_auth::configured_openai_key_for_runtime(app) {
         command.env("OPENAI_API_KEY", api_key);
+    }
+    if let Some(codex_home) = active_codex_home(app) {
+        command.env("CODEX_HOME", codex_home);
     }
     // The `codex` CLI is a Node script (`#!/usr/bin/env node`) and codex
     // itself shells out to `codex exec` subprocesses. When the .app is
@@ -1114,10 +1257,7 @@ fn turn_error_message_from_value(value: &Value) -> Option<String> {
 }
 
 fn codex_sessions_root(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .home_dir()
-        .ok()
-        .map(|home| home.join(".codex").join("sessions"))
+    active_codex_home(app).map(|home| home.join("sessions"))
 }
 
 fn read_session_meta_id(path: &Path) -> Option<String> {
@@ -1678,6 +1818,168 @@ impl CodexAppServerState {
 
     pub fn supported_approval_policies(&self) -> Value {
         json!(["untrusted", "on-request", "never"])
+    }
+
+    pub fn account_info(&self, app: &AppHandle) -> Value {
+        active_codex_home(app)
+            .map(|home| codex_account_info_value(app, home, true))
+            .unwrap_or_else(|| {
+                json!({
+                    "label": "Codex",
+                    "authenticated": false,
+                    "active": true,
+                })
+            })
+    }
+
+    pub fn account_list(&self, app: &AppHandle) -> Value {
+        let active = active_codex_home(app);
+        let accounts = discover_codex_homes(app)
+            .into_iter()
+            .map(|home| {
+                let is_active = active.as_deref() == Some(home.as_path());
+                codex_account_info_value(app, home, is_active)
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "accounts": accounts,
+            "activeCodexHome": active.map(|path| path.to_string_lossy().to_string()),
+        })
+    }
+
+    pub fn switch_account(&self, app: &AppHandle, codex_home: String) -> Result<Value, String> {
+        let trimmed = codex_home.trim();
+        if trimmed.is_empty() {
+            return Err("Codex home path is required".to_string());
+        }
+        let path = PathBuf::from(trimmed);
+        if !path.is_absolute() {
+            return Err("Codex home path must be absolute".to_string());
+        }
+        fs::create_dir_all(&path).map_err(|err| format!("could not create CODEX_HOME: {err}"))?;
+        write_codex_account_state(
+            app,
+            &CodexAccountState {
+                active_codex_home: Some(path.to_string_lossy().to_string()),
+            },
+        )?;
+
+        let old_connection = self
+            .inner
+            .connection
+            .lock()
+            .map_err(|_| "codex connection lock poisoned".to_string())?
+            .take();
+        drop(old_connection);
+        self.inner
+            .thread_to_session
+            .lock()
+            .map_err(|_| "codex thread map lock poisoned".to_string())?
+            .clear();
+
+        let mut updates = Vec::new();
+        {
+            let mut sessions = self
+                .inner
+                .sessions
+                .lock()
+                .map_err(|_| "codex sessions lock poisoned".to_string())?;
+            for (session_id, session) in sessions.iter_mut() {
+                session.thread_id = None;
+                session.active_turn_id = None;
+                session.active_turn_key = None;
+                session.is_running = false;
+                session.is_resting = false;
+                session.abort_requested = false;
+                set_runtime_status(
+                    session,
+                    "starting",
+                    "Codex account switched. The next message will start a new Codex thread.",
+                );
+                updates.push((session_id.clone(), session.metadata()));
+            }
+        }
+        for (session_id, meta) in updates {
+            emit(app, "claude:status", &session_id, "meta", meta);
+        }
+        app_cmd::log_tauri(
+            app,
+            &format!(
+                "[codex-account] switched CODEX_HOME={}",
+                path.to_string_lossy()
+            ),
+        );
+
+        Ok(json!({
+            "success": true,
+            "account": codex_account_info_value(app, path, true),
+        }))
+    }
+
+    fn ensure_thread_for_session(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+    ) -> Result<String, BridgeError> {
+        let (model, cwd, approval_policy, sandbox_mode, existing_thread) = {
+            let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            (
+                session.model.clone(),
+                session.cwd.clone(),
+                session.approval_policy.clone(),
+                session.sandbox_mode.clone(),
+                session.thread_id.clone(),
+            )
+        };
+        if let Some(thread_id) = existing_thread {
+            return Ok(thread_id);
+        }
+
+        let connection = self.ensure_connection(app).map_err(bridge_error)?;
+        let response = connection
+            .request_logged(
+                app,
+                session_id,
+                "thread/start",
+                json!({
+                    "model": model,
+                    "cwd": cwd,
+                    "approvalPolicy": approval_policy,
+                    "sandbox": app_server_sandbox(&sandbox_mode),
+                    "serviceName": "better_agent_terminal",
+                }),
+                REQUEST_TIMEOUT,
+            )
+            .map_err(bridge_error)?;
+        let thread_id = response
+            .get("thread")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+            .or_else(|| response.get("threadId").and_then(Value::as_str))
+            .ok_or_else(|| bridge_error("codex app-server thread/start returned no thread id"))?
+            .to_string();
+        {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            if let Some(session) = sessions.get_mut(session_id) {
+                session.thread_id = Some(thread_id.clone());
+                clear_runtime_status(session);
+                emit(app, "claude:status", session_id, "meta", session.metadata());
+            }
+        }
+        self.inner
+            .thread_to_session
+            .lock()
+            .expect("codex thread map lock")
+            .insert(thread_id.clone(), session_id.to_string());
+        log_codex(
+            app,
+            session_id,
+            format!("started new thread after Codex account switch thread={thread_id}"),
+        );
+        Ok(thread_id)
     }
 
     fn session_id_for_notification(&self, params: &Value) -> Option<String> {
@@ -2376,6 +2678,10 @@ impl CodexAppServerState {
                 return Ok(json!({ "ok": false, "error": err }));
             }
         };
+        if let Err(err) = self.ensure_thread_for_session(app, &session_id) {
+            cleanup_temp_images(temp_image_paths);
+            return Err(err);
+        }
         let (thread_id, model, effort, cwd, approval_policy, sandbox_mode, interrupted_turn) = {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             let Some(session) = sessions.get_mut(&session_id) else {
