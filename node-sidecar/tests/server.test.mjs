@@ -2725,8 +2725,14 @@ async function inProcess() {
     assert.deepEqual(askEvents[0].payload.data.questions, [{ id: 'q1', text: 'pick' }])
     await dispatch({ jsonrpc: '2.0', id: 292, method: 'claude.resolveAskUser',
       params: { sessionId: 'ask-1', toolUseId: 'ask-tool', answers: { q1: 'option-A' } } })
-    const answers = await askPromise
-    assert.deepEqual(answers, { q1: 'option-A' })
+    // AskUserQuestion resolves the canUseTool promise with a PermissionResult
+    // (behavior 'allow' + updatedInput preserving the questions plus answers),
+    // not the bare answers map — the SDK validates this shape.
+    const askResult = await askPromise
+    assert.deepEqual(askResult, {
+      behavior: 'allow',
+      updatedInput: { questions: [{ id: 'q1', text: 'pick' }], answers: { q1: 'option-A' } },
+    })
     const resolved = askCaptured.filter(e => e.name === 'claude:ask-user-resolved')
     assert.equal(resolved.length, 1)
     assert.equal(resolved[0].payload.toolUseId, 'ask-tool')

@@ -120,7 +120,17 @@ registerHandler('claude.resolveAskUser', async (params) => {
   const pending = session.pendingAskUser.get(toolUseId)
   if (!pending) return false
   session.pendingAskUser.delete(toolUseId)
-  try { pending.resolve(answers) } catch { /* swallow */ }
+  // AskUserQuestion expects a PermissionResult with behavior 'allow' and
+  // updatedInput containing the original questions plus answers. The SDK
+  // uses updatedInput as the tool's effective input, so dropping `questions`
+  // makes the built-in tool implementation crash, and resolving with the bare
+  // answers map fails the SDK's PermissionResult schema validation.
+  try {
+    pending.resolve({
+      behavior: 'allow',
+      updatedInput: { ...(pending.input ?? {}), answers },
+    })
+  } catch { /* swallow */ }
   sendEvent('claude:ask-user-resolved', { sessionId, toolUseId })
   return true
 })
