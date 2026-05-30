@@ -32,6 +32,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -45,6 +46,7 @@ const DEFAULT_REMOTE_PORT: u16 = 9876;
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_INVOKE_TIMEOUT: Duration = Duration::from_secs(300);
 const REMOTE_EVENT_BUFFER_FLUSH: Duration = Duration::from_secs(1);
+const RECENT_CLIENT_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 const TOKEN_FILE: &str = "server-token.enc.json";
 const LEGACY_TOKEN_FILE: &str = "server-token.json";
 const CERT_FILE: &str = "server-cert.enc.json";
@@ -54,9 +56,24 @@ const CERT_FILE: &str = "server-cert.enc.json";
 pub struct RemoteClientInfo {
     pub label: String,
     pub window_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_info: Option<RemoteClientDeviceInfo>,
     pub connected_at: u64,
     pub protocol: String,
     pub compression: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteClientDeviceInfo {
+    pub app_name: Option<String>,
+    pub app_version: Option<String>,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+    pub label: Option<String>,
+    pub model: Option<String>,
+    pub os_version: Option<String>,
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,11 +87,15 @@ pub struct RemoteConnectionInfo {
 #[derive(Debug)]
 struct RunningServer {
     port: u16,
-    token: String,
+    token: Arc<Mutex<String>>,
     fingerprint: String,
     bind_interface: String,
     bound_host: String,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
+    // Clients that disconnected within the last 24h (RECENT_CLIENT_TTL_MS), so
+    // the Settings panel can still show who was recently connected (e.g. after
+    // a token rotation kicks everyone). Pruned by TTL on read/record.
+    recent: Arc<Mutex<Vec<RecentClient>>>,
     event_buffer: Arc<Mutex<RemoteEventBuffer>>,
     stop: mpsc::Sender<()>,
     thread: Option<thread::JoinHandle<()>>,
@@ -85,6 +106,15 @@ struct RemoteClientRecord {
     id: String,
     info: RemoteClientInfo,
     tx: mpsc::Sender<Value>,
+    // Set true to force this client's connection thread to close on its next
+    // poll iteration. Used by token rotation to revoke existing sessions.
+    close: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone)]
+struct RecentClient {
+    info: RemoteClientInfo,
+    disconnected_at: u64,
 }
 
 #[derive(Debug, Default)]
@@ -158,11 +188,14 @@ impl RustRemoteServerState {
             .map_err(|err| format!("remote server local_addr failed: {err}"))?
             .port();
 
+        let token = Arc::new(Mutex::new(token));
         let clients = Arc::new(Mutex::new(Vec::new()));
+        let recent = Arc::new(Mutex::new(Vec::new()));
         let event_buffer = Arc::new(Mutex::new(RemoteEventBuffer::default()));
         let (stop_tx, stop_rx) = mpsc::channel();
         let thread_clients = Arc::clone(&clients);
-        let thread_token = token.clone();
+        let thread_recent = Arc::clone(&recent);
+        let thread_token = Arc::clone(&token);
         let thread_app = app.clone();
         let thread_sidecar = sidecar.clone();
         let log_bound_host = bound_host.clone();
@@ -186,6 +219,7 @@ impl RustRemoteServerState {
                 thread_app,
                 thread_sidecar,
                 thread_clients,
+                thread_recent,
                 stop_rx,
             );
         });
@@ -197,6 +231,7 @@ impl RustRemoteServerState {
             bind_interface,
             bound_host,
             clients,
+            recent,
             event_buffer,
             stop: stop_tx,
             thread: Some(handle),
@@ -227,7 +262,8 @@ impl RustRemoteServerState {
         let Some(running) = guard.as_ref() else {
             return json!({ "running": false, "port": null, "fingerprint": null, "bindInterface": null, "boundHost": null, "clients": [] });
         };
-        let clients = running
+        let now = unix_ms();
+        let live = running
             .clients
             .lock()
             .map(|clients| {
@@ -237,6 +273,33 @@ impl RustRemoteServerState {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let live_keys: std::collections::HashSet<(Option<String>, String)> = live
+            .iter()
+            .map(|info| (info.window_id.clone(), info.label.clone()))
+            .collect();
+        let mut clients: Vec<Value> = live
+            .iter()
+            .map(|info| client_status_json(info, true, None))
+            .collect();
+        if let Ok(mut recent) = running.recent.lock() {
+            recent
+                .retain(|entry| now.saturating_sub(entry.disconnected_at) <= RECENT_CLIENT_TTL_MS);
+            let mut seen: std::collections::HashSet<(Option<String>, String)> =
+                std::collections::HashSet::new();
+            // Newest disconnect first; skip clients that reconnected (live) or
+            // duplicates of the same window/label.
+            for entry in recent.iter().rev() {
+                let key = (entry.info.window_id.clone(), entry.info.label.clone());
+                if live_keys.contains(&key) || !seen.insert(key) {
+                    continue;
+                }
+                clients.push(client_status_json(
+                    &entry.info,
+                    false,
+                    Some(entry.disconnected_at),
+                ));
+            }
+        }
         json!({
             "running": true,
             "port": running.port,
@@ -250,12 +313,57 @@ impl RustRemoteServerState {
     pub fn connection_info(&self) -> Option<RemoteConnectionInfo> {
         let guard = self.inner.lock().ok()?;
         let running = guard.as_ref()?;
+        let token = running.token.lock().ok()?.clone();
         Some(RemoteConnectionInfo {
             port: running.port,
-            token: running.token.clone(),
+            token,
             fingerprint: running.fingerprint.clone(),
             bound_host: running.bound_host.clone(),
         })
+    }
+
+    // Generate a fresh token, persist it, and revoke every currently
+    // connected client so the old token stops working everywhere. New
+    // connections must present the new token at auth. Returns the same
+    // shape as start_result so the renderer can rebuild the URL/QR.
+    pub fn rotate_token(&self, app: &AppHandle) -> Result<Value, String> {
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| "remote server lock poisoned".to_string())?;
+        let Some(running) = guard.as_ref() else {
+            return Err("remote server is not running".to_string());
+        };
+        let new_token = generate_token();
+        {
+            let mut token = running
+                .token
+                .lock()
+                .map_err(|_| "remote token lock poisoned".to_string())?;
+            *token = new_token.clone();
+        }
+        let data_dir = crate::app_data::app_data_dir(app)?;
+        persist_token(&data_dir, &new_token);
+        let now = unix_ms();
+        let mut revoked: Vec<RemoteClientInfo> = Vec::new();
+        if let Ok(mut clients) = running.clients.lock() {
+            for client in clients.iter() {
+                client.close.store(true, Ordering::Relaxed);
+                revoked.push(client.info.clone());
+            }
+            clients.clear();
+        }
+        for info in revoked {
+            record_recent_client(&running.recent, info, now);
+        }
+        remote_debug_log(app, "token rotated; existing clients revoked");
+        Ok(json!({
+            "port": running.port,
+            "token": new_token,
+            "fingerprint": running.fingerprint,
+            "bindInterface": running.bind_interface,
+            "boundHost": running.bound_host,
+        }))
     }
 
     pub fn broadcast_event(&self, channel: &str, params: &Value) {
@@ -290,6 +398,31 @@ impl RustRemoteServerState {
 impl Drop for RustRemoteServerState {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+fn client_status_json(
+    info: &RemoteClientInfo,
+    connected: bool,
+    disconnected_at: Option<u64>,
+) -> Value {
+    let mut value = serde_json::to_value(info).unwrap_or_else(|_| json!({}));
+    if let Value::Object(map) = &mut value {
+        map.insert("connected".to_string(), json!(connected));
+        if let Some(ts) = disconnected_at {
+            map.insert("disconnectedAt".to_string(), json!(ts));
+        }
+    }
+    value
+}
+
+fn record_recent_client(recent: &Arc<Mutex<Vec<RecentClient>>>, info: RemoteClientInfo, now: u64) {
+    if let Ok(mut recent) = recent.lock() {
+        recent.retain(|entry| now.saturating_sub(entry.disconnected_at) <= RECENT_CLIENT_TTL_MS);
+        recent.push(RecentClient {
+            info,
+            disconnected_at: now,
+        });
     }
 }
 
@@ -599,9 +732,14 @@ fn generate_token() -> String {
 }
 
 fn start_result(running: &RunningServer) -> Value {
+    let token = running
+        .token
+        .lock()
+        .map(|token| token.clone())
+        .unwrap_or_default();
     json!({
         "port": running.port,
-        "token": running.token,
+        "token": token,
         "fingerprint": running.fingerprint,
         "bindInterface": running.bind_interface,
         "boundHost": running.bound_host,
@@ -611,10 +749,11 @@ fn start_result(running: &RunningServer) -> Value {
 fn run_accept_loop(
     listener: TcpListener,
     config: Arc<ServerConfig>,
-    token: String,
+    token: Arc<Mutex<String>>,
     app: AppHandle,
     sidecar: SidecarState,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
+    recent: Arc<Mutex<Vec<RecentClient>>>,
     stop_rx: mpsc::Receiver<()>,
 ) {
     loop {
@@ -624,10 +763,11 @@ fn run_accept_loop(
         match listener.accept() {
             Ok((stream, addr)) => {
                 let config = Arc::clone(&config);
-                let token = token.clone();
+                let token = Arc::clone(&token);
                 let app = app.clone();
                 let sidecar = sidecar.clone();
                 let clients = Arc::clone(&clients);
+                let recent = Arc::clone(&recent);
                 let peer = addr.to_string();
                 remote_debug_log(&app, format!("tcp accepted peer={peer}"));
                 thread::spawn(move || {
@@ -638,6 +778,7 @@ fn run_accept_loop(
                         app.clone(),
                         sidecar,
                         clients,
+                        recent,
                         peer.clone(),
                     ) {
                         remote_debug_log(&app, format!("client closed peer={peer} error={err}"));
@@ -655,10 +796,11 @@ fn run_accept_loop(
 fn handle_client(
     stream: TcpStream,
     config: Arc<ServerConfig>,
-    token: String,
+    token: Arc<Mutex<String>>,
     app: AppHandle,
     sidecar: SidecarState,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
+    recent: Arc<Mutex<Vec<RecentClient>>>,
     peer: String,
 ) -> Result<(), String> {
     stream
@@ -683,8 +825,13 @@ fn handle_client(
     let mut client_protocol = RemoteProtocol::LegacyV1;
     let mut client_compression = RemoteCompression::None;
     let (out_tx, out_rx) = mpsc::channel::<Value>();
+    let close = Arc::new(AtomicBool::new(false));
 
     loop {
+        if close.load(Ordering::Relaxed) {
+            remote_debug_log(&app, format!("client revoked peer={peer}"));
+            break;
+        }
         while let Ok(frame) = out_rx.try_recv() {
             send_frame(&mut ws, frame, client_compression)?;
         }
@@ -721,7 +868,8 @@ fn handle_client(
         let id = frame.get("id").cloned().unwrap_or(Value::Null);
 
         if frame_type == "auth" {
-            if frame.get("token").and_then(Value::as_str) != Some(token.as_str()) {
+            let current_token = token.lock().map(|token| token.clone()).unwrap_or_default();
+            if frame.get("token").and_then(Value::as_str) != Some(current_token.as_str()) {
                 remote_debug_log(
                     &app,
                     format!("auth failed peer={peer} reason=invalid-token"),
@@ -777,20 +925,23 @@ fn handle_client(
                 })
                 .unwrap_or_default();
             client_compression = negotiate_remote_compression(&offered_compression);
-            let label = frame
-                .get("args")
-                .and_then(Value::as_array)
+            let args = frame.get("args").and_then(Value::as_array);
+            let context = args.and_then(|args| args.get(1));
+            let client_info = context
+                .and_then(|value| value.get("clientInfo"))
+                .or_else(|| frame.get("clientInfo"))
+                .and_then(parse_client_info);
+            let label = args
                 .and_then(|args| args.first())
                 .and_then(Value::as_str)
+                .or_else(|| client_info.as_ref().and_then(|info| info.label.as_deref()))
                 .unwrap_or("Remote Client")
                 .to_string();
-            let window_id = frame
-                .get("args")
-                .and_then(Value::as_array)
-                .and_then(|args| args.get(1))
+            let window_id = context
                 .and_then(|value| value.get("windowId"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let device_summary = format_client_device_summary(client_info.as_ref());
             client_label = label.clone();
             let protocol_name = protocol.as_str().to_string();
             client_id = format!("{}-{}", unix_ms(), generate_token());
@@ -800,18 +951,20 @@ fn handle_client(
                     info: RemoteClientInfo {
                         label,
                         window_id,
+                        client_info,
                         connected_at: unix_ms(),
                         protocol: protocol_name.clone(),
                         compression: client_compression.as_str().to_string(),
                     },
                     tx: out_tx.clone(),
+                    close: Arc::clone(&close),
                 });
             }
             authenticated = true;
             remote_debug_log(
                 &app,
                 format!(
-                    "auth ok peer={peer} label={client_label} protocol={protocol_name} compression={}",
+                    "auth ok peer={peer} label={client_label}{device_summary} protocol={protocol_name} compression={}",
                     client_compression.as_str()
                 ),
             );
@@ -884,16 +1037,69 @@ fn handle_client(
             continue;
         }
     }
+    let now = unix_ms();
+    let mut removed: Vec<RemoteClientInfo> = Vec::new();
     if let Ok(mut guard) = clients.lock() {
         guard.retain(|client| {
-            if client_id.is_empty() {
+            let keep = if client_id.is_empty() {
                 client.info.label != client_label
             } else {
                 client.id != client_id
+            };
+            if !keep {
+                removed.push(client.info.clone());
             }
+            keep
         });
     }
+    for info in removed {
+        record_recent_client(&recent, info, now);
+    }
     Ok(())
+}
+
+fn parse_client_info(value: &Value) -> Option<RemoteClientDeviceInfo> {
+    serde_json::from_value::<RemoteClientDeviceInfo>(value.clone()).ok()
+}
+
+fn format_client_device_summary(info: Option<&RemoteClientDeviceInfo>) -> String {
+    let Some(info) = info else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(device_name) = info
+        .device_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(device_name.to_string());
+    }
+    if let Some(platform) = info
+        .platform
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        match info
+            .os_version
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(os_version) => parts.push(format!("{platform} {os_version}")),
+            None => parts.push(platform.to_string()),
+        }
+    }
+    if let Some(app_version) = info
+        .app_version
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("app {app_version}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" device={}", parts.join(" / "))
+    }
 }
 
 fn remote_debug_enabled() -> bool {

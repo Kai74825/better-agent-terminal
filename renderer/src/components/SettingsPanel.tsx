@@ -35,7 +35,23 @@ interface RemoteServerStatus {
   fingerprint: string | null
   bindInterface: 'localhost' | 'tailscale' | 'all' | null
   boundHost: string | null
-  clients: { label: string; windowId?: string | null; connectedAt: number }[]
+  clients: {
+    label: string
+    windowId?: string | null
+    clientInfo?: {
+      appName?: string
+      appVersion?: string
+      deviceId?: string
+      deviceName?: string
+      label?: string
+      model?: string
+      osVersion?: string
+      platform?: string
+    } | null
+    connectedAt: number
+    connected?: boolean
+    disconnectedAt?: number
+  }[]
 }
 
 type BindInterface = 'localhost' | 'tailscale' | 'all'
@@ -435,6 +451,20 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
     await host.remote.stopServer()
     setServerToken(null)
     setServerTokenFingerprint(null)
+    const ss = await host.remote.serverStatus()
+    setServerStatus(ss)
+  }
+
+  const handleRotateToken = async () => {
+    const confirmed = confirm(t('settings.rotateTokenConfirm', 'Change the connection token? The old token stops working immediately and all connected clients are disconnected — they must reconnect with the new token.'))
+    if (!confirmed) return
+    const result = await host.remote.rotateToken()
+    if ('error' in result) {
+      alert(t('settings.failedToRotateToken', { error: result.error }))
+    } else {
+      setServerToken(result.token)
+      setServerTokenFingerprint(result.fingerprint)
+    }
     const ss = await host.remote.serverStatus()
     setServerStatus(ss)
   }
@@ -1097,7 +1127,11 @@ Reference: https://github.com/ind-igo/cx`
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <input type="text" readOnly value={serverToken} style={{ fontFamily: 'monospace', fontSize: 12, flex: 1 }} onClick={e => (e.target as HTMLInputElement).select()} />
                         <button className="profile-action-btn" onClick={() => navigator.clipboard.writeText(serverToken)} title="Copy token">{t('common.copy')}</button>
+                        <button className="profile-action-btn danger" onClick={handleRotateToken} title={t('settings.rotateTokenHint', 'Generate a new token. The old token stops working and all connected clients are disconnected.')}>{t('settings.rotateToken', 'Change Token')}</button>
                       </div>
+                      <p style={{ fontSize: 11, color: '#8b949e', marginTop: 4, lineHeight: 1.4 }}>
+                        {t('settings.rotateTokenHint', 'Generate a new token. The old token stops working and all connected clients are disconnected.')}
+                      </p>
                     </div>
                   )}
                   {serverStatus.fingerprint && (
@@ -1114,12 +1148,33 @@ Reference: https://github.com/ind-igo/cx`
                   )}
                   {serverStatus.clients.length > 0 && (
                     <div className="settings-group">
-                      <label>{t('settings.connectedClients', { count: serverStatus.clients.length })}</label>
-                      {serverStatus.clients.map((c, i) => (
-                        <div key={i} style={{ fontSize: 12, color: '#aaa', padding: '2px 0' }}>
-                          {c.label} — {t('settings.connectedAt', { time: new Date(c.connectedAt).toLocaleTimeString() })}
-                        </div>
-                      ))}
+                      <label>{t('settings.connectedClients', { count: serverStatus.clients.filter(c => c.connected !== false).length })}</label>
+                      {serverStatus.clients.map((c, i) => {
+                        const isConnected = c.connected !== false
+                        const time = isConnected
+                          ? new Date(c.connectedAt).toLocaleTimeString()
+                          : new Date(c.disconnectedAt ?? c.connectedAt).toLocaleString()
+                        const clientInfo = c.clientInfo
+                        const osLabel = [clientInfo?.platform, clientInfo?.osVersion].filter(Boolean).join(' ')
+                        const details = [
+                          clientInfo?.deviceName && clientInfo.deviceName !== c.label ? clientInfo.deviceName : null,
+                          clientInfo?.model && clientInfo.model !== clientInfo.deviceName ? clientInfo.model : null,
+                          osLabel || null,
+                          clientInfo?.appVersion ? `BAT ${clientInfo.appVersion}` : null,
+                          clientInfo?.deviceId ? `id ${clientInfo.deviceId.slice(-4).toUpperCase()}` : null,
+                        ].filter(Boolean).join(' · ')
+                        return (
+                          <div key={i} style={{ fontSize: 12, color: isConnected ? '#aaa' : '#6e7681', padding: '2px 0' }}>
+                            <span style={{ color: isConnected ? '#3fb950' : '#6e7681' }}>{isConnected ? '●' : '○'}</span>{' '}
+                            {c.label} — {isConnected ? t('settings.connectedAt', { time }) : t('settings.disconnectedAt', { time })}
+                            {details && (
+                              <div style={{ marginLeft: 14, color: '#6e7681', fontSize: 11, lineHeight: 1.35 }}>
+                                {details}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </>

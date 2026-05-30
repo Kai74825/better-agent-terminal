@@ -146,6 +146,14 @@ pub async fn remote_server_status(
 }
 
 #[tauri::command]
+pub async fn remote_rotate_token(
+    app: AppHandle,
+    remote_state: State<'_, RustRemoteServerState>,
+) -> Result<Value, BridgeError> {
+    remote_state.rotate_token(&app).map_err(BridgeError::from)
+}
+
+#[tauri::command]
 pub async fn remote_connect(
     app: AppHandle,
     window: WebviewWindow,

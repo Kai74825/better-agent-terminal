@@ -149,6 +149,7 @@
     "connectionUrlHint": "粘贴到远程 Profile 即可自动填入主机、Port、Token 与指纹。",
     "connectedClients": "已连接的客户端（{{count}}）",
     "connectedAt": "连接时间 {{time}}",
+    "disconnectedAt": "已断开 {{time}}",
     "port": "端口",
     "startServer": "启动服务器",
     "remoteServerAutoStart": "启动 BAT 时自动启动服务器",
@@ -166,7 +167,11 @@
     "lanOnly": "仅限局域网 — 手机需在同一网段",
     "language": "语言",
     "footerNote": "所有变更会自动保存。字体变更会立即应用至所有终端。",
-    "failedToStartServer": "启动服务器失败：{{error}}"
+    "failedToStartServer": "启动服务器失败：{{error}}",
+    "rotateToken": "更换 Token",
+    "rotateTokenHint": "生成新的 Token。旧 Token 会立即失效，所有已连接的客户端都会被断开。",
+    "rotateTokenConfirm": "要更换连接 Token 吗？旧 Token 会立即失效，所有已连接的客户端都会被断开，必须用新 Token 重新连接。",
+    "failedToRotateToken": "更换 Token 失败：{{error}}"
   },
   "notifications": {
     "title": "通知",

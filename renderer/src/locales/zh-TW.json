@@ -154,6 +154,7 @@
     "connectionUrlHint": "貼到遠端 Profile 即可自動填入主機、Port、Token 與指紋。",
     "connectedClients": "已連線的用戶端（{{count}}）",
     "connectedAt": "連線時間 {{time}}",
+    "disconnectedAt": "已斷線 {{time}}",
     "port": "連接埠",
     "startServer": "啟動伺服器",
     "remoteServerAutoStart": "啟動 BAT 時自動啟動伺服器",
@@ -171,7 +172,11 @@
     "lanOnly": "僅限區域網路 — 手機需在同一網段",
     "language": "語言",
     "footerNote": "所有變更會自動儲存。字型變更會立即套用至所有終端。",
-    "failedToStartServer": "啟動伺服器失敗：{{error}}"
+    "failedToStartServer": "啟動伺服器失敗：{{error}}",
+    "rotateToken": "更換 Token",
+    "rotateTokenHint": "產生新的 Token。舊 Token 會立即失效，所有已連線的用戶端都會被中斷。",
+    "rotateTokenConfirm": "要更換連線 Token 嗎？舊 Token 會立即失效，所有已連線的用戶端都會被中斷，必須用新 Token 重新連線。",
+    "failedToRotateToken": "更換 Token 失敗：{{error}}"
   },
 
   "notifications": {

@@ -487,6 +487,13 @@ fn connect_socket(
         .map_err(|err| format!("remote websocket request failed: {err}"))?;
     let (mut ws, _) = tungstenite::client(request, tls)
         .map_err(|err| format!("remote websocket connect failed: {err}"))?;
+    let client_info = json!({
+        "appName": "Better Agent Terminal Desktop",
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "deviceName": label,
+        "label": label,
+        "platform": std::env::consts::OS,
+    });
     send_json_frame(
         &mut ws,
         json!({
@@ -495,7 +502,7 @@ fn connect_socket(
             "token": token,
             "protocols": [REMOTE_PROTOCOL_V2, REMOTE_PROTOCOL_LEGACY_V1],
             "compression": [REMOTE_COMPRESSION_GZIP],
-            "args": [label, { "windowId": window_id }],
+            "args": [label, { "windowId": window_id, "clientInfo": client_info }],
         }),
         RemoteCompression::None,
     )?;

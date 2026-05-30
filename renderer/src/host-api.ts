@@ -1225,6 +1225,7 @@ function createTauriHost(): BatAppAPI {
         getInvoke()<unknown>('remote_start_server', { options }),
       stopServer: () => getInvoke()<unknown>('remote_stop_server'),
       serverStatus: () => getInvoke()<unknown>('remote_server_status'),
+      rotateToken: () => getInvoke()<unknown>('remote_rotate_token'),
       connect: (host: string, port: number, token: string, fingerprint: string, label?: string) =>
         getInvoke()<unknown>('remote_connect', { host, port, token, fingerprint, label }),
       disconnect: () => getInvoke()<unknown>('remote_disconnect'),

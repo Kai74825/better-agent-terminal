@@ -312,6 +312,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             remote_cmd::remote_start_server,
             remote_cmd::remote_stop_server,
             remote_cmd::remote_server_status,
+            remote_cmd::remote_rotate_token,
             remote_cmd::remote_connect,
             remote_cmd::remote_disconnect,
             remote_cmd::remote_client_status,
