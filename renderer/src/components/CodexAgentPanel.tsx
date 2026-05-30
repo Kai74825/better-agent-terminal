@@ -15,6 +15,7 @@ import { getAgentPreset, type AgentPresetId } from '../types/agent-presets'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ChatMarkdown } from './ChatMarkdown'
 import { WorktreeMergedChip } from './WorktreeMergedChip'
+import { buildMessageStream } from './messageSkip'
 import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
@@ -4103,14 +4104,18 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               <span>{t('claude.resumingHistory')}</span>
             </div>
           )}
-          {allMessages.map((item, i) => {
-            const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
-              <div key={`divider-${i}`} className="claude-time-divider">
-                <span>{formatTimestamp(item.timestamp || 0)}</span>
-              </div>
-            ) : null
-            return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
-          })}
+          {buildMessageStream(
+            allMessages,
+            { showToolMsg, showUserMsg, showAssistantMsg, showThinkingMsg },
+            (item, i) => {
+              const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
+                <div key={`divider-${i}`} className="claude-time-divider">
+                  <span>{formatTimestamp(item.timestamp || 0)}</span>
+                </div>
+              ) : null
+              return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
+            },
+          )}
           {isStreaming && !streamingText && (!streamingThinking || !showThinkingMsg) && (
             <div className="tl-item">
               <div className="tl-dot dot-thinking" />

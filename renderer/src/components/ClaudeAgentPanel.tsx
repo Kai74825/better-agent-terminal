@@ -15,6 +15,7 @@ import { getAgentPreset, type AgentPresetId } from '../types/agent-presets'
 import { LinkedText, FilePreviewModal } from './PathLinker'
 import { ChatMarkdown } from './ChatMarkdown'
 import { WorktreeMergedChip } from './WorktreeMergedChip'
+import { buildMessageStream } from './messageSkip'
 import { filenameForPastedImage, maybeResizeImageDataUrl, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
@@ -496,6 +497,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     }
   }, [normalizedAgentParams?.approvalPolicy, normalizedAgentParams?.sandboxMode])
   const currentTurnMsgIdRef = useRef<string | null>(null)
+  // Display text of the in-flight turn's prompt. A barge-in send reads this to
+  // fold the interrupted (possibly unfinished) request into the new message so
+  // the model does not silently forget it.
+  const inFlightPromptRef = useRef<string>('')
+  // True while a barge-in send is replacing the current turn, so the cancelled
+  // turn's 'interrupted' turn-end does not flip the UI back to a stopped state.
+  const bargeInPendingRef = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamingThinkingRef = useRef<HTMLPreElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -1087,6 +1095,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       api.onTurnEnd((sid: string, payload: { reason?: string } | null | undefined) => {
         if (sid !== sessionId) return
         const reason = payload?.reason
+        // Barge-in hand-off: when the user sent a new message that cancelled
+        // this turn, a replacement turn is already starting. Consume the flag
+        // and skip the stop/interrupt UI flip so streaming carries over to it.
+        const wasBargeIn = bargeInPendingRef.current
+        bargeInPendingRef.current = false
+        if (reason === 'interrupted' && wasBargeIn) {
+          setStreamingText('')
+          setStreamingThinking('')
+          return
+        }
         setIsStreaming(false)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
         setStreamingText('')
@@ -1589,6 +1607,8 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     autoCompactWindow?: number | null,
     clientMessage?: { id?: string; displayContent?: string; suppressUserEcho?: boolean },
   ) => {
+    // Remember this turn's display prompt so a later barge-in can recap it.
+    inFlightPromptRef.current = clientMessage?.displayContent ?? prompt
     await ensureSessionStarted()
     return host.claude.sendMessage(sessionId, prompt, images, autoCompactWindow, clientMessage)
   }, [ensureSessionStarted, sessionId])
@@ -2347,7 +2367,26 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     setAttachedFiles([])
     setPromptSuggestion(null)
     setShowSlashMenu(false)
-    if (!isStreaming || isInterrupted) {
+    // Barge-in: sending while a turn is genuinely mid-flight (streaming and not
+    // already soft-interrupted) ends that turn and lets this message take over —
+    // the old "type to steer" behaviour. The interrupted request is folded into
+    // the prompt below so it is not forgotten. Otherwise (idle / already
+    // interrupted) just (re)start the streaming UI optimistically.
+    const isBargeIn = isStreaming && !isInterrupted
+    const interruptedPrompt = isBargeIn ? inFlightPromptRef.current : ''
+    if (isBargeIn) {
+      bargeInPendingRef.current = true
+      setStreamingText('')
+      setStreamingThinking('')
+      setPendingPermission(null)
+      try {
+        await host.claude.interruptTurn(sessionId)
+      } catch {
+        // Interrupt failed — fall through; the send still queues behind the
+        // current turn (degrades to the prior wait-for-turn behaviour).
+        bargeInPendingRef.current = false
+      }
+    } else {
       setIsStreaming(true)
       setIsInterrupted(false)
       setStreamingText('')
@@ -2359,6 +2398,12 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     if (filePaths.length > 0) {
       const filePrefix = filePaths.map(p => `@${p}`).join('\n')
       promptToSend = filePrefix + (trimmed ? '\n\n' + trimmed : '')
+    }
+    // Fold the interrupted request into the model prompt (not the displayed
+    // text) so a barge-in does not drop it from context. Kept to a short recap
+    // line — the model only needs the reminder, not a full re-issue.
+    if (isBargeIn && interruptedPrompt.trim()) {
+      promptToSend = `[Interrupted request] ${interruptedPrompt.trim()}\n\n${promptToSend}`
     }
 
     // Add user message locally only when this renderer can authoritatively predict display.
@@ -4035,14 +4080,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               <span>{t('claude.resumingHistory')}</span>
             </div>
           )}
-          {allMessages.map((item, i) => {
-            const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
-              <div key={`divider-${i}`} className="claude-time-divider">
-                <span>{formatTimestamp(item.timestamp || 0)}</span>
-              </div>
-            ) : null
-            return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
-          })}
+          {buildMessageStream(
+            allMessages,
+            { showToolMsg, showUserMsg, showAssistantMsg, showThinkingMsg },
+            (item, i) => {
+              const divider = shouldShowTimeDivider(item, allMessages[i - 1]) ? (
+                <div key={`divider-${i}`} className="claude-time-divider">
+                  <span>{formatTimestamp(item.timestamp || 0)}</span>
+                </div>
+              ) : null
+              return <Fragment key={item.id || `msg-${i}`}>{divider}{renderMessage(item, i)}</Fragment>
+            },
+          )}
           {isStreaming && !streamingText && (!streamingThinking || !showThinkingMsg) && (
             <div className="tl-item">
               <div className="tl-dot dot-thinking" />
