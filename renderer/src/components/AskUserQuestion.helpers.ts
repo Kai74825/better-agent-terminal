@@ -1,7 +1,10 @@
 export interface AskUserOption {
   label: string
   description: string
-  markdown?: string
+  // Self-contained HTML preview fragment for this option, rendered in a
+  // sandboxed iframe. The SDK emits this on `preview` (we request
+  // previewFormat:'html' in the sidecar); `markdown` is accepted as a legacy alias.
+  preview?: string
 }
 
 export interface AskUserQuestion {
@@ -23,8 +26,11 @@ function normalizeAskUserOption(value: unknown, index: number): AskUserOption | 
     ? record.label.trim()
     : `Option ${index + 1}`
   const description = typeof record.description === 'string' ? record.description.trim() : ''
-  const markdown = typeof record.markdown === 'string' && record.markdown.trim() ? record.markdown : undefined
-  return { label, description, markdown }
+  // Prefer the SDK's `preview` field; fall back to the legacy `markdown` alias.
+  const preview = (typeof record.preview === 'string' && record.preview.trim())
+    ? record.preview
+    : (typeof record.markdown === 'string' && record.markdown.trim() ? record.markdown : undefined)
+  return { label, description, preview }
 }
 
 function normalizeAskUserQuestion(value: unknown, index: number): AskUserQuestion | null {

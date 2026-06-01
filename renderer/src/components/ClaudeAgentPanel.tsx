@@ -136,7 +136,7 @@ interface SlashCommandInfo {
 interface AskUserQuestion {
   question: string
   header: string
-  options: Array<{ label: string; description: string; markdown?: string }>
+  options: Array<{ label: string; description: string; preview?: string }>
   multiSelect: boolean
 }
 
@@ -4275,7 +4275,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         <div className="claude-ask-card">
           {pendingQuestion.questions.map((q, qi) => {
             const qKey = q.question || String(qi)
-            const hasPreview = q.options.some(opt => opt.markdown)
+            const hasPreview = q.options.some(opt => opt.preview)
             const answer = askAnswers[qKey]
             const isSelected = (label: string) =>
               Array.isArray(answer) ? answer.includes(label) : answer === label
@@ -4284,7 +4284,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               ? (Array.isArray(answer) && answer.length ? answer[answer.length - 1] : undefined)
               : (typeof answer === 'string' ? answer : undefined)
             const selectedPreview = selectedLabel
-              ? q.options.find(opt => opt.label === selectedLabel)?.markdown
+              ? q.options.find(opt => opt.label === selectedLabel)?.preview
               : undefined
             return (
               <div key={qi} className={`claude-ask-question ${hasPreview ? 'claude-ask-with-preview' : ''}`}>

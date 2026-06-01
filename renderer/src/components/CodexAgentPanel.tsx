@@ -4298,7 +4298,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         <div className="claude-ask-card">
           {pendingQuestion.questions.map((q, qi) => {
             const qKey = q.question || String(qi)
-            const hasPreview = q.options.some(opt => opt.markdown)
+            const hasPreview = q.options.some(opt => opt.preview)
             const answer = askAnswers[qKey]
             const isSelected = (label: string) =>
               Array.isArray(answer) ? answer.includes(label) : answer === label
@@ -4307,7 +4307,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
               ? (Array.isArray(answer) && answer.length ? answer[answer.length - 1] : undefined)
               : (typeof answer === 'string' ? answer : undefined)
             const selectedPreview = selectedLabel
-              ? q.options.find(opt => opt.label === selectedLabel)?.markdown
+              ? q.options.find(opt => opt.label === selectedLabel)?.preview
               : undefined
             return (
               <div key={qi} className={`claude-ask-question ${hasPreview ? 'claude-ask-with-preview' : ''}`}>

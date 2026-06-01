@@ -55,7 +55,7 @@ export interface SlashCommandInfo {
 export interface AskUserQuestion {
   question: string
   header: string
-  options: Array<{ label: string; description: string; markdown?: string }>
+  options: Array<{ label: string; description: string; preview?: string }>
   multiSelect: boolean
 }
 
