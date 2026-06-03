@@ -171,6 +171,11 @@
     "viaTailscale": "透過 Tailscale",
     "lanOnly": "僅限區域網路 — 手機需在同一網段",
     "language": "語言",
+    "updates": "更新",
+    "autoUpdate": "自動下載並安裝更新",
+    "updateChannel": "更新通道",
+    "channelStable": "穩定版",
+    "channelPre": "預覽版（pre-release）",
     "footerNote": "所有變更會自動儲存。字型變更會立即套用至所有終端。",
     "failedToStartServer": "啟動伺服器失敗：{{error}}",
     "rotateToken": "更換 Token",
@@ -410,7 +415,12 @@
     "currentVersion": "目前版本：v{{version}}",
     "newVersion": "新版本：{{version}}",
     "whatsNew": "更新內容：",
-    "viewOnGithub": "在 GitHub 上查看"
+    "viewOnGithub": "在 GitHub 上查看",
+    "readyBody": "已安裝更新 v{{version}} — 重新啟動即可套用",
+    "downloading": "正在下載更新…",
+    "downloadingPct": "正在下載更新… {{pct}}%",
+    "error": "更新失敗",
+    "dismiss": "關閉"
   },
 
   "envVars": {

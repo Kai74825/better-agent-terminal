@@ -607,6 +607,30 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
               </div>
 
               <div className="settings-section">
+                <h3>{t('settings.updates')}</h3>
+                <div className="settings-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={settings.autoUpdateEnabled !== false}
+                      onChange={e => settingsStore.setAutoUpdateEnabled(e.target.checked)}
+                    />
+                    {t('settings.autoUpdate')}
+                  </label>
+                </div>
+                <div className="settings-group">
+                  <label>{t('settings.updateChannel')}</label>
+                  <select
+                    value={(settings.updateChannel === 'pre' && isDebugMode) ? 'pre' : 'stable'}
+                    onChange={e => settingsStore.setUpdateChannel(e.target.value as 'stable' | 'pre')}
+                  >
+                    <option value="stable">{t('settings.channelStable')}</option>
+                    {isDebugMode && <option value="pre">{t('settings.channelPre')}</option>}
+                  </select>
+                </div>
+              </div>
+
+              <div className="settings-section">
                 <h3>{t('settings.shell')}</h3>
                 <div className="settings-group">
                   <label>{t('settings.defaultShell')}</label>

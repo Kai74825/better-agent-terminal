@@ -47,6 +47,8 @@ const defaultSettings: AppSettings = {
   remoteServerAutoStart: false,
   remoteServerPort: 9876,
   remoteServerBindInterface: 'localhost',
+  autoUpdateEnabled: true,
+  updateChannel: 'stable',
 }
 
 function normalizeDefaultAgent(value: unknown): AgentPresetId {
@@ -235,6 +237,18 @@ class SettingsStore {
 
   setCacheAlarmTimer(enabled: boolean): void {
     this.settings = { ...this.settings, cacheAlarmTimer: enabled }
+    this.notify()
+    this.save()
+  }
+
+  setAutoUpdateEnabled(enabled: boolean): void {
+    this.settings = { ...this.settings, autoUpdateEnabled: enabled }
+    this.notify()
+    this.save()
+  }
+
+  setUpdateChannel(channel: 'stable' | 'pre'): void {
+    this.settings = { ...this.settings, updateChannel: channel }
     this.notify()
     this.save()
   }

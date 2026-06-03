@@ -5,6 +5,8 @@ import i18next from 'i18next'
 import { workspaceStore } from './stores/workspace-store'
 import { settingsStore } from './stores/settings-store'
 import { Sidebar } from './components/Sidebar'
+import { UpdateBanner } from './components/UpdateBanner'
+import { startAutoUpdate } from './lib/auto-update'
 import { WorkspaceView, clearInitializedWorkspaces } from './components/WorkspaceView'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SnippetSidebar } from './components/SnippetPanel'
@@ -220,6 +222,17 @@ export default function App() {
   useEffect(() => {
     if (remoteClientConnected) remoteUnavailableRef.current = false
   }, [remoteClientConnected])
+
+  // Background auto-update: run only in the main window so multiple windows
+  // never install concurrently.
+  useEffect(() => {
+    if (!isTauri) return
+    let cancelled = false
+    host.app.getWindowId()
+      .then((id: string | null) => { if (!cancelled && id === 'main') startAutoUpdate() })
+      .catch(() => { /* not the main window or no window id — skip */ })
+    return () => { cancelled = true }
+  }, [])
 
   // Sync window title with active profile, window index, and account info
   const [windowIndex, setWindowIndex] = useState<number>(1)
@@ -1014,6 +1027,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <UpdateBanner />
       <Sidebar
         width={panelSettings.sidebar.width}
         workspaces={visibleWorkspaces}

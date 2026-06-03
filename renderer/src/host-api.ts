@@ -542,6 +542,20 @@ function createTauriHost(): BatAppAPI {
       // Returns the same shape the renderer's UpdateNotification consumed
       // as { hasUpdate, currentVersion, latestRelease }.
       check: () => getInvoke()<unknown>('update_check'),
+      // Auto-updater (tauri-plugin-updater): bundle mode drives which
+      // per-mode manifest is fetched; channel is 'stable' | 'pre'.
+      getBundleMode: () => getInvoke()<'all-in-one' | 'lightweight'>('update_get_bundle_mode'),
+      checkNative: (channel: 'stable' | 'pre') =>
+        getInvoke()<{ available: boolean; currentVersion: string; version?: string; notes?: string | null; channel: string }>(
+          'update_check_native',
+          { channel },
+        ),
+      install: (channel: 'stable' | 'pre') =>
+        getInvoke()<{ installed: boolean; version?: string; reason?: string }>('update_install', { channel }),
+      onDownloadProgress: (callback: (payload: { downloaded: number; total: number | null }) => void) =>
+        listenAdapter<{ downloaded: number; total: number | null }>('update://download-progress', callback),
+      onDownloadFinished: (callback: () => void) =>
+        listenAdapter<unknown>('update://download-finished', () => callback()),
     },
     debug: {
       // Renderer logs forward to Rust and are persisted under

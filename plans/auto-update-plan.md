@@ -145,7 +145,7 @@ Consequence for the plan: the updater behaves identically for stable and pre reg
 1. Add `tauri-plugin-updater` (Rust) + `@tauri-apps/plugin-updater` (JS); register plugin in `lib.rs`; add `updater:default` to the capability file.
 2. `bundle.createUpdaterArtifacts: true` in base `tauri.conf.json`.
 3. `build.rs` bake `BAT_BUNDLE_MODE`; `get_bundle_mode` command.
-4. **Extend macOS signing to lightweight**: remove the `matrix.bundle_mode == 'all-in-one'` gate on the mac cert-import + `sign-macos-resource-binaries.sh` + signing/notarization steps so the lightweight mac build is also signed + notarized + stapled. Confirm `test:tauri-version-sync`/resource tests still pass for the now-signed lightweight mac.
+4. **macOS lightweight signing**: no change needed — the bundler step already signs + notarizes both modes (see §13). Slice 3 just adds the `TAURI_SIGNING_*` env so the bundler also emits the minisign `.app.tar.gz`/`.sig`.
 5. CI: pass `TAURI_SIGNING_*`; upload `.app.tar.gz`/`.sig` (mac), nsis `.sig` (win), `.AppImage.tar.gz`/`.sig` (linux); run `generate-update-manifest.mjs` for **pre** manifests; upload to `manifests` release.
 6. Frontend: settings (`updateChannel`, `autoUpdateEnabled`, `batDebug`) + update controller + restart banner. Pre gated by `batDebug`.
 7. Verify by shipping two consecutive `-pre` tags and confirming a real device updates pre→pre, lightweight→lightweight and all-in-one→all-in-one (mac included).
@@ -189,7 +189,7 @@ Edit:
 
 ## 13. Open risks / decisions
 
-- **Lightweight macOS signing — DECIDED: sign + notarize it too (option A).** Today only all-in-one mac is signed (verified: cert import + `scripts/sign-macos-resource-binaries.sh` + signing-env steps in `release.yml` are gated `matrix.bundle_mode == 'all-in-one'`, lines ~305/310/321/332/411). **Phase 1 will drop the `all-in-one` gate on every macOS signing/notarization step so lightweight mac is fully Developer-ID signed + notarized + stapled**, producing a Gatekeeper-valid lightweight `.app.tar.gz`. This makes "lightweight 用 lightweight" hold on macOS as well. Cost: longer mac CI (a second signed+notarized mac build per release) — accepted.
+- **Lightweight macOS signing — DECIDED: option A (sign + notarize both modes). On re-reading CI, this is ALREADY TRUE at the app level.** The earlier "only all-in-one is signed" reading was wrong: the `all-in-one`-gated steps in `release.yml` (~305/310/321/332/411) are the resource caches + `scripts/sign-macos-resource-binaries.sh`, which sign the *bundled node-runtime binaries* that only exist in all-in-one. The app's own Developer-ID signing + notarization happens in the **"Build Tauri release bundle"** step (line ~432), which runs for every mac (`matrix.platform != 'linux'`, no mode gate) and has been succeeding for `mac-arm64-lightweight` in recent `-pre` builds. So lightweight mac `.app` is already signed + notarized + stapled. **No signing-gate change is needed** — slice 3 only adds (a) `TAURI_SIGNING_*` env to the build steps so the bundler also emits the minisign-signed `.app.tar.gz`/`.sig`, and (b) uploading those + the manifest. "lightweight 用 lightweight" therefore holds on macOS with no extra notarization work.
 - **Manifests release** (`manifests` pinned tag) must be created once and never deleted; `--clobber` overwrites assets. Alternative: GitHub Pages.
 - **Windows perMachine NSIS** updates require elevation; confirm the `/UPDATE` silent path works without a UAC dead-end.
 - **Key loss** = no upgrade path for shipped clients → enforce offline backup.

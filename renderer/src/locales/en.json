@@ -171,6 +171,11 @@
     "viaTailscale": "via Tailscale",
     "lanOnly": "LAN only \u2014 phone must be on the same network",
     "language": "Language",
+    "updates": "Updates",
+    "autoUpdate": "Automatically download and install updates",
+    "updateChannel": "Update Channel",
+    "channelStable": "Stable",
+    "channelPre": "Preview (pre-release)",
     "footerNote": "Changes are saved automatically. Font changes apply immediately to all terminals.",
     "failedToStartServer": "Failed to start server: {{error}}",
     "rotateToken": "Change Token",
@@ -410,7 +415,12 @@
     "currentVersion": "Current: v{{version}}",
     "newVersion": "New: {{version}}",
     "whatsNew": "What's New:",
-    "viewOnGithub": "View on GitHub"
+    "viewOnGithub": "View on GitHub",
+    "readyBody": "Update v{{version}} installed — restart to apply",
+    "downloading": "Downloading update…",
+    "downloadingPct": "Downloading update… {{pct}}%",
+    "error": "Update failed",
+    "dismiss": "Dismiss"
   },
 
   "envVars": {
