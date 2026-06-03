@@ -222,6 +222,14 @@ export default function App() {
   useEffect(() => {
     if (remoteClientConnected) remoteUnavailableRef.current = false
   }, [remoteClientConnected])
+  // Keep the workspace store's reload scope in sync with the active profile.
+  // Remote windows gate host workspace:reload broadcasts by the host profile id
+  // they're viewing; local windows clear it and fall back to windowId targeting.
+  useEffect(() => {
+    workspaceStore.setViewedRemoteProfileId(
+      activeProfileIsRemote ? (activeRemoteProfileId || null) : null,
+    )
+  }, [activeProfileIsRemote, activeRemoteProfileId])
 
   // Background auto-update: run only in the main window so multiple windows
   // never install concurrently.
@@ -602,8 +610,20 @@ export default function App() {
               setActiveRemoteProfileId(null)
             }
           } else {
+            // Scope host workspace:reload broadcasts to the profile we're viewing.
+            // Set synchronously here — BEFORE any await below — so a reload that
+            // arrives immediately after the socket connects can never fall through
+            // to the local windowId branch (see workspace-store.listenForReload).
+            workspaceStore.setViewedRemoteProfileId(active.remoteProfileId || 'default')
             const winIdx = await host.app.getWindowIndex()
-            setActiveProfileName(`${active.name}:${winIdx}`)
+            // Show the HOST-side target profile name when we have it (persisted on
+            // the alias at selection time) so the title/sidebar reflect which
+            // remote profile this is — not the local alias name, which can collide
+            // with an unrelated local profile and read as if it were local.
+            const remoteDisplayName = (typeof active.remoteProfileName === 'string' && active.remoteProfileName.trim())
+              ? active.remoteProfileName.trim()
+              : active.name
+            setActiveProfileName(`${remoteDisplayName}:${winIdx}`)
             setActiveProfileIsRemote(true)
             setActiveProfileId(active.id)
             setActiveRemoteProfileId(active.remoteProfileId || 'default')

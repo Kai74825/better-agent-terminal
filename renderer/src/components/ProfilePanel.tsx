@@ -12,6 +12,7 @@ interface ProfileEntry {
   remoteToken?: string
   remoteFingerprint?: string
   remoteProfileId?: string
+  remoteProfileName?: string
   createdAt: number
   updatedAt: number
 }
@@ -192,6 +193,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
         remoteToken: remoteToken.trim(),
         remoteFingerprint: remoteFingerprint.trim(),
         remoteProfileId: selectedRemoteProfileId,
+        remoteProfileName: remoteProfiles.find(p => p.id === selectedRemoteProfileId)?.name,
       })
     } else {
       await host.profile.create(trimmed)
@@ -263,6 +265,9 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
       remoteToken: token,
       remoteFingerprint: fingerprint,
       remoteProfileId: editSelectedRemoteProfileId || undefined,
+      // Only refresh the cached name when we have the fetched profile list;
+      // otherwise leave the stored name untouched (undefined => unchanged).
+      remoteProfileName: editRemoteProfiles.find(p => p.id === editSelectedRemoteProfileId)?.name,
     })
     setEditingRemoteId(null)
     setEditRemoteProfiles([])
@@ -348,6 +353,7 @@ export function ProfilePanel({ onClose, onSwitchNewWindow, onProfileRenamed }: P
         remoteToken: source.remoteToken,
         remoteFingerprint: source.remoteFingerprint,
         remoteProfileId: remoteProfile.id,
+        remoteProfileName: remoteProfile.name,
       })
       targetProfileId = entry.id
     }

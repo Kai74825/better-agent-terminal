@@ -43,6 +43,11 @@ class WorkspaceStore {
 
   private activeGroup: string | null = null
   private windowId: string | null = null
+  // For a remote client window, the HOST profile id this window is viewing
+  // (the local alias's remote_profile_id). Null for local windows. Host and
+  // client both label their main window "main", so windowId can't tell them
+  // apart on the wire — remote reloads are scoped by this profile id instead.
+  private viewedRemoteProfileId: string | null = null
   private listeners: Set<Listener> = new Set()
 
   // Usage polling removed — OAuth API calls to Anthropic have been removed.
@@ -721,6 +726,12 @@ class WorkspaceStore {
   setWindowId(id: string): void { this.windowId = id }
   getWindowId(): string | null { return this.windowId }
 
+  // Set by App.tsx whenever the active profile changes. Non-null marks this
+  // window as a remote client viewing the given HOST profile id; it gates which
+  // host workspace:reload broadcasts this window is allowed to apply.
+  setViewedRemoteProfileId(id: string | null): void { this.viewedRemoteProfileId = id }
+  getViewedRemoteProfileId(): string | null { return this.viewedRemoteProfileId }
+
   listenForReload(): () => void {
     return host.workspace.onReload((payload?: unknown) => {
       if (typeof payload === 'string' && payload) {
@@ -728,8 +739,32 @@ class WorkspaceStore {
         return
       }
       if (payload && typeof payload === 'object') {
-        const reload = payload as { windowId?: unknown; data?: unknown }
-        if (typeof reload.windowId === 'string' && reload.windowId !== this.windowId) {
+        const reload = payload as { windowId?: unknown; data?: unknown; profileId?: unknown }
+        if (this.viewedRemoteProfileId !== null) {
+          // Remote client: the host and this client both label their main window
+          // "main", so windowId can't distinguish them. The reload's profileId
+          // names the HOST profile that changed — apply it only when it matches
+          // the host profile this window is viewing, otherwise the host editing
+          // an unrelated profile (e.g. its own default) would clobber us.
+          const reloadProfileId = typeof reload.profileId === 'string' ? reload.profileId : null
+          if (reloadProfileId === null) {
+            // Legacy host that doesn't tag reloads with a profileId — we can't
+            // safely apply foreign data, so re-fetch our own bound profile.
+            debugLog('[workspace-store] reload without profileId on remote client; reloading bound profile', {
+              viewedRemoteProfileId: this.viewedRemoteProfileId,
+            })
+            this.load({ preserveActiveSelection: true })
+            return
+          }
+          if (reloadProfileId !== this.viewedRemoteProfileId) {
+            debugLog('[workspace-store] reload ignored: remote profile mismatch', {
+              viewedRemoteProfileId: this.viewedRemoteProfileId,
+              reloadProfileId,
+            })
+            return
+          }
+        } else if (typeof reload.windowId === 'string' && reload.windowId !== this.windowId) {
+          // Local window: windowId selects the target window.
           debugLog('[workspace-store] reload ignored: target window mismatch', {
             windowId: this.windowId,
             targetWindowId: reload.windowId,

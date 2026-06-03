@@ -43,6 +43,12 @@ pub struct ProfileEntry {
     pub remote_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_profile_id: Option<String>,
+    // Cached display name of the HOST-side target profile (remote_profile_id),
+    // captured when the alias is created/edited so clients can show the remote
+    // profile's name without re-dialing the host. Best-effort; may be stale if
+    // the host later renames the profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_profile_name: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -75,6 +81,7 @@ pub struct CreateProfileOptions {
     pub remote_token: Option<String>,
     pub remote_fingerprint: Option<String>,
     pub remote_profile_id: Option<String>,
+    pub remote_profile_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -85,6 +92,7 @@ pub struct UpdateProfileOptions {
     pub remote_token: Option<String>,
     pub remote_fingerprint: Option<String>,
     pub remote_profile_id: Option<String>,
+    pub remote_profile_name: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -115,6 +123,7 @@ fn default_entry() -> ProfileEntry {
         remote_token: None,
         remote_fingerprint: None,
         remote_profile_id: None,
+        remote_profile_name: None,
         created_at: 0,
         updated_at: 0,
     }
@@ -496,6 +505,7 @@ fn profile_from_options(
         remote_token: options.remote_token,
         remote_fingerprint: options.remote_fingerprint,
         remote_profile_id: options.remote_profile_id,
+        remote_profile_name: options.remote_profile_name,
         created_at: now,
         updated_at: now,
     }
@@ -912,6 +922,9 @@ pub fn profile_update(
     if updates.remote_profile_id.is_some() {
         profile.remote_profile_id = updates.remote_profile_id;
     }
+    if updates.remote_profile_name.is_some() {
+        profile.remote_profile_name = updates.remote_profile_name;
+    }
     if profile.remote_host.is_some() || profile.remote_fingerprint.is_some() {
         profile.kind = "remote".into();
     }
@@ -1085,6 +1098,7 @@ mod tests {
                 remote_token: Some("secret-token".into()),
                 remote_fingerprint: Some("AA".into()),
                 remote_profile_id: Some("default".into()),
+                remote_profile_name: None,
             }),
         );
         write_index_at(
@@ -1136,6 +1150,7 @@ mod tests {
                 remote_token: None,
                 remote_fingerprint: Some("AA".into()),
                 remote_profile_id: Some("default".into()),
+                remote_profile_name: None,
             }),
         );
 

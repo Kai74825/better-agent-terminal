@@ -762,6 +762,7 @@ mod tests {
             remote_token: None,
             remote_fingerprint: None,
             remote_profile_id: None,
+            remote_profile_name: None,
             created_at: 0,
             updated_at: 0,
         }
