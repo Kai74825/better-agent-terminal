@@ -26,6 +26,11 @@ use tungstenite::Message;
 const AUTH_TIMEOUT: Duration = Duration::from_secs(6);
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_TIMEOUT: Duration = Duration::from_millis(100);
+// The client loop's per-invoke deadline is authoritative (it can clean up the
+// pending map and reply with a descriptive error). The caller's recv_timeout is
+// only a backstop for a wedged/dead loop thread, so give it a little slack past
+// the real deadline instead of racing it.
+const PENDING_REPLY_GRACE: Duration = Duration::from_secs(5);
 // Send a WebSocket Ping on an idle connection at this cadence. Without it an
 // idle TCP/WS flow over NAT/Tailscale gets silently reaped: no bytes flow, the
 // router drops the mapping, and the half-open socket is never noticed until the
@@ -56,6 +61,7 @@ enum ClientCommand {
         id: String,
         channel: String,
         args: Vec<Value>,
+        timeout: Duration,
         reply: mpsc::Sender<Result<Value, String>>,
     },
     Disconnect,
@@ -221,11 +227,12 @@ impl RustRemoteClientState {
             id,
             channel: channel.to_string(),
             args,
+            timeout,
             reply: reply_tx,
         })
         .map_err(|_| "remote.invoke: connection closed".to_string())?;
         reply_rx
-            .recv_timeout(timeout)
+            .recv_timeout(timeout + PENDING_REPLY_GRACE)
             .map_err(|_| format!("Remote invoke timeout: {channel}"))?
     }
 
@@ -327,6 +334,7 @@ fn client_loop(
                     id,
                     channel,
                     args,
+                    timeout,
                     reply,
                 } => {
                     log_remote_pty_write_args(&app, "remote-client.send", &channel, &args);
@@ -338,7 +346,10 @@ fn client_loop(
                                 id,
                                 PendingInvoke {
                                     channel,
-                                    deadline: Instant::now() + INVOKE_TIMEOUT,
+                                    // Honor the caller's timeout instead of a fixed 30s, so long
+                                    // session calls (agent:send-message at 300s) aren't killed
+                                    // mid-turn while the host is still waiting on the API.
+                                    deadline: Instant::now() + timeout,
                                     reply,
                                 },
                             );

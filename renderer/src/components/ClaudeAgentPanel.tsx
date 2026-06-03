@@ -94,8 +94,12 @@ function formatUnknownError(error: unknown): string {
 // claude:turn-end. A timeout on the send RPC therefore does NOT mean the turn
 // failed — it only means the turn's result frame has not arrived yet. Treat it
 // as non-fatal so we don't stop the UI mid-turn; the events drive completion.
+// The remote path surfaces the same situation as "Remote invoke timeout:
+// agent:send-message" (the remote client's per-invoke deadline), so treat that
+// the same way — the turn is still alive on the host and driven by events.
 function isSendMessageTimeout(message: string): boolean {
   return /timeout waiting for claude\.sendMessage/i.test(message)
+    || /Remote invoke timeout:\s*(agent|claude):send-message/i.test(message)
 }
 
 // The remote client dropped (idle socket reaped) before this invoke reached the

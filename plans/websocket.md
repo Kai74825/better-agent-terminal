@@ -280,7 +280,13 @@ Timeouts:
 
 - Default server invoke timeout: 15 seconds.
 - Long Claude session calls (`agent:start-session`, `agent:resume-session`, `agent:send-message`, `agent:fork-session`): 300 seconds.
-- Client pending invoke timeout: 30 seconds.
+- Client pending invoke timeout: honors the per-call timeout passed by the
+  caller (default 30 seconds; session calls such as `agent:send-message` use
+  300 seconds to match the server). The client must not cap session calls at the
+  default — doing so kills a long agent turn mid-flight even though the host is
+  still streaming `claude:*` events. A client-side `Remote invoke timeout:
+  agent:send-message` is treated like the local sendMessage RPC timeout: the
+  turn is still alive and driven by events, not a failure.
 
 ## Connection Lifecycle (keepalive + reconnect)
 
