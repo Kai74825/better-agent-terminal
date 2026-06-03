@@ -93,6 +93,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(pty_cmd::PtyState::default())
         .manage(notification_cmd::NotificationState::default())
         .manage(notification_cmd::AgentNotificationState::default())
@@ -175,6 +176,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             workspace_cmd::workspace_move_to_window,
             update_cmd::update_get_version,
             update_cmd::update_check,
+            update_cmd::update_get_bundle_mode,
             debug_cmd::debug_is_debug_mode,
             debug_cmd::debug_log,
             debug_cmd::debug_open_logs_folder,

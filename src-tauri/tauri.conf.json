@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/icon.png",
@@ -44,6 +45,14 @@
         "template": "windows/installer.nsi",
         "installerHooks": "windows/nsis-hooks.nsh"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGQjFGMzI4NEQxODY5QjcKUldTM2FSaE5LUE94ZjcwMEI5dDYyYmd5WWk2UzFKSFp5bjRXeEFjZisrWmk2L1VOV0Mrc0F6T0gK",
+      "endpoints": [
+        "https://github.com/tony1223/better-agent-terminal/releases/download/manifests/latest-stable-all-in-one.json"
+      ]
     }
   }
 }

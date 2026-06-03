@@ -31,6 +31,20 @@ pub fn update_get_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+/// Which bundle this binary was built as: "all-in-one" or "lightweight".
+/// Baked at compile time by build.rs from the BAT_BUNDLE_MODE env var so the
+/// auto-updater can fetch the matching update channel ("lightweight 用
+/// lightweight"). Defaults to "all-in-one" for plain dev builds.
+#[tauri::command]
+pub fn update_get_bundle_mode() -> &'static str {
+    let mode = env!("BAT_BUNDLE_MODE");
+    if mode == "lightweight" {
+        "lightweight"
+    } else {
+        "all-in-one"
+    }
+}
+
 #[tauri::command]
 pub async fn update_check(app: tauri::AppHandle) -> Result<Value, BridgeError> {
     let current_version = app.package_info().version.to_string();
