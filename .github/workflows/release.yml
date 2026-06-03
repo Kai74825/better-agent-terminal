@@ -425,6 +425,12 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+          # Bake the bundle mode into the binary (build.rs -> update_get_bundle_mode)
+          # so a lightweight install only ever upgrades to a lightweight build.
+          BAT_BUNDLE_MODE: ${{ matrix.bundle_mode }}
+          # Sign the updater artifacts (.AppImage.sig) with the minisign key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
         run: node scripts/tauri-build-mode.mjs --mode ${{ matrix.bundle_mode }} --bundles ${{ matrix.bundle }} --verbose
@@ -439,6 +445,13 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+          # Bake the bundle mode into the binary (build.rs -> update_get_bundle_mode)
+          # so a lightweight install only ever upgrades to a lightweight build.
+          BAT_BUNDLE_MODE: ${{ matrix.bundle_mode }}
+          # Sign the updater artifacts (.app.tar.gz.sig on mac, -setup.exe.sig on
+          # win) with the minisign key matching the pubkey in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/tauri-build-mode.mjs --mode ${{ matrix.bundle_mode }} --bundles ${{ matrix.bundle }}
 
       - name: Normalize release asset names
@@ -449,6 +462,16 @@ jobs:
           BAT_RELEASE_BUNDLE_MODE: ${{ matrix.asset_mode }}
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: node scripts/normalize-release-asset-names.mjs src-tauri/target/release/bundle
+
+      - name: Stage updater artifacts
+        if: env.BUILD_MATRIX_ENTRY == 'true'
+        env:
+          BAT_RELEASE_PLATFORM: ${{ matrix.platform }}
+          BAT_RELEASE_ARCH: ${{ matrix.arch }}
+          BAT_BUNDLE_MODE: ${{ matrix.bundle_mode }}
+          BAT_RELEASE_BUNDLE_MODE: ${{ matrix.asset_mode }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: node scripts/stage-updater-artifacts.mjs src-tauri/target/release/bundle updater-meta
 
       - name: Smoke test Windows release binary
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'win' && env.RUN_RELEASE_VERIFICATION == 'true'
@@ -477,13 +500,24 @@ jobs:
           path: |
             src-tauri/target/release/bundle/**/*.dmg
             !src-tauri/target/release/bundle/**/rw.*.dmg
+            src-tauri/target/release/bundle/**/*.app.tar.gz
 
       - name: Upload Linux artifact
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: src-tauri/target/release/bundle/**/*.AppImage
+          path: |
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.AppImage.tar.gz
+
+      - name: Upload updater metadata
+        if: env.BUILD_MATRIX_ENTRY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-meta-${{ matrix.artifact }}
+          path: updater-meta/updater-meta.json
+          if-no-files-found: error
 
   release:
     needs: build
@@ -492,6 +526,18 @@ jobs:
       contents: write
 
     steps:
+      # Checkout first: actions/checkout cleans the workspace, which would wipe
+      # the downloaded artifacts/ dir if it ran afterwards.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -508,12 +554,39 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: artifacts/**/*
+          # Explicit patterns: ships installers + the macOS updater tarball, but
+          # NOT the updater-meta JSON sidecars (those feed manifest generation).
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.AppImage.tar.gz
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(env.RELEASE_TAG, '-pre') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate update manifests
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: node scripts/generate-update-manifest.mjs artifacts manifests-out
+
+      - name: Ensure manifests release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view manifests >/dev/null 2>&1 || \
+            gh release create manifests \
+              --title "Updater manifests" \
+              --notes "Auto-update channel manifests. Do not delete — endpoints point here." \
+              --latest=false
+
+      - name: Publish update manifests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload manifests manifests-out/*.json --clobber
 
       - name: Update Homebrew tap
         if: ${{ !contains(env.RELEASE_TAG, '-pre') }}
