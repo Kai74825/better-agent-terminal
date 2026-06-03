@@ -56,8 +56,15 @@ async function listFiles(dir) {
   const files = []
   for (const entry of entries) {
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) files.push(...await listFiles(full))
-    else if (entry.isFile()) files.push(full)
+    if (entry.isDirectory()) {
+      // Don't descend into the macOS .app bundle: it holds thousands of files
+      // (frameworks, the bundled node/codex runtimes) and the updater bundle we
+      // want is the sibling `<name>.app.tar.gz`, not anything inside the .app.
+      if (entry.name.endsWith('.app')) continue
+      files.push(...await listFiles(full))
+    } else if (entry.isFile()) {
+      files.push(full)
+    }
   }
   return files
 }
