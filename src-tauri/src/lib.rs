@@ -13,6 +13,7 @@ mod codex_auth;
 mod commands;
 mod electron_safe_storage;
 mod event_hub;
+mod linux_wayland;
 mod log_file;
 mod network_addresses;
 mod path_guard;
@@ -49,6 +50,21 @@ enum HeadlessCliAction {
     Run(HeadlessServerArgs),
     Help,
 }
+
+/// Run any display-server compatibility shims before GTK / GLib / WebKit start.
+///
+/// On Linux this fixes the AppImage libwayland skew that blanks the window on
+/// newer distros (GitHub issue #112) by re-exec'ing with the system
+/// libwayland-client preloaded. It is strictly gated (AppImage + Wayland only,
+/// at most once) and a no-op everywhere else. Must be called as early as
+/// possible in `main`, before any windowing toolkit is touched.
+#[cfg(target_os = "linux")]
+pub fn ensure_display_server_compat() {
+    linux_wayland::preload_system_libwayland();
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn ensure_display_server_compat() {}
 
 pub fn is_headless_server_invocation() -> bool {
     std::env::args().any(|arg| arg == "--bat-server")
