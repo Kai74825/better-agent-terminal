@@ -268,11 +268,28 @@ choco install better-agent-terminal
 
 Download from [Releases](https://github.com/tony1223/better-agent-terminal/releases/latest) for your platform:
 
-| Platform | Format |
-|---|---|
-| Windows | NSIS installer, `.zip` |
-| macOS | `.dmg` (universal binary) |
-| Linux | `.AppImage` |
+| Platform | Format | Architectures |
+|---|---|---|
+| Windows | NSIS installer, `.zip` | x86_64 |
+| macOS | `.dmg` | Apple Silicon (arm64) & Intel (x86_64) |
+| Linux | `.AppImage` | x86_64 & arm64/aarch64 |
+
+The x86_64 AppImage keeps its historical name (`BetterAgentTerminal-<version>.AppImage`); the arm64 build is published as `BetterAgentTerminal-<version>-arm64.AppImage`. The [install script](#option-5-quick-install-script) picks the right one automatically.
+
+**Headless / remote server (e.g. ARM cloud hosts):**
+
+The same AppImage doubles as a headless remote server — handy for an arm64 cloud box you drive from a mobile/remote client:
+
+```bash
+# arm64 host
+./BetterAgentTerminal-<version>-arm64.AppImage --bat-server --help
+```
+
+Since it is a WebKitGTK app, on a box with no display server, run it under a virtual display:
+
+```bash
+xvfb-run -a ./BetterAgentTerminal-<version>-arm64.AppImage --bat-server
+```
 
 **macOS DMG installation:**
 

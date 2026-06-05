@@ -23,11 +23,14 @@
 const REEXEC_GUARD_ENV: &str = "BAT_WAYLAND_PRELOAD_DONE";
 
 /// Canonical system locations for `libwayland-client.so.0`, tried in order when
-/// `ldconfig` is unavailable or yields nothing usable. x86_64 first because
-/// that is the only Linux target we ship.
+/// `ldconfig` is unavailable or yields nothing usable. Covers the multiarch
+/// layouts of the Linux targets we ship (x86_64 and aarch64) plus arch-agnostic
+/// fallbacks.
 const FALLBACK_LIBWAYLAND_PATHS: &[&str] = &[
     "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0",
     "/lib/x86_64-linux-gnu/libwayland-client.so.0",
+    "/usr/lib/aarch64-linux-gnu/libwayland-client.so.0",
+    "/lib/aarch64-linux-gnu/libwayland-client.so.0",
     "/usr/lib64/libwayland-client.so.0",
     "/usr/lib/libwayland-client.so.0",
 ];

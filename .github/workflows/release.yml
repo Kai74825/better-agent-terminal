@@ -142,6 +142,17 @@ jobs:
             bundle_mode: all-in-one
             asset_mode: ''
             prerelease: false
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            artifact: release-linux-arm64
+            release_exts: '.AppImage'
+            bundle: appimage
+            bundle_mode: all-in-one
+            asset_mode: ''
+            # New platform: also build on -pre tags so it gets validated before
+            # riding along on a stable release.
+            prerelease: true
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90

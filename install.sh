@@ -74,10 +74,32 @@ if [ "$OS" = "macOS" ]; then
     echo "You can now launch $APP_NAME from your $INSTALL_DIR folder."
 
 elif [ "$OS" = "Linux" ]; then
-    # Parse out the Linux .AppImage download URL
-    DOWNLOAD_URL=$(echo "$RELEASE_DATA" | grep -oE '"browser_download_url": "[^"]+\.AppImage"' | head -n 1 | cut -d '"' -f 4)
+    # Map the host arch to the published AppImage asset. The x64 AppImage keeps
+    # its historical arch-less name; arm64 carries a "-arm64" marker. Other
+    # arches have no prebuilt AppImage, so fail fast instead of downloading an
+    # unrunnable binary ("cannot execute binary file: Exec format error").
+    # See: https://github.com/tony1223/better-agent-terminal/issues/113
+    case "$ARCH_TYPE" in
+        x86_64|amd64)  LINUX_ARCH="x64" ;;
+        aarch64|arm64) LINUX_ARCH="arm64" ;;
+        *)
+            echo "Error: No prebuilt Linux $APP_NAME AppImage is available for '$ARCH_TYPE'." >&2
+            echo "Build from source instead: https://github.com/$REPO#option-4-build-from-source" >&2
+            exit 1
+            ;;
+    esac
+
+    # Select the AppImage matching this architecture.
+    APPIMAGE_URLS=$(echo "$RELEASE_DATA" | grep -oE '"browser_download_url": "[^"]+\.AppImage"' | cut -d '"' -f 4)
+    if [ "$LINUX_ARCH" = "arm64" ]; then
+        DOWNLOAD_URL=$(printf '%s\n' "$APPIMAGE_URLS" | grep -E '[-_]arm64\.AppImage$' | head -n 1)
+    else
+        # x64 has no arch marker in its name; exclude any arm64/aarch64 assets.
+        DOWNLOAD_URL=$(printf '%s\n' "$APPIMAGE_URLS" | grep -vE '[-_](arm64|aarch64)\.AppImage$' | head -n 1)
+    fi
     if [ -z "$DOWNLOAD_URL" ]; then
-        echo "Error: Could not find a Linux .AppImage release."
+        echo "Error: Could not find a Linux $LINUX_ARCH .AppImage in the latest release." >&2
+        echo "(The latest release may not include a $LINUX_ARCH build yet.)" >&2
         exit 1
     fi
     

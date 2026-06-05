@@ -17,7 +17,7 @@ function normalizePlatform(value) {
   return value || process.platform
 }
 
-function normalizeMacArch(value) {
+function normalizeArch(value) {
   if (value === 'aarch64') return 'arm64'
   if (value === 'x86_64') return 'x64'
   return value || (process.arch === 'arm64' ? 'arm64' : 'x64')
@@ -58,10 +58,14 @@ async function listFiles(dir) {
 function targetNameFor({ filePath, platform, version, arch, mode }) {
   const ext = extname(filePath)
   if (platform === 'mac' && ext === '.dmg') {
-    return `${withModeSuffix(`BetterAgentTerminal-${version}-${normalizeMacArch(arch)}`, mode)}.dmg`
+    return `${withModeSuffix(`BetterAgentTerminal-${version}-${normalizeArch(arch)}`, mode)}.dmg`
   }
   if (platform === 'linux' && ext === '.AppImage') {
-    return `${withModeSuffix(`BetterAgentTerminal-${version}`, mode)}.AppImage`
+    // Keep the historical x64 asset name (no arch marker) so existing download
+    // links, install.sh, and updater entries keep resolving; only disambiguate
+    // non-x64 arches so multi-arch AppImages don't collide on one release.
+    const archSuffix = normalizeArch(arch) === 'x64' ? '' : `-${normalizeArch(arch)}`
+    return `${withModeSuffix(`BetterAgentTerminal-${version}${archSuffix}`, mode)}.AppImage`
   }
   if (platform === 'win' && ext === '.exe') {
     return `${withModeSuffix(`BetterAgentTerminal.Setup.${version}`, mode)}.exe`
