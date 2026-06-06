@@ -933,6 +933,7 @@ fn copy_file_with_parent(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn make_executable(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {

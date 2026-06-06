@@ -22,11 +22,20 @@ const GitHubPanel = lazy(() => import('./GitHubPanel').then(m => ({ default: m.G
 type WorkspaceTab = 'terminal' | 'files' | 'git' | 'github'
 const TAB_KEY = 'better-terminal-workspace-tab'
 
+type AccountMenuEntry = {
+  id: string          // selector passed to the switch command
+  label: string       // primary line (email)
+  sublabel?: string   // secondary line (subscription tier / CODEX_HOME path)
+  active?: boolean
+}
+
 type WorkspaceAccountChip = {
   kind: 'claude' | 'codex'
   label: string
   title: string
-  accounts?: CodexAccountEntry[]
+  accounts?: AccountMenuEntry[]
+  loggedIn?: boolean
+  unified?: boolean
 }
 
 type CodexAccountEntry = {
@@ -36,7 +45,18 @@ type CodexAccountEntry = {
   codexHome: string
   authenticated?: boolean
   active?: boolean
+  unified?: boolean
+  accountId?: string
 }
+
+type ClaudeAccountEntry = {
+  id: string
+  email?: string
+  subscriptionType?: string
+  isDefault?: boolean
+}
+
+type CliVersions = { claude?: string; codex?: string }
 
 function loadWorkspaceTab(): WorkspaceTab {
   try {
@@ -186,6 +206,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const [showQuickPick, setShowQuickPick] = useState(false)
   const [accountChip, setAccountChip] = useState<WorkspaceAccountChip | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [cliVersions, setCliVersions] = useState<CliVersions | null>(null)
+  const [loginPending, setLoginPending] = useState(false)
   const lastRenderSummaryRef = useRef<string>('')
   // Preset IDs the host knows how to start. `null` until fetched — fall back
   // to the local list so menus aren't empty during the brief load window.
@@ -340,6 +362,13 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const refreshAccountChip = useCallback(async () => {
     const preset = accountTerminal?.agentPreset
     setAccountMenuOpen(false)
+    if (host.debug.isDebugMode) {
+      void host.debug.log(
+        `[WorkspaceView] account chip resolve preset=${preset ?? 'none'} ` +
+        `terminal=${accountTerminal?.id?.slice(0, 8) ?? 'none'} ` +
+        `focused=${focusedTerminalId?.slice(0, 8) ?? 'none'}`,
+      )
+    }
     if (!preset) {
       setAccountChip(null)
       return
@@ -347,15 +376,24 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     if (preset === 'codex-agent' || preset === 'codex-agent-worktree') {
       try {
         const result = await host.codex.accountList() as { accounts?: CodexAccountEntry[]; activeCodexHome?: string }
-        const accounts = result.accounts || []
-        const active = accounts.find(account => account.active)
-          || accounts.find(account => account.codexHome === result.activeCodexHome)
-        const label = active?.email || active?.label || 'Codex'
+        const raw = result.accounts || []
+        const active = raw.find(account => account.active)
+          || raw.find(account => account.codexHome === result.activeCodexHome)
+        const entries: AccountMenuEntry[] = raw.map(account => ({
+          id: account.id,
+          label: account.email || account.label || account.codexHome,
+          sublabel: account.unified ? undefined : account.codexHome,
+          active: account.active || account.codexHome === result.activeCodexHome,
+        }))
         setAccountChip({
           kind: 'codex',
-          label,
-          title: active?.codexHome ? `CODEX_HOME: ${active.codexHome}` : 'Codex account',
-          accounts,
+          label: active?.email || active?.label || 'Codex',
+          title: active?.unified
+            ? 'Codex account'
+            : active?.codexHome ? `CODEX_HOME: ${active.codexHome}` : 'Codex account',
+          accounts: entries,
+          loggedIn: Boolean(active?.authenticated ?? entries.length > 0),
+          unified: Boolean(active?.unified || raw.some(a => a.unified)),
         })
       } catch (error) {
         void host.debug.log(`[WorkspaceView] failed to load Codex account info: ${errorMessage(error)}`)
@@ -365,12 +403,26 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     }
     if (preset === 'claude-code' || preset === 'claude-code-v2' || preset === 'claude-code-worktree' || preset === 'claude-channel') {
       try {
-        const info = await host.claude.getAccountInfo(accountTerminal.id) as { email?: string; organization?: string; subscriptionType?: string } | null
-        const label = info?.email || info?.organization || 'Claude'
+        const [info, list] = await Promise.all([
+          (host.claude.getAccountInfo(accountTerminal.id) as Promise<{ email?: string; organization?: string; subscriptionType?: string } | null>).catch(() => null),
+          (host.claude.accountList() as Promise<{ accounts?: ClaudeAccountEntry[]; activeAccountId?: string } | null>).catch(() => null),
+        ])
+        const accounts = list?.accounts || []
+        const activeId = list?.activeAccountId
+        const entries: AccountMenuEntry[] = accounts.map(account => ({
+          id: account.id,
+          label: account.email || account.id,
+          sublabel: account.subscriptionType || undefined,
+          active: account.id === activeId,
+        }))
+        const activeEmail = accounts.find(account => account.id === activeId)?.email
+        const label = info?.email || activeEmail || info?.organization || 'Claude'
         setAccountChip({
           kind: 'claude',
           label,
           title: info?.email ? `${info.email} (${info.subscriptionType || 'unknown'})` : 'Claude account',
+          accounts: entries,
+          loggedIn: Boolean(info?.email || activeEmail || entries.length > 0),
         })
       } catch (error) {
         void host.debug.log(`[WorkspaceView] failed to load Claude account info: ${errorMessage(error)}`)
@@ -379,7 +431,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       return
     }
     setAccountChip(null)
-  }, [accountTerminal?.id, accountTerminal?.agentPreset])
+  }, [accountTerminal?.id, accountTerminal?.agentPreset, focusedTerminalId])
 
   useEffect(() => {
     if (!isActive) return
@@ -393,14 +445,85 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     }
   }, [isActive, refreshAccountChip])
 
-  const handleCodexAccountSwitch = useCallback(async (account: CodexAccountEntry) => {
-    if (account.active) {
+  const loadCliVersions = useCallback(async () => {
+    try {
+      const status = await host.runtime.getStatus() as {
+        claude?: { version?: string | null }
+        codex?: { version?: string | null }
+      }
+      setCliVersions({
+        claude: status?.claude?.version || undefined,
+        codex: status?.codex?.version || undefined,
+      })
+    } catch (error) {
+      void host.debug.log(`[WorkspaceView] failed to load CLI versions: ${errorMessage(error)}`)
+      setCliVersions({})
+    }
+  }, [])
+
+  // Load CLI versions once a Claude/Codex chip is shown so the version can be
+  // displayed inline (always visible, not only inside the dropdown).
+  useEffect(() => {
+    if (accountChip && !cliVersions) void loadCliVersions()
+  }, [accountChip, cliVersions, loadCliVersions])
+
+  // Start a login flow from the chip. Claude has a real CLI login; for Codex
+  // (unified mode) we register the account currently authenticated in ~/.codex.
+  const handleLogin = useCallback(async (kind: 'claude' | 'codex') => {
+    // Remote client: the login flow (browser/CLI) runs on the host, not here —
+    // ask the user to log in from a terminal instead.
+    if (isRemoteConnected) {
+      setAccountMenuOpen(true)
+      return
+    }
+    if (loginPending) return
+    // Keep the menu open and show a pending state — the CLI takes a few seconds
+    // to spin up before the browser opens, so give the user a transition cue.
+    setAccountMenuOpen(true)
+    setLoginPending(true)
+    try {
+      if (kind === 'claude') {
+        const result = await host.claude.authLogin() as { success?: boolean; error?: string }
+        if (result?.success) {
+          try { await host.claude.accountImportCurrent() } catch { /* ignore if unavailable */ }
+        }
+        window.dispatchEvent(new CustomEvent('claude-account-switched', { detail: {} }))
+      } else {
+        // Real Codex login (ChatGPT browser OAuth); registers + activates it.
+        await host.codex.accountLogin()
+        window.dispatchEvent(new CustomEvent('codex-account-switched', { detail: {} }))
+      }
+    } catch (error) {
+      void host.debug.log(`[WorkspaceView] ${kind} login failed: ${errorMessage(error)}`)
+    }
+    setLoginPending(false)
+    setAccountMenuOpen(false)
+    await refreshAccountChip()
+  }, [refreshAccountChip, isRemoteConnected, loginPending])
+
+  // Switch Claude/Codex account directly from the chip menu. The id is the
+  // correct selector for both agents and both Codex modes (legacy id == path).
+  const handleAccountSwitch = useCallback(async (entry: AccountMenuEntry, kind: 'claude' | 'codex') => {
+    if (entry.active || !entry.id) {
       setAccountMenuOpen(false)
       return
     }
-    const result = await host.codex.accountSwitch(account.codexHome) as { success?: boolean }
-    if (result?.success === false) return
-    window.dispatchEvent(new CustomEvent('codex-account-switched', { detail: { codexHome: account.codexHome } }))
+    try {
+      if (kind === 'codex') {
+        const result = await host.codex.accountSwitch(entry.id) as { success?: boolean }
+        if (result?.success === false) return
+        window.dispatchEvent(new CustomEvent('codex-account-switched', { detail: { accountId: entry.id } }))
+      } else {
+        const ok = await host.claude.accountSwitch(entry.id) as boolean
+        if (ok === false) return
+        window.dispatchEvent(new CustomEvent('claude-account-switched', { detail: { accountId: entry.id } }))
+      }
+    } catch (error) {
+      // Surfaces e.g. the unified-mode "turn is running" denial.
+      void host.debug.log(`[WorkspaceView] ${kind} account switch failed: ${errorMessage(error)}`)
+      return
+    }
+    setAccountMenuOpen(false)
     await refreshAccountChip()
   }, [refreshAccountChip])
 
@@ -895,27 +1018,70 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
               className={`workspace-account-chip workspace-account-chip-${accountChip.kind}`}
               title={accountChip.title}
               onClick={() => {
-                if (accountChip.kind === 'codex' && (accountChip.accounts?.length || 0) > 0) {
-                  setAccountMenuOpen(open => !open)
+                // Not logged in → go straight to login (both Claude and Codex
+                // have real CLI login flows). In remote mode, open the menu so
+                // the "log in from a terminal" hint is shown instead.
+                if (!accountChip.loggedIn && !isRemoteConnected) {
+                  void handleLogin(accountChip.kind)
+                  return
                 }
+                setAccountMenuOpen(open => {
+                  const next = !open
+                  if (next && !cliVersions) void loadCliVersions()
+                  return next
+                })
               }}
             >
               <span className="workspace-account-kind">{accountChip.kind}</span>
-              <span className="workspace-account-label">{accountChip.label}</span>
+              {(() => {
+                if (!accountChip.loggedIn) return null
+                const raw = accountChip.kind === 'claude' ? cliVersions?.claude : cliVersions?.codex
+                if (!raw) return null
+                const short = raw.match(/\d+\.\d+\.\d+/)?.[0] || raw
+                return <span className="workspace-account-version">v{short}</span>
+              })()}
+              <span className="workspace-account-label">
+                {accountChip.loggedIn ? accountChip.label : t('workspace.accountLogin')}
+              </span>
             </button>
-            {accountMenuOpen && accountChip.kind === 'codex' && accountChip.accounts && (
+            {accountMenuOpen && (
               <div className="workspace-account-menu">
-                {accountChip.accounts.map(account => (
+                {(accountChip.accounts || []).map(account => (
                   <button
-                    key={account.codexHome}
+                    key={account.id || account.label}
                     className={`workspace-account-menu-item${account.active ? ' active' : ''}`}
-                    onClick={() => { void handleCodexAccountSwitch(account) }}
-                    title={account.codexHome}
+                    onClick={() => { void handleAccountSwitch(account, accountChip.kind) }}
+                    title={account.sublabel || account.label}
                   >
-                    <span className="workspace-account-menu-label">{account.email || account.label || account.codexHome}</span>
-                    <span className="workspace-account-menu-path">{account.codexHome}</span>
+                    <span className="workspace-account-menu-label">{account.label}</span>
+                    {account.sublabel && (
+                      <span className="workspace-account-menu-path">{account.sublabel}</span>
+                    )}
                   </button>
                 ))}
+                {loginPending ? (
+                  <div className="workspace-account-menu-pending">
+                    <span className="workspace-account-spinner" />
+                    <span>{t('workspace.accountLoggingIn')}</span>
+                  </div>
+                ) : isRemoteConnected ? (
+                  <div className="workspace-account-menu-hint">
+                    {t('workspace.accountRemoteLoginHint')}
+                  </div>
+                ) : (
+                  <button
+                    className="workspace-account-menu-item workspace-account-menu-action"
+                    onClick={() => { void handleLogin(accountChip.kind) }}
+                  >
+                    <span className="workspace-account-menu-label">
+                      {accountChip.loggedIn ? t('workspace.accountAdd') : t('workspace.accountLogin')}
+                    </span>
+                  </button>
+                )}
+                <div className="workspace-account-menu-versions">
+                  <span>Claude Code: {cliVersions ? (cliVersions.claude || '—') : '…'}</span>
+                  <span>Codex: {cliVersions ? (cliVersions.codex || '—') : '…'}</span>
+                </div>
               </div>
             )}
           </div>

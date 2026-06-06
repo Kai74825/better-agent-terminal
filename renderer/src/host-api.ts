@@ -757,6 +757,15 @@ function createTauriHost(): BatAppAPI {
       accountList: () => getInvoke()<unknown>('codex_account_list'),
       accountSwitch: (codexHome: string) =>
         getInvoke()<unknown>('codex_account_switch', { codexHome }),
+      // Tier 2 unified-account model (opt-in shared sessions).
+      unifiedStatus: () => getInvoke()<unknown>('codex_unified_status'),
+      unifiedMigrate: () => getInvoke()<unknown>('codex_unified_migrate'),
+      accountCaptureCurrent: (label?: string) =>
+        getInvoke()<unknown>('codex_account_capture_current', { label }),
+      accountRemove: (accountId: string) =>
+        getInvoke()<unknown>('codex_account_remove_unified', { accountId }),
+      accountLogin: (apiKey?: string) =>
+        getInvoke()<unknown>('codex_account_login', { apiKey }),
     },
     git: {
       // Read-only git wrappers — see src-tauri/src/commands/git.rs.
@@ -1168,6 +1177,18 @@ function createTauriHost(): BatAppAPI {
         listenAdapter<unknown>('claude-channel:status', callback),
       onTurnEnd: (callback: (payload: unknown) => void) =>
         listenAdapter<unknown>('claude-channel:turn-end', callback),
+      onAssistant: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:assistant', callback),
+      onToolUse: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:tool-use', callback),
+      onToolResult: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:tool-result', callback),
+      onThinking: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:thinking', callback),
+      onUsage: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:usage', callback),
+      onResult: (callback: (payload: unknown) => void) =>
+        listenAdapter<unknown>('claude-channel:result', callback),
     },
     worktree: new Proxy({}, {
       // worktree.* — agent-tied. Sidecar handlers mirror the host
