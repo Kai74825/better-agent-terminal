@@ -362,6 +362,13 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const refreshAccountChip = useCallback(async () => {
     const preset = accountTerminal?.agentPreset
     setAccountMenuOpen(false)
+    if (host.debug.isDebugMode) {
+      void host.debug.log(
+        `[WorkspaceView] account chip resolve preset=${preset ?? 'none'} ` +
+        `terminal=${accountTerminal?.id?.slice(0, 8) ?? 'none'} ` +
+        `focused=${focusedTerminalId?.slice(0, 8) ?? 'none'}`,
+      )
+    }
     if (!preset) {
       setAccountChip(null)
       return
@@ -424,7 +431,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       return
     }
     setAccountChip(null)
-  }, [accountTerminal?.id, accountTerminal?.agentPreset])
+  }, [accountTerminal?.id, accountTerminal?.agentPreset, focusedTerminalId])
 
   useEffect(() => {
     if (!isActive) return
