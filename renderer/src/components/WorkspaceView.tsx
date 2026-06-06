@@ -207,6 +207,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   const [accountChip, setAccountChip] = useState<WorkspaceAccountChip | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [cliVersions, setCliVersions] = useState<CliVersions | null>(null)
+  const [loginPending, setLoginPending] = useState(false)
   const lastRenderSummaryRef = useRef<string>('')
   // Preset IDs the host knows how to start. `null` until fetched — fall back
   // to the local list so menus aren't empty during the brief load window.
@@ -468,7 +469,11 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       setAccountMenuOpen(true)
       return
     }
-    setAccountMenuOpen(false)
+    if (loginPending) return
+    // Keep the menu open and show a pending state — the CLI takes a few seconds
+    // to spin up before the browser opens, so give the user a transition cue.
+    setAccountMenuOpen(true)
+    setLoginPending(true)
     try {
       if (kind === 'claude') {
         const result = await host.claude.authLogin() as { success?: boolean; error?: string }
@@ -484,8 +489,10 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     } catch (error) {
       void host.debug.log(`[WorkspaceView] ${kind} login failed: ${errorMessage(error)}`)
     }
+    setLoginPending(false)
+    setAccountMenuOpen(false)
     await refreshAccountChip()
-  }, [refreshAccountChip, isRemoteConnected])
+  }, [refreshAccountChip, isRemoteConnected, loginPending])
 
   // Switch Claude/Codex account directly from the chip menu. The id is the
   // correct selector for both agents and both Codex modes (legacy id == path).
@@ -1045,7 +1052,12 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
                     )}
                   </button>
                 ))}
-                {isRemoteConnected ? (
+                {loginPending ? (
+                  <div className="workspace-account-menu-pending">
+                    <span className="workspace-account-spinner" />
+                    <span>{t('workspace.accountLoggingIn')}</span>
+                  </div>
+                ) : isRemoteConnected ? (
                   <div className="workspace-account-menu-hint">
                     {t('workspace.accountRemoteLoginHint')}
                   </div>

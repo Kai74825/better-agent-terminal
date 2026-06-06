@@ -289,7 +289,8 @@
     "accountLogin": "Login",
     "accountAdd": "Add account…",
     "accountAddCurrent": "Add current account",
-    "accountRemoteLoginHint": "Remote session — log in from a terminal (run codex login / claude on the host)."
+    "accountRemoteLoginHint": "Remote session — log in from a terminal (run codex login / claude on the host).",
+    "accountLoggingIn": "Signing in… complete it in your browser"
   },
 
   "github": {

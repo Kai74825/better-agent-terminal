@@ -431,6 +431,31 @@
   line-height: 1.4;
 }
 
+.workspace-account-menu-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-account-spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color, #3b8eea);
+  animation: bat-account-spin 0.7s linear infinite;
+}
+
+@keyframes bat-account-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .workspace-account-menu-versions {
   display: flex;
   flex-direction: column;
