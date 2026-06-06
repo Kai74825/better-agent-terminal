@@ -3419,6 +3419,23 @@ pub async fn codex_account_remove_unified(
         .map_err(|message| BridgeError { message })
 }
 
+#[tauri::command]
+pub async fn codex_account_login(
+    app: AppHandle,
+    codex: State<'_, CodexAppServerState>,
+    api_key: Option<String>,
+) -> Result<Value, BridgeError> {
+    // codex login is interactive (browser OAuth) and can take a while — run it
+    // off the async runtime so it doesn't stall other commands.
+    let codex = codex.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || codex.account_login(&app, api_key))
+        .await
+        .map_err(|err| BridgeError {
+            message: format!("codex login worker failed: {err}"),
+        })?
+        .map_err(|message| BridgeError { message })
+}
+
 // --- read-only metadata ---------------------------------------------------
 
 #[tauri::command]

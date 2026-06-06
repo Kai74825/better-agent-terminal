@@ -278,7 +278,8 @@
     "github": "GitHub",
     "accountLogin": "登录",
     "accountAdd": "添加账号…",
-    "accountAddCurrent": "加入当前账号"
+    "accountAddCurrent": "加入当前账号",
+    "accountRemoteLoginHint": "远程连接 — 请在终端登录（在主机端执行 codex login / claude）。"
   },
 
   "github": {

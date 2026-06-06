@@ -757,31 +757,43 @@ fn discover_codex_homes(app: &AppHandle) -> Vec<PathBuf> {
 }
 
 fn build_codex_command(app: &AppHandle) -> Command {
+    build_codex_command_with_args(app, &["app-server"], true)
+}
+
+fn build_codex_command_with_args(
+    app: &AppHandle,
+    subcommand: &[&str],
+    with_api_key_env: bool,
+) -> Command {
     let mut codex_path_dir: Option<PathBuf> = None;
     let mut command = match resolve_codex_binary(app) {
         CodexBinary::Native(path) => {
             codex_path_dir = codex_path_dir_for_binary(&path);
             let mut command = Command::new(path);
-            command.arg("app-server");
+            command.args(subcommand);
             command
         }
         CodexBinary::Wrapper(command_name) => {
             #[cfg(windows)]
             {
                 let mut command = Command::new("cmd");
-                command.arg("/C").arg(command_name).arg("app-server");
+                command.arg("/C").arg(command_name).args(subcommand);
                 command
             }
             #[cfg(not(windows))]
             {
                 let mut command = Command::new(command_name);
-                command.arg("app-server");
+                command.args(subcommand);
                 command
             }
         }
     };
-    if let Some(api_key) = codex_auth::configured_openai_key_for_runtime(app) {
-        command.env("OPENAI_API_KEY", api_key);
+    // The ChatGPT (browser) login flow must not see OPENAI_API_KEY, or codex
+    // treats the account as API-key authenticated; only the app-server needs it.
+    if with_api_key_env {
+        if let Some(api_key) = codex_auth::configured_openai_key_for_runtime(app) {
+            command.env("OPENAI_API_KEY", api_key);
+        }
     }
     if let Some(codex_home) = active_codex_home(app) {
         command.env("CODEX_HOME", codex_home);
@@ -807,6 +819,42 @@ fn build_codex_command(app: &AppHandle) -> Command {
     }
     hide_console_window(&mut command);
     command
+}
+
+const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Run `codex login` (ChatGPT browser OAuth by default; `--api-key <key>` when
+/// provided). codex opens the browser itself and writes auth.json on success.
+fn run_codex_login(app: &AppHandle, api_key: Option<&str>) -> Result<(), String> {
+    let mut args: Vec<&str> = vec!["login"];
+    if let Some(key) = api_key {
+        args.push("--api-key");
+        args.push(key);
+    }
+    let mut child = build_codex_command_with_args(app, &args, false)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("failed to start codex login: {err}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!("codex login exited with {status}"));
+            }
+            Ok(None) if started.elapsed() >= CODEX_LOGIN_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("codex login timed out".to_string());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(err) => return Err(err.to_string()),
+        }
+    }
 }
 
 fn codex_path_dir_for_binary(binary: &Path) -> Option<PathBuf> {
@@ -2069,6 +2117,48 @@ impl CodexAppServerState {
                 .map_err(|err| err.to_string())?;
         self.drop_connection();
         serde_json::to_value(&report).map_err(|err| err.to_string())
+    }
+
+    /// Run an interactive `codex login` (ChatGPT browser OAuth, or API key) for
+    /// the active Codex home (the shared `~/.codex` in unified mode). In unified
+    /// mode the freshly-authenticated identity is registered as an account and
+    /// made active. Blocking — call from `spawn_blocking`.
+    pub fn account_login(&self, app: &AppHandle, api_key: Option<String>) -> Result<Value, String> {
+        let unified = codex_unified_enabled(app);
+        // Snapshot the current active identity before login overwrites the home,
+        // so the previously-active account keeps its latest tokens.
+        if unified {
+            if let (Some(app_data), Some(shared)) =
+                (app_data::app_data_dir_opt(app), shared_home(app))
+            {
+                let _swap = self.inner.unified_swap_lock.lock();
+                codex_account_store::snapshot_active_for_exit(&app_data, &shared);
+            }
+        }
+
+        run_codex_login(app, api_key.as_deref())?;
+
+        if unified {
+            if let (Some(app_data), Some(shared)) =
+                (app_data::app_data_dir_opt(app), shared_home(app))
+            {
+                let _swap = self.inner.unified_swap_lock.lock();
+                match codex_account_store::capture_current(&app_data, &shared, None) {
+                    Ok(account) => {
+                        // The shared home already holds this identity → just mark active.
+                        let _ = codex_account_store::set_active(&app_data, &account.id);
+                    }
+                    Err(err) => app_cmd::log_tauri(
+                        app,
+                        &format!("[codex-account] capture after login failed: {err}"),
+                    ),
+                }
+            }
+        }
+
+        // Next request respawns the app-server with the new auth.
+        self.drop_connection();
+        Ok(json!({ "success": true, "account": self.account_info(app) }))
     }
 
     pub fn account_capture_current(

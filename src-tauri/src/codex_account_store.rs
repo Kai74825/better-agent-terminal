@@ -471,6 +471,18 @@ pub fn capture_current(
     Ok(account)
 }
 
+/// Mark an account active in the index WITHOUT moving any files. Use only when
+/// the shared home already physically holds this account's identity (e.g. right
+/// after a fresh `codex login` wrote it there).
+pub fn set_active(app_data_dir: &Path, id: &str) -> Result<(), CodexAccountStoreError> {
+    let mut index = read_index(app_data_dir);
+    if index.accounts.iter().any(|a| a.id == id) {
+        index.active_account_id = Some(id.to_string());
+        write_index(app_data_dir, &index)?;
+    }
+    Ok(())
+}
+
 /// Remove an account from the index + delete its identity store. Never touches
 /// `sessions/`. If the removed account was active, reassign + load a remaining
 /// account's identity into `shared_home`.

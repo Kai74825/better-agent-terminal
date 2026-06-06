@@ -424,6 +424,13 @@
   color: var(--accent-color, #3b8eea);
 }
 
+.workspace-account-menu-hint {
+  padding: 7px 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .workspace-account-menu-versions {
   display: flex;
   flex-direction: column;

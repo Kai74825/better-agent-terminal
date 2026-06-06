@@ -462,6 +462,12 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   // Start a login flow from the chip. Claude has a real CLI login; for Codex
   // (unified mode) we register the account currently authenticated in ~/.codex.
   const handleLogin = useCallback(async (kind: 'claude' | 'codex') => {
+    // Remote client: the login flow (browser/CLI) runs on the host, not here —
+    // ask the user to log in from a terminal instead.
+    if (isRemoteConnected) {
+      setAccountMenuOpen(true)
+      return
+    }
     setAccountMenuOpen(false)
     try {
       if (kind === 'claude') {
@@ -471,14 +477,15 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
         }
         window.dispatchEvent(new CustomEvent('claude-account-switched', { detail: {} }))
       } else {
-        await host.codex.accountCaptureCurrent()
+        // Real Codex login (ChatGPT browser OAuth); registers + activates it.
+        await host.codex.accountLogin()
         window.dispatchEvent(new CustomEvent('codex-account-switched', { detail: {} }))
       }
     } catch (error) {
       void host.debug.log(`[WorkspaceView] ${kind} login failed: ${errorMessage(error)}`)
     }
     await refreshAccountChip()
-  }, [refreshAccountChip])
+  }, [refreshAccountChip, isRemoteConnected])
 
   // Switch Claude/Codex account directly from the chip menu. The id is the
   // correct selector for both agents and both Codex modes (legacy id == path).
@@ -997,9 +1004,11 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
               className={`workspace-account-chip workspace-account-chip-${accountChip.kind}`}
               title={accountChip.title}
               onClick={() => {
-                // Not logged in → go straight to login (Claude has a real login flow).
-                if (!accountChip.loggedIn && accountChip.kind === 'claude') {
-                  void handleLogin('claude')
+                // Not logged in → go straight to login (both Claude and Codex
+                // have real CLI login flows). In remote mode, open the menu so
+                // the "log in from a terminal" hint is shown instead.
+                if (!accountChip.loggedIn && !isRemoteConnected) {
+                  void handleLogin(accountChip.kind)
                   return
                 }
                 setAccountMenuOpen(open => {
@@ -1036,15 +1045,17 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
                     )}
                   </button>
                 ))}
-                {(accountChip.kind === 'claude' || accountChip.unified) && (
+                {isRemoteConnected ? (
+                  <div className="workspace-account-menu-hint">
+                    {t('workspace.accountRemoteLoginHint')}
+                  </div>
+                ) : (
                   <button
                     className="workspace-account-menu-item workspace-account-menu-action"
                     onClick={() => { void handleLogin(accountChip.kind) }}
                   >
                     <span className="workspace-account-menu-label">
-                      {accountChip.kind === 'claude'
-                        ? (accountChip.loggedIn ? t('workspace.accountAdd') : t('workspace.accountLogin'))
-                        : t('workspace.accountAddCurrent')}
+                      {accountChip.loggedIn ? t('workspace.accountAdd') : t('workspace.accountLogin')}
                     </span>
                   </button>
                 )}

@@ -297,6 +297,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             claude_cmd::codex_unified_migrate,
             claude_cmd::codex_account_capture_current,
             claude_cmd::codex_account_remove_unified,
+            claude_cmd::codex_account_login,
             claude_cmd::claude_get_cli_path,
             claude_cmd::claude_prepare_cli_session,
             claude_cmd::claude_list_sessions,

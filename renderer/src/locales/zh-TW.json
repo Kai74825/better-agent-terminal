@@ -288,7 +288,8 @@
     "github": "GitHub",
     "accountLogin": "登入",
     "accountAdd": "新增帳號…",
-    "accountAddCurrent": "加入目前帳號"
+    "accountAddCurrent": "加入目前帳號",
+    "accountRemoteLoginHint": "遠端連線 — 請在終端機登入（在主機端執行 codex login / claude）。"
   },
 
   "github": {
