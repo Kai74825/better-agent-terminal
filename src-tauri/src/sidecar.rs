@@ -41,6 +41,9 @@ const RESTART_BACKOFF_DURATION: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SidecarLaunchMode {
+    // Constructed only on non-Windows at runtime (and in tests), but referenced
+    // by `as_str` and the spawn-log test on all platforms — keep it defined.
+    #[cfg_attr(windows, allow(dead_code))]
     DirectScriptArg,
     #[cfg(windows)]
     WindowsEvalBootstrap,
