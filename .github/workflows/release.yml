@@ -142,28 +142,33 @@ jobs:
             bundle_mode: all-in-one
             asset_mode: ''
             prerelease: false
-          # TEMPORARILY DISABLED (#113): the Linux arm64 AppImage leg fails in
-          # linuxdeploy's gtk plugin on aarch64 ("subprocess failed (exit code 2)").
-          # Because `release` needs the whole `build` matrix, one failing leg skips
-          # the release for ALL platforms — that is why v3.1.13/14/15 published
-          # nothing. continue-on-error does NOT exempt a leg from `needs` gating,
-          # so until the aarch64 bundling is diagnosed (needs verbose linuxdeploy
-          # logs, validated on a -pre tag) the proven platforms ship without it.
-          # The runtime *-bin deps below are kept so re-enabling is one step away.
-          # - os: ubuntu-22.04-arm
-          #   platform: linux
-          #   arch: arm64
-          #   artifact: release-linux-arm64
-          #   release_exts: '.AppImage'
-          #   bundle: appimage
-          #   bundle_mode: all-in-one
-          #   asset_mode: ''
-          #   prerelease: true
+          # Linux arm64 AppImage (#113). The aarch64 linuxdeploy gtk plugin has been
+          # failing ("subprocess failed (exit code 2)") and `release` needs the whole
+          # `build` matrix, so one failing leg skips the release for ALL platforms —
+          # that is why v3.1.13/14/15 published nothing (continue-on-error does NOT
+          # exempt a leg from `needs` gating). It is therefore gated `pre_only: true`:
+          # it builds ONLY on -pre tags (for diagnosis) and is SKIPPED on stable tags,
+          # so it can never block a stable `release new tag version`. Flip pre_only to
+          # false once a -pre run produces a green arm64 AppImage.
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            artifact: release-linux-arm64
+            release_exts: '.AppImage'
+            bundle: appimage
+            bundle_mode: all-in-one
+            asset_mode: ''
+            prerelease: true
+            pre_only: true
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
-      BUILD_MATRIX_ENTRY: ${{ !contains(inputs.release_tag, '-pre') || matrix.prerelease }}
+      # pre_only legs (e.g. linux arm64) build ONLY on -pre tags and are skipped on
+      # stable tags, so an unstable leg can never block a stable release. All other
+      # legs follow the usual rule: build on stable tags, or on -pre tags when the leg
+      # opts in via prerelease: true.
+      BUILD_MATRIX_ENTRY: ${{ (matrix.pre_only && contains(inputs.release_tag, '-pre')) || (!matrix.pre_only && (!contains(inputs.release_tag, '-pre') || matrix.prerelease)) }}
 
     steps:
       - name: Skip non-prerelease target
@@ -461,7 +466,45 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
+          # On arm64 the linuxdeploy gtk plugin has been failing with a generic
+          # "subprocess failed (exit code 2)". The plugin is a bash script that turns
+          # on `set -x` when DEBUG is set, so this surfaces the exact failing
+          # subprocess inline in the build log. Harmless on the x64 leg, but scoped
+          # to arm64 to keep stable x64 logs clean.
+          DEBUG: ${{ matrix.arch == 'arm64' && '1' || '' }}
         run: node scripts/tauri-build-mode.mjs --mode ${{ matrix.bundle_mode }} --bundles ${{ matrix.bundle }} --verbose
+
+      - name: Diagnose arm64 AppImage failure
+        if: ${{ failure() && matrix.platform == 'linux' && matrix.arch == 'arm64' }}
+        shell: bash
+        run: |
+          set +e
+          echo "===== arch / os ====="
+          uname -a
+          echo "===== gtk-plugin runtime tools (linuxdeploy-plugin-gtk depends on these) ====="
+          for tool in gdk-pixbuf-query-loaders gdk-pixbuf-query-loaders-64 gtk-update-icon-cache glib-compile-schemas rsvg-convert update-mime-database; do
+            printf '%-32s ' "$tool:"
+            command -v "$tool" || echo "MISSING"
+          done
+          echo "===== gdk-pixbuf loader dir (arm64 path) ====="
+          ls -la /usr/lib/aarch64-linux-gnu/gdk-pixbuf-2.0/*/loaders/ 2>&1 | head -50
+          find /usr -name 'gdk-pixbuf-query-loaders*' 2>/dev/null
+          echo "===== ~/.cache/tauri (linuxdeploy + plugins downloaded by tauri) ====="
+          ls -la "$HOME/.cache/tauri" 2>&1
+          echo "===== AppDir state (partial bundle before crash) ====="
+          ls -laR src-tauri/target/release/bundle/appimage 2>&1 | head -120
+          echo "===== linuxdeploy plugin list ====="
+          LD="$(find "$HOME/.cache/tauri" -name 'linuxdeploy-*.AppImage' 2>/dev/null | head -1)"
+          if [ -n "$LD" ]; then
+            echo "linuxdeploy: $LD"
+            APPIMAGE_EXTRACT_AND_RUN=1 "$LD" --list-plugins 2>&1 | head -40
+          else
+            echo "no linuxdeploy AppImage found in ~/.cache/tauri"
+          fi
+          echo "===== ldd of main binary (missing libs surface here) ====="
+          BIN="$(find src-tauri/target/release -maxdepth 1 -type f -executable 2>/dev/null | head -1)"
+          [ -n "$BIN" ] && ldd "$BIN" 2>&1 | grep -i 'not found' || echo "(no missing libs / binary not found)"
+          exit 0
 
       - name: Build Tauri release bundle
         if: env.BUILD_MATRIX_ENTRY == 'true' && matrix.platform != 'linux'
