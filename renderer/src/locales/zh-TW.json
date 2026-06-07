@@ -290,7 +290,8 @@
     "accountAdd": "新增帳號…",
     "accountAddCurrent": "加入目前帳號",
     "accountRemoteLoginHint": "遠端連線 — 請在終端機登入（在主機端執行 codex login / claude）。",
-    "accountLoggingIn": "登入中…請在瀏覽器完成登入"
+    "accountLoggingIn": "登入中…請在瀏覽器完成登入",
+    "accountCancelLogin": "取消"
   },
 
   "github": {

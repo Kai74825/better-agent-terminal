@@ -450,6 +450,26 @@
   animation: bat-account-spin 0.7s linear infinite;
 }
 
+.workspace-account-menu-pending-label {
+  flex: 1 1 auto;
+}
+
+.workspace-account-menu-cancel {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workspace-account-menu-cancel:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color, #3b8eea);
+}
+
 @keyframes bat-account-spin {
   to {
     transform: rotate(360deg);

@@ -20,7 +20,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -172,6 +172,9 @@ struct CodexInner {
     // Serializes unified-account identity-bundle file operations (switch /
     // migrate / capture / remove) so concurrent windows can't interleave swaps.
     unified_swap_lock: Mutex<()>,
+    // Set by account_login_cancel() to abort an in-flight `codex login` child;
+    // the run_codex_login poll loop kills the process when it sees this.
+    login_cancel: AtomicBool,
 }
 
 #[derive(Clone, Default)]
@@ -689,6 +692,16 @@ fn codex_auth_summary(codex_home: &Path) -> (Option<String>, Option<String>, boo
     (email, account_id, authenticated)
 }
 
+/// True when an account JSON value carries a non-empty `email`. Used to drop
+/// email-less Codex homes (e.g. a bare `~/.codex`) from the account lists.
+fn value_has_email(value: &Value) -> bool {
+    value
+        .get("email")
+        .and_then(|email| email.as_str())
+        .map(|email| !email.trim().is_empty())
+        .unwrap_or(false)
+}
+
 fn codex_account_info_value(app: &AppHandle, codex_home: PathBuf, active: bool) -> Value {
     let (email, account_id, authenticated) = codex_auth_summary(&codex_home);
     let label = email
@@ -825,7 +838,11 @@ const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Run `codex login` (ChatGPT browser OAuth by default; `--api-key <key>` when
 /// provided). codex opens the browser itself and writes auth.json on success.
-fn run_codex_login(app: &AppHandle, api_key: Option<&str>) -> Result<(), String> {
+fn run_codex_login(
+    app: &AppHandle,
+    api_key: Option<&str>,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let mut args: Vec<&str> = vec!["login"];
     if let Some(key) = api_key {
         args.push("--api-key");
@@ -839,6 +856,13 @@ fn run_codex_login(app: &AppHandle, api_key: Option<&str>) -> Result<(), String>
         .map_err(|err| format!("failed to start codex login: {err}"))?;
     let started = Instant::now();
     loop {
+        // User-requested cancel (e.g. closed the browser tab) — kill the pending
+        // OAuth child so no auth.json is written and the UI can reset.
+        if cancel.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("codex login cancelled".to_string());
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
@@ -1957,6 +1981,9 @@ impl CodexAppServerState {
                 let is_active = active.as_deref() == Some(home.as_path());
                 codex_account_info_value(app, home, is_active)
             })
+            // Only real, signed-in homes count: drop ones with no resolvable
+            // email (e.g. a bare ~/.codex that would otherwise show as ".codex").
+            .filter(value_has_email)
             .collect::<Vec<_>>();
         json!({
             "accounts": accounts,
@@ -1995,6 +2022,9 @@ impl CodexAppServerState {
                 let active = index.active_account_id.as_deref() == Some(account.id.as_str());
                 unified_account_info_value(account, &shared, active)
             })
+            // Only accounts with a resolvable email count; hide email-less
+            // entries (e.g. an imported home labelled ".codex").
+            .filter(value_has_email)
             .collect::<Vec<_>>();
         json!({
             "accounts": accounts,
@@ -2136,7 +2166,12 @@ impl CodexAppServerState {
             }
         }
 
-        run_codex_login(app, api_key.as_deref())?;
+        // Clear any stale cancel request, run the (blocking) login, then clear
+        // again so a late cancel can't leak into the next attempt.
+        self.inner.login_cancel.store(false, Ordering::SeqCst);
+        let login_result = run_codex_login(app, api_key.as_deref(), &self.inner.login_cancel);
+        self.inner.login_cancel.store(false, Ordering::SeqCst);
+        login_result?;
 
         if unified {
             if let (Some(app_data), Some(shared)) =
@@ -2159,6 +2194,14 @@ impl CodexAppServerState {
         // Next request respawns the app-server with the new auth.
         self.drop_connection();
         Ok(json!({ "success": true, "account": self.account_info(app) }))
+    }
+
+    /// Request cancellation of an in-flight `codex login`. Best-effort: sets a
+    /// flag the run_codex_login poll loop checks (within ~50ms) to kill the
+    /// child. A no-op if no login is running.
+    pub fn account_login_cancel(&self) -> Value {
+        self.inner.login_cancel.store(true, Ordering::SeqCst);
+        json!({ "success": true })
     }
 
     pub fn account_capture_current(

@@ -280,7 +280,8 @@
     "accountAdd": "添加账号…",
     "accountAddCurrent": "加入当前账号",
     "accountRemoteLoginHint": "远程连接 — 请在终端登录（在主机端执行 codex login / claude）。",
-    "accountLoggingIn": "登录中…请在浏览器完成登录"
+    "accountLoggingIn": "登录中…请在浏览器完成登录",
+    "accountCancelLogin": "取消"
   },
 
   "github": {

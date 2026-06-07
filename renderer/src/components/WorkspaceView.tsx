@@ -508,6 +508,18 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     await refreshAccountChip()
   }, [refreshAccountChip, isRemoteConnected, loginPending])
 
+  // Cancel an in-flight Codex login (the browser OAuth hasn't completed yet).
+  // The backend kills the pending `codex login` child, which makes the awaited
+  // accountLogin() in handleLogin reject and reset loginPending.
+  const handleLoginCancel = useCallback(async (kind: 'claude' | 'codex') => {
+    if (kind !== 'codex') return
+    try {
+      await host.codex.accountLoginCancel()
+    } catch (error) {
+      void host.debug.log(`[WorkspaceView] codex login cancel failed: ${errorMessage(error)}`)
+    }
+  }, [])
+
   // Switch Claude/Codex account directly from the chip menu. The id is the
   // correct selector for both agents and both Codex modes (legacy id == path).
   const handleAccountSwitch = useCallback(async (entry: AccountMenuEntry, kind: 'claude' | 'codex') => {
@@ -1069,7 +1081,16 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
                 {loginPending ? (
                   <div className="workspace-account-menu-pending">
                     <span className="workspace-account-spinner" />
-                    <span>{t('workspace.accountLoggingIn')}</span>
+                    <span className="workspace-account-menu-pending-label">{t('workspace.accountLoggingIn')}</span>
+                    {accountChip.kind === 'codex' && (
+                      <button
+                        type="button"
+                        className="workspace-account-menu-cancel"
+                        onClick={() => { void handleLoginCancel(accountChip.kind) }}
+                      >
+                        {t('workspace.accountCancelLogin')}
+                      </button>
+                    )}
                   </div>
                 ) : isRemoteConnected ? (
                   <div className="workspace-account-menu-hint">

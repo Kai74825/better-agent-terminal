@@ -766,6 +766,8 @@ function createTauriHost(): BatAppAPI {
         getInvoke()<unknown>('codex_account_remove_unified', { accountId }),
       accountLogin: (apiKey?: string) =>
         getInvoke()<unknown>('codex_account_login', { apiKey }),
+      accountLoginCancel: () =>
+        getInvoke()<unknown>('codex_account_login_cancel'),
     },
     git: {
       // Read-only git wrappers — see src-tauri/src/commands/git.rs.

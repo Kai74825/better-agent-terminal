@@ -3436,6 +3436,13 @@ pub async fn codex_account_login(
         .map_err(|message| BridgeError { message })
 }
 
+#[tauri::command]
+pub async fn codex_account_login_cancel(
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    Ok(codex.account_login_cancel())
+}
+
 // --- read-only metadata ---------------------------------------------------
 
 #[tauri::command]
