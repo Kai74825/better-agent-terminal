@@ -376,14 +376,21 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     if (preset === 'codex-agent' || preset === 'codex-agent-worktree') {
       try {
         const result = await host.codex.accountList() as { accounts?: CodexAccountEntry[]; activeCodexHome?: string }
-        const raw = result.accounts || []
+        // Only real, signed-in accounts count: drop entries with no resolvable
+        // email (e.g. an empty ~/.codex home that would otherwise show as ".codex").
+        const raw = (result.accounts || []).filter(account => Boolean(account.email && account.email.trim()))
+        // In unified mode every account shares one runtime CODEX_HOME, so a
+        // `codexHome === activeCodexHome` check would mark EVERY entry active and
+        // make clicking a no-op (handleAccountSwitch early-returns on active rows).
+        // Trust the backend per-account `active` flag; only use the codexHome
+        // fallback for the legacy (non-unified) model where homes are distinct.
         const active = raw.find(account => account.active)
-          || raw.find(account => account.codexHome === result.activeCodexHome)
+          || raw.find(account => !account.unified && account.codexHome === result.activeCodexHome)
         const entries: AccountMenuEntry[] = raw.map(account => ({
           id: account.id,
           label: account.email || account.label || account.codexHome,
           sublabel: account.unified ? undefined : account.codexHome,
-          active: account.active || account.codexHome === result.activeCodexHome,
+          active: Boolean(account.active) || (!account.unified && account.codexHome === result.activeCodexHome),
         }))
         setAccountChip({
           kind: 'codex',
