@@ -28,6 +28,8 @@ import { translateRuntimeMessage } from '../utils/runtime-status-message'
 import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { buildCollapsedOutputPreview, formatContentSize, parseShellInvocation, stringifyToolResult, summarizeToolCommandInput, summarizeToolSearchResult, truncateMiddle } from './CodexAgentPanel.helpers'
 import { normalizePendingAskUser, summarizeAskUserInput, wrapPreviewHtml } from './AskUserQuestion.helpers'
+import { AgentActivityTree } from './AgentActivityTree'
+import { buildAgentTaskTree, summarizeAgentTree, type TaskLifecycle } from '../lib/agent-task-tree'
 
 interface SessionMeta {
   model?: string
@@ -394,6 +396,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const [subagentStreamingThinking, setSubagentStreamingThinking] = useState<Map<string, string>>(new Map())
   const [taskModal, setTaskModal] = useState<{ taskId: string; label: string; subagentType?: string } | null>(null)
   const [taskModalTick, setTaskModalTick] = useState(0)
+  // Best-effort `claude:task` lifecycle entries (workflow name / terminal
+  // status), merged into the agent activity tree. Keyed by task id.
+  const [taskLifecycle, setTaskLifecycle] = useState<Map<string, TaskLifecycle>>(new Map())
+  const [agentTreeView, setAgentTreeView] = useState<'bar' | 'tree' | 'hidden'>('bar')
   const [showPromptHistory, setShowPromptHistory] = useState(false)
   const [worktreeInfo, setWorktreeInfo] = useState<{ branchName: string; worktreePath: string; sourceBranch: string; gitRoot?: string } | null>(() => {
     // Restore from persisted terminal state
@@ -787,23 +793,33 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
     }
   }, [archiveDlog, sessionId])
 
-  // Active tasks (running Task/Agent tool calls) for the indicator bar
-  const activeTasks = useMemo(() => {
-    const tasks = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent') && m.status === 'running') as ClaudeToolCall[]
-    const allTaskTools = allMessages.filter(m => isToolCall(m) && (m.toolName === 'Task' || m.toolName === 'Agent')) as ClaudeToolCall[]
-    if (host.debug.isDebugMode === true && allTaskTools.length > 0) {
-      host.debug.log(`[renderer] activeTasks: ${tasks.length} running / ${allTaskTools.length} total Task/Agent tools (statuses: ${allTaskTools.map(t => `${t.id?.slice(0,8)}=${t.status}`).join(', ')})`)
+  // Agent activity tree: Task/Agent/Workflow tool calls (running AND
+  // finished) nested via the subagent buckets, merged with `claude:task`
+  // lifecycle metadata. Replaces the old running-only activeTasks filter.
+  const agentTree = useMemo(() => {
+    const roots = buildAgentTaskTree(allMessages, subagentMessagesRef.current, taskLifecycle)
+    if (host.debug.isDebugMode === true && roots.length > 0) {
+      host.debug.log(`[renderer] agentTree: ${roots.length} roots (${roots.map(r => `${r.id.slice(0, 8)}=${r.status}`).join(', ')})`)
     }
-    return tasks
-  }, [allMessages])
+    return roots
+    // subagentStreamingText is a dep so freshly bucketed children (which live
+    // in a ref and don't re-render on their own) show up promptly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allMessages, taskLifecycle, subagentStreamingText])
+  const agentTreeSummary = useMemo(() => summarizeAgentTree(agentTree), [agentTree])
 
   // Tick counter to force re-render for elapsed time display
   const [, setElapsedTick] = useState(0)
   useEffect(() => {
-    if (activeTasks.length === 0) return
+    if (agentTreeSummary.running === 0) return
     const interval = setInterval(() => setElapsedTick(t => t + 1), 1000)
     return () => clearInterval(interval)
-  }, [activeTasks.length])
+  }, [agentTreeSummary.running])
+
+  // A hidden tree resurfaces (as the collapsed bar) when new agents start.
+  useEffect(() => {
+    if (agentTreeSummary.running > 0) setAgentTreeView(v => (v === 'hidden' ? 'bar' : v))
+  }, [agentTreeSummary.running])
 
   // Compute pinned user messages (last 3 user messages that scrolled above viewport)
   // Show regardless of scroll position — the point is to always show context
@@ -967,6 +983,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           setStreamingText('')
           setStreamingThinking('')
           setIsStreaming(false)
+          setTaskLifecycle(new Map())
           // Restore persisted metadata instead of resetting to null (preserves status line on resume)
           const savedTerminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
           if (savedTerminal?.sessionMeta) {
@@ -1119,6 +1136,23 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           return m
         }))
         if (isAgentStatusChange) { flushSync(doResultUpdate) } else { doResultUpdate() }
+      }),
+
+      // Best-effort `claude:task` lifecycle (workflow name, phase description,
+      // terminal failed/killed status the tool blocks never carry). Affects
+      // agent-tree visibility, so flush like Agent/Task tool updates.
+      api.onTask((sid: string, payload: unknown) => {
+        if (sid !== sessionId) return
+        const task = payload as TaskLifecycle | null | undefined
+        if (!task || typeof task.id !== 'string') return
+        if (host.debug.isDebugMode === true) {
+          host.debug.log(`[renderer] onTask id=${task.id.slice(0, 12)} status=${task.status} workflow=${task.workflowName || 'none'}`)
+        }
+        flushSync(() => setTaskLifecycle(prev => {
+          const next = new Map(prev)
+          next.set(task.id, { ...prev.get(task.id), ...task })
+          return next
+        }))
       }),
 
       api.onTurnEnd((sid: string, payload: { reason?: string } | null | undefined) => {
@@ -1336,6 +1370,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         setMessages([])
         setStreamingText('')
         setStreamingThinking('')
+        setTaskLifecycle(new Map())
         setPendingPermission(null)
         setPendingQuestion(null)
         setAskAnswers({})
@@ -4085,36 +4120,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           ))}
         </div>
       )}
-      {activeTasks.length > 0 && (
-        <div className="claude-active-tasks">
-          {activeTasks.map(task => {
-            const label = task.input.description
-              ? String(task.input.description).slice(0, 60)
-              : task.input.subagent_type
-                ? String(task.input.subagent_type)
-                : 'Task'
-            const progressDesc = task.description || ''
-            const isStalled = progressDesc.startsWith('[stalled]')
-            return (
-              <div
-                key={task.id}
-                className="claude-active-task-item"
-                onClick={() => setTaskModal({ taskId: task.id, label, subagentType: task.input.subagent_type ? String(task.input.subagent_type) : undefined })}
-              >
-                <span className="claude-active-task-dot" />
-                <span className="claude-active-task-label">{label}</span>
-                {progressDesc && !isStalled && <span className="claude-active-task-progress">{progressDesc}</span>}
-                {isStalled && <span className="claude-active-task-stalled">{t('claude.stalled')}</span>}
-                <span className="claude-active-task-time">{formatElapsed(task.timestamp)}</span>
-                {Boolean(task.input.run_in_background) && <span className="claude-task-tag">{t('claude.bg')}</span>}
-                <button className="claude-task-stop-btn" onClick={(e) => {
-                  e.stopPropagation()
-                  host.claude.stopTask(sessionId, task.id)
-                }}>Stop</button>
-              </div>
-            )
-          })}
-        </div>
+      {agentTreeSummary.total > 0 && agentTreeView !== 'hidden' && (
+        <AgentActivityTree
+          roots={agentTree}
+          summary={agentTreeSummary}
+          expanded={agentTreeView === 'tree'}
+          onToggleExpanded={() => setAgentTreeView(v => (v === 'tree' ? 'bar' : 'tree'))}
+          onHide={() => setAgentTreeView('hidden')}
+          streamingText={subagentStreamingText}
+          onOpenTask={(node) => setTaskModal({ taskId: node.id, label: node.label, subagentType: node.subagentType })}
+          onStopTask={(id) => host.claude.stopTask(sessionId, id)}
+          t={t}
+        />
       )}
       <div className="claude-messages-shell">
         <div
