@@ -55,7 +55,15 @@ function applyWorktreeOptions(sessionId, session) {
   if (options.useWorktree !== true) return
   if (typeof options.cwd !== 'string' || !options.cwd) return
   if (typeof options.worktreePath !== 'string' || !options.worktreePath) return
-  if (!existsSync(options.worktreePath)) return
+  if (!existsSync(options.worktreePath)) {
+    // Refuse to fall back to the original cwd: a worktree session that
+    // silently runs in the main checkout writes to the wrong branch. This
+    // path used to be hit by remote clients that created the worktree on
+    // their own machine — fail loudly so the renderer surfaces it instead.
+    throw new Error(
+      `worktree session ${sessionId}: worktree folder not found on this machine: ${options.worktreePath}`
+    )
+  }
   const branchName = typeof options.worktreeBranch === 'string' && options.worktreeBranch
     ? options.worktreeBranch
     : `bat/worktree-${sessionId.slice(0, 8)}`

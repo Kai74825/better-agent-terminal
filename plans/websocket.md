@@ -1,6 +1,6 @@
 # Remote WebSocket Protocol V2
 
-Last updated: 2026-05-29
+Last updated: 2026-06-10
 
 This document records the intended Better Agent Terminal remote WebSocket v2 protocol.
 
@@ -419,6 +419,50 @@ profile:load-snapshot
 profile:activate
 profile:deactivate
 ```
+
+Worktree:
+
+```text
+worktree:create
+worktree:remove
+worktree:status
+worktree:merge
+worktree:rehydrate
+```
+
+Named params:
+
+```text
+worktree:create     sessionId, cwd, installPnpm
+worktree:remove     sessionId, deleteBranch
+worktree:status     sessionId
+worktree:merge      sessionId, strategy
+worktree:rehydrate  sessionId, cwd, worktreePath, branchName
+```
+
+Worktree rules:
+
+- Worktree state is host-owned. The git worktree folder, its branch, and the
+  `WorktreeState` session map live on the host machine; the paths a remote
+  client holds (workspace folder, `worktreePath`) are host paths and must never
+  be passed to the client's local git.
+- The renderer's `worktree.*` host API maps 1:1 onto these channels. On a
+  remote profile window, the Tauri `worktree_*` commands
+  (`src-tauri/src/commands/worktree.rs`) detect the remote window and proxy the
+  call to the host instead of running the native implementation; the host
+  serves them in `invoke_rust_for_remote` (`remote_server.rs`).
+- `worktree:create` must run on the host BEFORE `agent:start-session` is sent
+  with `useWorktree: true`. The host sidecar refuses to start a worktree
+  session whose `worktreePath` does not exist on the host (it does not fall
+  back to the original cwd), so a client-side worktree path is a hard error,
+  not a silent unisolated session.
+- `worktree:create` / `worktree:merge` / `worktree:remove` / `worktree:rehydrate`
+  are slow git mutations and use a long client invoke timeout (120s).
+  `worktree:status` is polled by the merged-state chip and keeps the short
+  default timeout so a stalled host fails fast.
+- The related agent-tied calls (`agent:get-worktree-status`,
+  `agent:cleanup-worktree`) and the `agent:worktree-info` broadcast event
+  follow the normal `agent:*` routing above.
 
 Files, Git, GitHub, and snippets use the same `invoke` frame pattern.
 

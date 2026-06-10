@@ -2393,9 +2393,9 @@ fn invoke_rust_for_remote(
         "worktree:create" => string_param(params, "sessionId", channel).and_then(|session_id| {
             string_param(params, "cwd", channel).and_then(|cwd| {
                 let install_pnpm = Some(bool_param(params, "installPnpm", false));
-                tauri::async_runtime::block_on(worktree_cmd::worktree_create(
+                tauri::async_runtime::block_on(worktree_cmd::worktree_create_local(
                     app.clone(),
-                    app.state::<worktree_cmd::WorktreeState>(),
+                    app.state::<worktree_cmd::WorktreeState>().inner().clone(),
                     session_id,
                     cwd,
                     install_pnpm,
@@ -2405,16 +2405,16 @@ fn invoke_rust_for_remote(
         }),
         "worktree:remove" => string_param(params, "sessionId", channel).and_then(|session_id| {
             let delete_branch = bool_param(params, "deleteBranch", true);
-            tauri::async_runtime::block_on(worktree_cmd::worktree_remove(
-                app.state::<worktree_cmd::WorktreeState>(),
+            tauri::async_runtime::block_on(worktree_cmd::worktree_remove_local(
+                app.state::<worktree_cmd::WorktreeState>().inner().clone(),
                 session_id,
                 delete_branch,
             ))
             .map_err(bridge_error_message)
         }),
         "worktree:status" => string_param(params, "sessionId", channel).and_then(|session_id| {
-            tauri::async_runtime::block_on(worktree_cmd::worktree_status(
-                app.state::<worktree_cmd::WorktreeState>(),
+            tauri::async_runtime::block_on(worktree_cmd::worktree_status_local(
+                app.state::<worktree_cmd::WorktreeState>().inner().clone(),
                 session_id,
             ))
             .map_err(bridge_error_message)
@@ -2422,8 +2422,8 @@ fn invoke_rust_for_remote(
         "worktree:merge" => string_param(params, "sessionId", channel).and_then(|session_id| {
             let strategy =
                 optional_string_param(params, "strategy").unwrap_or_else(|| "merge".into());
-            tauri::async_runtime::block_on(worktree_cmd::worktree_merge(
-                app.state::<worktree_cmd::WorktreeState>(),
+            tauri::async_runtime::block_on(worktree_cmd::worktree_merge_local(
+                app.state::<worktree_cmd::WorktreeState>().inner().clone(),
                 session_id,
                 strategy,
             ))
@@ -2433,8 +2433,8 @@ fn invoke_rust_for_remote(
             string_param(params, "cwd", channel).and_then(|cwd| {
                 string_param(params, "worktreePath", channel).and_then(|worktree_path| {
                     string_param(params, "branchName", channel).and_then(|branch_name| {
-                        tauri::async_runtime::block_on(worktree_cmd::worktree_rehydrate(
-                            app.state::<worktree_cmd::WorktreeState>(),
+                        tauri::async_runtime::block_on(worktree_cmd::worktree_rehydrate_local(
+                            app.state::<worktree_cmd::WorktreeState>().inner().clone(),
                             session_id,
                             cwd,
                             worktree_path,

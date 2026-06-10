@@ -5,8 +5,11 @@
 // preserving the renderer-facing worktree.* result shapes.
 
 use super::app::log_tauri;
+use crate::commands::profile as profile_cmd;
+use crate::remote_client::RustRemoteClientState;
 use crate::sidecar::BridgeError;
 use crate::subprocess::hide_console_window;
+use crate::window_registry;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -16,9 +19,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+// Remote round-trips for create/merge/remove/rehydrate cover several git
+// commands on the host (worktree add can checkout a large tree), so they get
+// a much longer budget than the per-command local timeout. Status polling
+// keeps the short timeout — it runs on an interval and must fail fast.
+const REMOTE_MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 const PNPM_LOG_TAIL_CHARS: usize = 4000;
 const WORKTREE_DIR: &str = ".bat-worktrees";
@@ -1154,15 +1162,57 @@ fn rehydrate_worktree_native(
     json!({ "success": true })
 }
 
-#[tauri::command]
-pub async fn worktree_create(
+// Remote-client windows must run worktree git/filesystem work on the HOST
+// machine: the workspace folder paths they hold only exist there. Mirror the
+// claude.rs / git.rs routing — proxy to the host's worktree:* channels
+// (remote_server.rs) when the calling window belongs to a remote profile,
+// otherwise fall through to the native local implementation.
+fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
+    let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
+        return false;
+    };
+    profile_cmd::profile_get(app.clone(), profile_id)
+        .map(|profile| profile.kind == "remote")
+        .unwrap_or(false)
+}
+
+async fn remote_invoke_for_window(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    channel: &'static str,
+    args: Vec<Value>,
+    timeout: Duration,
+) -> Option<Result<Value, BridgeError>> {
+    if !is_remote_profile_window(app, window) {
+        return None;
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let window_label = window.label().to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        remote_client
+            .invoke(&window_label, channel, args, timeout)
+            .map_err(BridgeError::from)
+    })
+    .await
+    .map_err(|err| BridgeError {
+        message: format!("remote.invoke {channel} worker failed: {err}"),
+    });
+    Some(match result {
+        Ok(value) => value,
+        Err(err) => Err(err),
+    })
+}
+
+// _local variants hold the actual implementation. The #[tauri::command]
+// wrappers add remote routing; remote_server.rs calls these directly when it
+// serves the same channels on the host side (no window context there).
+pub async fn worktree_create_local(
     app: AppHandle,
-    state: State<'_, WorktreeState>,
+    state: WorktreeState,
     session_id: String,
     cwd: String,
     install_pnpm: Option<bool>,
 ) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         create_worktree_native(
             Some(app),
@@ -1179,12 +1229,37 @@ pub async fn worktree_create(
 }
 
 #[tauri::command]
-pub async fn worktree_remove(
+pub async fn worktree_create(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, WorktreeState>,
+    session_id: String,
+    cwd: String,
+    install_pnpm: Option<bool>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "worktree:create",
+        vec![
+            json!(session_id.clone()),
+            json!(cwd.clone()),
+            json!(install_pnpm.unwrap_or(false)),
+        ],
+        REMOTE_MUTATION_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    worktree_create_local(app, (*state).clone(), session_id, cwd, install_pnpm).await
+}
+
+pub async fn worktree_remove_local(
+    state: WorktreeState,
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         remove_worktree_native(&state, session_id, delete_branch)
     })
@@ -1195,11 +1270,31 @@ pub async fn worktree_remove(
 }
 
 #[tauri::command]
-pub async fn worktree_status(
+pub async fn worktree_remove(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, WorktreeState>,
     session_id: String,
+    delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "worktree:remove",
+        vec![json!(session_id.clone()), json!(delete_branch)],
+        REMOTE_MUTATION_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    worktree_remove_local((*state).clone(), session_id, delete_branch).await
+}
+
+pub async fn worktree_status_local(
+    state: WorktreeState,
+    session_id: String,
+) -> Result<Value, BridgeError> {
     tauri::async_runtime::spawn_blocking(move || worktree_status_native(&state, session_id))
         .await
         .map_err(|err| BridgeError {
@@ -1208,12 +1303,31 @@ pub async fn worktree_status(
 }
 
 #[tauri::command]
-pub async fn worktree_merge(
+pub async fn worktree_status(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, WorktreeState>,
+    session_id: String,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "worktree:status",
+        vec![json!(session_id.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    worktree_status_local((*state).clone(), session_id).await
+}
+
+pub async fn worktree_merge_local(
+    state: WorktreeState,
     session_id: String,
     strategy: String,
 ) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         merge_worktree_native(&state, session_id, strategy)
     })
@@ -1224,14 +1338,34 @@ pub async fn worktree_merge(
 }
 
 #[tauri::command]
-pub async fn worktree_rehydrate(
+pub async fn worktree_merge(
+    app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, WorktreeState>,
+    session_id: String,
+    strategy: String,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "worktree:merge",
+        vec![json!(session_id.clone()), json!(strategy.clone())],
+        REMOTE_MUTATION_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    worktree_merge_local((*state).clone(), session_id, strategy).await
+}
+
+pub async fn worktree_rehydrate_local(
+    state: WorktreeState,
     session_id: String,
     cwd: String,
     worktree_path: String,
     branch_name: String,
 ) -> Result<Value, BridgeError> {
-    let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         rehydrate_worktree_native(&state, session_id, cwd, worktree_path, branch_name)
     })
@@ -1239,6 +1373,35 @@ pub async fn worktree_rehydrate(
     .map_err(|err| BridgeError {
         message: format!("worktree.rehydrate worker failed: {err}"),
     })
+}
+
+#[tauri::command]
+pub async fn worktree_rehydrate(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, WorktreeState>,
+    session_id: String,
+    cwd: String,
+    worktree_path: String,
+    branch_name: String,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &window,
+        "worktree:rehydrate",
+        vec![
+            json!(session_id.clone()),
+            json!(cwd.clone()),
+            json!(worktree_path.clone()),
+            json!(branch_name.clone()),
+        ],
+        REMOTE_MUTATION_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    worktree_rehydrate_local((*state).clone(), session_id, cwd, worktree_path, branch_name).await
 }
 
 #[cfg(test)]
