@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -89,6 +89,25 @@ impl CodexConnection {
 
     fn notify(&self, method: &str, params: Value) -> Result<(), String> {
         let message = json!({ "method": method, "params": params });
+        let mut stdin = self.stdin.lock().map_err(|_| "codex stdin lock poisoned")?;
+        writeln!(stdin, "{message}").map_err(|err| err.to_string())?;
+        stdin.flush().map_err(|err| err.to_string())
+    }
+
+    // Reply to a server->client JSON-RPC request (e.g. approval requests).
+    // Codex blocks the active turn until the request id receives a response.
+    fn send_response(&self, id: Value, result: Value) -> Result<(), String> {
+        let message = json!({ "id": id, "result": result });
+        let mut stdin = self.stdin.lock().map_err(|_| "codex stdin lock poisoned")?;
+        writeln!(stdin, "{message}").map_err(|err| err.to_string())?;
+        stdin.flush().map_err(|err| err.to_string())
+    }
+
+    fn send_error_response(&self, id: Value, code: i64, message_text: &str) -> Result<(), String> {
+        let message = json!({
+            "id": id,
+            "error": { "code": code, "message": message_text }
+        });
         let mut stdin = self.stdin.lock().map_err(|_| "codex stdin lock poisoned")?;
         writeln!(stdin, "{message}").map_err(|err| err.to_string())?;
         stdin.flush().map_err(|err| err.to_string())
@@ -167,11 +186,23 @@ impl Drop for CodexConnection {
     }
 }
 
+// A server->client approval request (item/commandExecution/requestApproval or
+// item/fileChange/requestApproval) waiting for the user's decision. The JSON-RPC
+// request must be answered on the same connection or codex blocks the turn.
+struct PendingApproval {
+    request_id: Value,
+    session_id: String,
+    connection: Weak<CodexConnection>,
+}
+
 #[derive(Default)]
 struct CodexInner {
     connection: Mutex<Option<Arc<CodexConnection>>>,
     sessions: Mutex<HashMap<String, CodexSession>>,
     thread_to_session: Mutex<HashMap<String, String>>,
+    // Keyed by the synthetic toolUseId surfaced to the renderer
+    // (claude:permission-request events).
+    pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     // Serializes unified-account auth catalog operations so concurrent windows
     // cannot interleave auth.json switches/captures.
     unified_swap_lock: Mutex<()>,
@@ -1336,7 +1367,18 @@ fn build_turn_input(prompt: &str, images: Vec<String>) -> Result<(Value, Vec<Pat
     Ok((Value::Array(items), temp_image_paths))
 }
 
-fn build_turn_start_params(thread_id: &str, input: Value, model: &str, effort: &str) -> Value {
+fn build_turn_start_params(
+    thread_id: &str,
+    input: Value,
+    model: &str,
+    effort: &str,
+    approval_policy: &str,
+    sandbox_mode: &str,
+) -> Value {
+    // approvalPolicy / sandboxPolicy are per-turn overrides ("for this turn
+    // and subsequent turns"). Always sending the session's current values
+    // makes mid-session dropdown changes take effect on the next turn even
+    // when the running thread ignores a thread/resume reconfigure.
     json!({
         "threadId": thread_id,
         "input": input,
@@ -1344,7 +1386,19 @@ fn build_turn_start_params(thread_id: &str, input: Value, model: &str, effort: &
         "effort": effort,
         "summary": DEFAULT_CODEX_REASONING_SUMMARY,
         "reasoningEffort": effort,
+        "approvalPolicy": approval_policy,
+        "sandboxPolicy": app_server_sandbox_policy(sandbox_mode),
     })
+}
+
+// turn/start takes a tagged SandboxPolicy object, unlike thread/start's
+// plain SandboxMode string.
+fn app_server_sandbox_policy(value: &str) -> Value {
+    match value {
+        "read-only" => json!({ "type": "readOnly" }),
+        "danger-full-access" => json!({ "type": "dangerFullAccess" }),
+        _ => json!({ "type": "workspaceWrite" }),
+    }
 }
 
 fn build_thread_resume_params(
@@ -2988,6 +3042,7 @@ impl CodexAppServerState {
 
         let app_for_reader = app.clone();
         let state_for_reader = self.clone();
+        let connection_for_reader = Arc::downgrade(&connection);
         std::thread::spawn(move || {
             log_codex_global(&app_for_reader, format!("reader started pid={pid}"));
             for line in BufReader::new(stdout).lines() {
@@ -2998,6 +3053,7 @@ impl CodexAppServerState {
                                 &app_for_reader,
                                 &state_for_reader,
                                 &pending,
+                                &connection_for_reader,
                                 message,
                             );
                         } else {
@@ -3020,6 +3076,7 @@ impl CodexAppServerState {
             for tx in pending.drain_all() {
                 let _ = tx.send(Err("codex app-server exited".to_string()));
             }
+            state_for_reader.cancel_dead_pending_approvals(&app_for_reader);
             let cleared = state_for_reader.clear_connection_if_pid(pid);
             log_codex_global(
                 &app_for_reader,
@@ -3617,7 +3674,14 @@ impl CodexAppServerState {
             app,
             &session_id,
             "turn/start",
-            build_turn_start_params(&thread_id, input.clone(), &model, &effort),
+            build_turn_start_params(
+                &thread_id,
+                input.clone(),
+                &model,
+                &effort,
+                &approval_policy,
+                &sandbox_mode,
+            ),
             TURN_START_TIMEOUT,
         ) {
             Ok(response) => response,
@@ -3670,7 +3734,14 @@ impl CodexAppServerState {
                                 app,
                                 &session_id,
                                 "turn/start",
-                                build_turn_start_params(&thread_id, input, &model, &effort),
+                                build_turn_start_params(
+                                    &thread_id,
+                                    input,
+                                    &model,
+                                    &effort,
+                                    &approval_policy,
+                                    &sandbox_mode,
+                                ),
                                 TURN_START_TIMEOUT,
                             ) {
                                 Ok(response) => response,
@@ -3740,6 +3811,7 @@ impl CodexAppServerState {
 
     fn fail_turn(&self, app: &AppHandle, session_id: &str, message: String) {
         log_codex(app, session_id, format!("fail_turn: {message}"));
+        self.cancel_pending_approvals(app, session_id);
         if Self::auth_failure_message(&message) {
             self.mark_shared_auth_needs_login(app, &message);
         }
@@ -3781,6 +3853,9 @@ impl CodexAppServerState {
 
     pub fn abort_session(&self, app: &AppHandle, session_id: String) -> Result<Value, BridgeError> {
         log_codex(app, &session_id, "abort_session requested");
+        // Answer any approval prompt with "cancel" first so a pending approval
+        // cannot keep the turn (and the interrupt below) blocked.
+        self.cancel_pending_approvals(app, &session_id);
         let (thread_id, interrupt_turn_id, turn_end_id) = {
             let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
             let Some(session) = sessions.get_mut(&session_id) else {
@@ -4161,14 +4236,301 @@ impl CodexAppServerState {
         emit(app, "claude:status", session_id, "meta", meta);
         Ok(json!(true))
     }
+
+    // Server->client approval request (item/commandExecution/requestApproval or
+    // item/fileChange/requestApproval): surface it to the renderer through the
+    // existing claude:permission-request event shape and remember the JSON-RPC
+    // request id so resolve_permission() can answer codex later.
+    fn handle_approval_request(
+        &self,
+        app: &AppHandle,
+        connection: &Weak<CodexConnection>,
+        request_id: Value,
+        method: &str,
+        params: Value,
+    ) {
+        let Some(session_id) = self.session_id_for_notification(&params) else {
+            log_codex_global(
+                app,
+                format!("approval request {method} has no session mapping; declining"),
+            );
+            if let Some(connection) = connection.upgrade() {
+                let _ = connection.send_response(request_id, json!({ "decision": "decline" }));
+            }
+            return;
+        };
+        if let Some((turn_id, active_turn_id)) =
+            self.stale_turn_notification(&session_id, method, &params)
+        {
+            log_codex(
+                app,
+                &session_id,
+                format!(
+                    "approval request {method} cancelled for stale turn={turn_id} activeTurn={}",
+                    active_turn_id.as_deref().unwrap_or("none")
+                ),
+            );
+            if let Some(connection) = connection.upgrade() {
+                let _ = connection.send_response(request_id, json!({ "decision": "cancel" }));
+            }
+            return;
+        }
+        let tool_use_id = format!(
+            "codex-approval-{}",
+            match &request_id {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }
+        );
+        let (tool_name, input) = if method == "item/fileChange/requestApproval" {
+            let mut input = serde_json::Map::new();
+            if let Some(grant_root) = params.get("grantRoot").and_then(Value::as_str) {
+                input.insert("grantRoot".to_string(), json!(grant_root));
+            }
+            ("Edit", Value::Object(input))
+        } else {
+            let mut input = serde_json::Map::new();
+            if let Some(command) = params.get("command") {
+                let command_text = match command {
+                    Value::String(text) => text.clone(),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    other => other.to_string(),
+                };
+                input.insert("command".to_string(), json!(command_text));
+            }
+            if let Some(cwd) = params.get("cwd").and_then(Value::as_str) {
+                input.insert("cwd".to_string(), json!(cwd));
+            }
+            ("Bash", Value::Object(input))
+        };
+        // Full params in debug builds: shows networkApprovalContext /
+        // proposedNetworkPolicyAmendments / availableDecisions in real traffic.
+        log_codex(
+            app,
+            &session_id,
+            format!("approval request {method} params={params}"),
+        );
+        let decision_reason = params
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                // Network-blocked commands carry the blocked host; surface it
+                // so the user understands what approving means.
+                params
+                    .get("networkApprovalContext")
+                    .and_then(|ctx| ctx.get("host"))
+                    .and_then(Value::as_str)
+                    .map(|host| format!("Needs network access to {host}"))
+            });
+        self.inner
+            .pending_approvals
+            .lock()
+            .expect("codex approvals lock")
+            .insert(
+                tool_use_id.clone(),
+                PendingApproval {
+                    request_id,
+                    session_id: session_id.clone(),
+                    connection: connection.clone(),
+                },
+            );
+        log_codex(
+            app,
+            &session_id,
+            format!("approval request {method} pending as {tool_use_id}"),
+        );
+        emit(
+            app,
+            "claude:permission-request",
+            &session_id,
+            "data",
+            json!({
+                "toolUseId": tool_use_id,
+                "toolName": tool_name,
+                "input": input,
+                "suggestions": [],
+                "decisionReason": decision_reason,
+            }),
+        );
+    }
+
+    pub fn resolve_permission(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+        tool_use_id: &str,
+        result: &Value,
+    ) -> Result<Value, BridgeError> {
+        let pending = {
+            let mut approvals = self
+                .inner
+                .pending_approvals
+                .lock()
+                .expect("codex approvals lock");
+            match approvals.get(tool_use_id) {
+                Some(entry) if entry.session_id == session_id => approvals.remove(tool_use_id),
+                Some(_) => {
+                    return Err(bridge_error(
+                        "Permission request does not belong to this session",
+                    ))
+                }
+                None => None,
+            }
+        };
+        let Some(pending) = pending else {
+            // Already resolved (e.g. from another window). Re-broadcast the
+            // dismissal so every window clears the prompt, matching the
+            // sidecar's idempotent behavior.
+            emit(
+                app,
+                "claude:permission-resolved",
+                session_id,
+                "toolUseId",
+                json!(tool_use_id),
+            );
+            return Ok(json!(false));
+        };
+        let behavior = result
+            .get("behavior")
+            .and_then(Value::as_str)
+            .unwrap_or("deny");
+        let decision = if behavior == "allow" {
+            if result
+                .get("dontAskAgain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "acceptForSession"
+            } else {
+                "accept"
+            }
+        } else {
+            "decline"
+        };
+        let connection = pending
+            .connection
+            .upgrade()
+            .ok_or_else(|| bridge_error("Codex app-server connection closed"))?;
+        connection
+            .send_response(pending.request_id, json!({ "decision": decision }))
+            .map_err(bridge_error)?;
+        log_codex(
+            app,
+            session_id,
+            format!("approval {tool_use_id} resolved decision={decision}"),
+        );
+        emit(
+            app,
+            "claude:permission-resolved",
+            session_id,
+            "toolUseId",
+            json!(tool_use_id),
+        );
+        Ok(json!(true))
+    }
+
+    // Cancel any approvals still waiting on a session whose turn ended or was
+    // aborted: answer codex with "cancel" and dismiss the renderer prompts.
+    fn cancel_pending_approvals(&self, app: &AppHandle, session_id: &str) {
+        let drained: Vec<(String, PendingApproval)> = {
+            let mut approvals = self
+                .inner
+                .pending_approvals
+                .lock()
+                .expect("codex approvals lock");
+            let keys: Vec<String> = approvals
+                .iter()
+                .filter(|(_, entry)| entry.session_id == session_id)
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| approvals.remove(&key).map(|entry| (key, entry)))
+                .collect()
+        };
+        for (tool_use_id, pending) in drained {
+            log_codex(
+                app,
+                session_id,
+                format!("approval {tool_use_id} cancelled (turn ended)"),
+            );
+            if let Some(connection) = pending.connection.upgrade() {
+                let _ =
+                    connection.send_response(pending.request_id, json!({ "decision": "cancel" }));
+            }
+            emit(
+                app,
+                "claude:permission-resolved",
+                session_id,
+                "toolUseId",
+                json!(tool_use_id),
+            );
+        }
+    }
+
+    // Dismiss prompts whose connection died (app-server exited): there is no
+    // one to answer anymore, just clear the renderer state.
+    fn cancel_dead_pending_approvals(&self, app: &AppHandle) {
+        let drained: Vec<(String, PendingApproval)> = {
+            let mut approvals = self
+                .inner
+                .pending_approvals
+                .lock()
+                .expect("codex approvals lock");
+            let keys: Vec<String> = approvals
+                .iter()
+                .filter(|(_, entry)| entry.connection.upgrade().is_none())
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| approvals.remove(&key).map(|entry| (key, entry)))
+                .collect()
+        };
+        for (tool_use_id, pending) in drained {
+            emit(
+                app,
+                "claude:permission-resolved",
+                &pending.session_id,
+                "toolUseId",
+                json!(tool_use_id),
+            );
+        }
+    }
 }
 
 fn handle_server_message(
     app: &AppHandle,
     state: &CodexAppServerState,
     pending: &Arc<PendingTable>,
+    connection: &Weak<CodexConnection>,
     message: Value,
 ) {
+    // JSON-RPC discrimination: a message carrying BOTH `method` and `id` is a
+    // server->client REQUEST that requires a response (codex blocks the turn
+    // until it gets one). `method` without `id` is a notification; `id`
+    // without `method` is a response to one of our requests. Checking the
+    // request case first also prevents a server request id from being
+    // mis-consumed as a response when it numerically collides with one of our
+    // pending request ids.
+    if let Some(method) = message
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    {
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        match message.get("id") {
+            Some(id) if !id.is_null() => {
+                handle_server_request(app, state, connection, id.clone(), &method, params);
+            }
+            _ => handle_notification(app, state, &method, params),
+        }
+        return;
+    }
+
     if let Some(id) = message.get("id").and_then(Value::as_u64) {
         if let Some(tx) = pending.take(id) {
             let result = if let Some(error) = message.get("error") {
@@ -4193,15 +4555,38 @@ fn handle_server_message(
                 Ok(message.get("result").cloned().unwrap_or(Value::Null))
             };
             let _ = tx.send(result);
-            return;
         }
     }
+}
 
-    let Some(method) = message.get("method").and_then(Value::as_str) else {
-        return;
-    };
-    let params = message.get("params").cloned().unwrap_or(Value::Null);
-    handle_notification(app, state, method, params);
+fn handle_server_request(
+    app: &AppHandle,
+    state: &CodexAppServerState,
+    connection: &Weak<CodexConnection>,
+    request_id: Value,
+    method: &str,
+    params: Value,
+) {
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            state.handle_approval_request(app, connection, request_id, method, params);
+        }
+        _ => {
+            // Unknown server->client request: answer with a JSON-RPC error so
+            // codex never blocks the turn waiting for us.
+            app_cmd::log_tauri(
+                app,
+                &format!("[codex-app-server] unhandled server request {method}; replying with method-not-found"),
+            );
+            if let Some(connection) = connection.upgrade() {
+                let _ = connection.send_error_response(
+                    request_id,
+                    -32601,
+                    &format!("better_agent_terminal does not handle {method}"),
+                );
+            }
+        }
+    }
 }
 
 fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &str, params: Value) {
@@ -4819,6 +5204,7 @@ fn handle_turn_completed(
     session_id: &str,
     params: &Value,
 ) {
+    state.cancel_pending_approvals(app, session_id);
     let (reason, result, meta, error_message, turn_id, thread_id) = {
         let mut sessions = state.inner.sessions.lock().expect("codex sessions lock");
         let Some(session) = sessions.get_mut(session_id) else {
@@ -5024,12 +5410,32 @@ mod tests {
             json!([{ "type": "text", "text": "hello", "text_elements": [] }]),
             "gpt-5.5",
             "high",
+            "on-request",
+            "workspace-write",
         );
         assert_eq!(params["threadId"], "thread-1");
         assert_eq!(params["model"], "gpt-5.5");
         assert_eq!(params["effort"], "high");
         assert_eq!(params["summary"], DEFAULT_CODEX_REASONING_SUMMARY);
         assert_eq!(params["reasoningEffort"], "high");
+        assert_eq!(params["approvalPolicy"], "on-request");
+        assert_eq!(params["sandboxPolicy"], json!({ "type": "workspaceWrite" }));
+    }
+
+    #[test]
+    fn codex_turn_start_sandbox_policy_uses_tagged_protocol_values() {
+        assert_eq!(
+            app_server_sandbox_policy("read-only"),
+            json!({ "type": "readOnly" })
+        );
+        assert_eq!(
+            app_server_sandbox_policy("danger-full-access"),
+            json!({ "type": "dangerFullAccess" })
+        );
+        assert_eq!(
+            app_server_sandbox_policy("anything-else"),
+            json!({ "type": "workspaceWrite" })
+        );
     }
 
     #[test]

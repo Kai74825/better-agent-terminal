@@ -2913,7 +2913,15 @@ impl ClaudeRuntimeRouter {
         result: Value,
     ) -> Result<Value, BridgeError> {
         if self.codex.is_owned(&session_id) {
-            return Ok(json!(false));
+            let codex = self.codex.clone();
+            let codex_app = self.app.clone();
+            return tauri::async_runtime::spawn_blocking(move || {
+                codex.resolve_permission(&codex_app, &session_id, &tool_use_id, &result)
+            })
+            .await
+            .map_err(|err| BridgeError {
+                message: format!("codex app-server resolvePermission worker failed: {err}"),
+            })?;
         }
         self.sidecar_call(
             "claude.resolvePermission",

@@ -4305,7 +4305,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
                 ref={permissionCustomRef}
                 className="claude-permission-custom-input"
                 type="text"
-                placeholder={t('claude.tellClaudeInstead')}
+                placeholder={t('claude.tellAgentInstead')}
                 value={permissionCustomText}
                 onChange={e => setPermissionCustomText(e.target.value)}
                 onFocus={() => setPermissionFocus(3)}
