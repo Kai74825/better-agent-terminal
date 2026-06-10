@@ -144,6 +144,170 @@
   margin-left: 4px;
 }
 
+/* Agent activity tree (expanded view of the active-tasks bar) */
+.claude-agent-tree-bar .claude-agent-tree-controls {
+  margin-left: auto;
+}
+
+.claude-agent-tree {
+  flex-shrink: 0;
+  background: linear-gradient(180deg, rgba(224, 153, 86, 0.06) 0%, var(--bg-primary) 100%);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 5;
+  max-height: 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.claude-agent-tree-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 40px;
+  border-bottom: 1px solid rgba(224, 153, 86, 0.15);
+}
+
+.claude-agent-tree-title {
+  font-size: calc(var(--claude-font-size) - 1px);
+  color: var(--text-primary);
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.claude-agent-tree-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.claude-agent-tree-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: calc(var(--claude-font-size) - 1px);
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.claude-agent-tree-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.claude-agent-tree-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(var(--claude-font-size) - 2px);
+  padding: 2px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  align-self: center;
+}
+.claude-agent-tree-chip.is-done {
+  color: var(--success-color, #6dbf6d);
+  background: rgba(109, 191, 109, 0.1);
+}
+.claude-agent-tree-chip.is-error {
+  color: var(--error-color, #e06c75);
+  background: rgba(224, 108, 117, 0.1);
+}
+.claude-agent-tree-chip.is-running {
+  color: var(--claude-accent);
+  background: rgba(224, 153, 86, 0.12);
+}
+
+.claude-agent-tree-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 8px 4px 24px;
+}
+
+.claude-agent-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-right: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s;
+  min-width: 0;
+}
+.claude-agent-tree-row:hover {
+  background: var(--bg-hover);
+}
+.claude-agent-tree-row.is-completed .claude-active-task-label {
+  opacity: 0.55;
+}
+.claude-agent-tree-row .claude-active-task-time {
+  margin-left: auto;
+}
+
+.claude-agent-tree-chevron {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: calc(var(--claude-font-size) - 2px);
+  width: 16px;
+  padding: 0;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.claude-agent-tree-chevron.is-leaf {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.claude-agent-tree-status {
+  font-size: calc(var(--claude-font-size) - 2px);
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+.claude-agent-tree-status.is-done {
+  color: var(--success-color, #6dbf6d);
+}
+.claude-agent-tree-status.is-error {
+  color: var(--error-color, #e06c75);
+}
+
+.claude-agent-tree-type {
+  font-size: calc(var(--claude-font-size) - 3px);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.claude-agent-tree-error {
+  font-size: calc(var(--claude-font-size) - 2px);
+  color: var(--error-color, #e06c75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.claude-agent-tree-live {
+  font-size: calc(var(--claude-font-size) - 2px);
+  color: var(--text-secondary);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 12px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+}
+
 .claude-messages-shell {
   flex: 1;
   position: relative;
