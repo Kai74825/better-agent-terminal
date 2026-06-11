@@ -1,8 +1,10 @@
 import * as assert from 'node:assert/strict'
 import {
   buildAgentTaskTree,
+  isTerminalTaskStatus,
   lastStreamLine,
   summarizeAgentTree,
+  terminateLifecycleEntries,
   type TaskLifecycle,
 } from '../renderer/src/lib/agent-task-tree.ts'
 import type { ClaudeMessage, ClaudeToolCall } from '../renderer/src/types/claude-agent.ts'
@@ -151,6 +153,89 @@ const msg = (overrides: Partial<ClaudeMessage> & { id: string }): ClaudeMessage 
   ]))
   const summary = summarizeAgentTree(roots)
   assert.deepEqual(summary, { running: 2, completed: 1, error: 1, total: 4 })
+}
+
+// --- toolUseId binding: lifecycle entries decorate their tool node instead
+// --- of duplicating it as an orphan root (denied-agent ghost regression) ---
+{
+  const messages: MessageItem[] = [
+    // The denied Agent call: tool_result error arrived, no task event ever will.
+    tool({ id: 'toolu_1', toolName: 'Agent', input: { description: 'map sdk integration', subagent_type: 'Explore' }, status: 'error' }),
+  ]
+  const lifecycle = new Map<string, TaskLifecycle>([
+    // SDK task_started bound via tool_use_id, stuck on 'running' forever.
+    ['task_a', { id: 'task_a', toolUseId: 'toolu_1', description: 'map sdk integration', subagentType: 'Explore', status: 'running', startedAt: 500 }],
+  ])
+  const roots = buildAgentTaskTree(messages, new Map(), lifecycle)
+  assert.equal(roots.length, 1, 'bound lifecycle entry must not become a second root')
+  assert.equal(roots[0].id, 'toolu_1')
+  assert.equal(roots[0].status, 'error')
+  // Decoration still flows from the bound entry.
+  assert.equal(roots[0].progressText, 'map sdk integration')
+}
+
+// --- toolUseId binding also suppresses orphan roots for nested agents ---
+{
+  const messages: MessageItem[] = [tool({ id: 'root', input: { description: 'parent' } })]
+  const buckets = new Map<string, MessageItem[]>([
+    ['root', [tool({ id: 'toolu_child', parentToolUseId: 'root', input: { description: 'nested' } })]],
+  ])
+  const lifecycle = new Map<string, TaskLifecycle>([
+    ['task_c', { id: 'task_c', toolUseId: 'toolu_child', status: 'running' }],
+  ])
+  const roots = buildAgentTaskTree(messages, buckets, lifecycle)
+  assert.equal(roots.length, 1)
+  assert.equal(roots[0].children.length, 1)
+}
+
+// --- Lifecycle 'completed' also overrides a stuck-running tool block ---
+{
+  const messages: MessageItem[] = [
+    tool({ id: 'c1', input: { description: 'done run' }, status: 'running' }),
+  ]
+  const lifecycle = new Map<string, TaskLifecycle>([
+    ['c1', { id: 'c1', status: 'completed' }],
+  ])
+  const roots = buildAgentTaskTree(messages, new Map(), lifecycle)
+  assert.equal(roots[0].status, 'completed')
+}
+
+// --- Unbound lifecycle entries still become roots (background workflows) ---
+{
+  const lifecycle = new Map<string, TaskLifecycle>([
+    ['bg_wf', { id: 'bg_wf', isWorkflow: true, workflowName: 'sweep', status: 'running', isBackground: true }],
+  ])
+  const roots = buildAgentTaskTree([], new Map(), lifecycle)
+  assert.equal(roots.length, 1)
+  assert.equal(roots[0].isBackground, true)
+}
+
+// --- terminateLifecycleEntries: flips matching non-terminal entries only ---
+{
+  const entries = new Map<string, TaskLifecycle>([
+    ['a', { id: 'a', toolUseId: 'toolu_a', status: 'running' }],
+    ['b', { id: 'b', status: 'completed' }],
+    ['c', { id: 'c', status: 'running' }],
+  ])
+  const swept = terminateLifecycleEntries(entries, () => true, 'killed')
+  assert.notEqual(swept, entries)
+  assert.equal(swept.get('a')!.status, 'killed')
+  assert.equal(swept.get('b')!.status, 'completed', 'terminal entries are preserved')
+  assert.equal(swept.get('c')!.status, 'killed')
+
+  const byToolUse = terminateLifecycleEntries(entries, life => life.toolUseId === 'toolu_a', 'failed')
+  assert.equal(byToolUse.get('a')!.status, 'failed')
+  assert.equal(byToolUse.get('c')!.status, 'running', 'non-matching entries untouched')
+
+  // No matches → same reference so React state setters skip the re-render.
+  const untouched = terminateLifecycleEntries(entries, life => life.id === 'missing', 'killed')
+  assert.equal(untouched, entries)
+}
+
+// --- isTerminalTaskStatus ---
+{
+  for (const s of ['completed', 'failed', 'killed', 'error']) assert.equal(isTerminalTaskStatus(s), true, s)
+  for (const s of ['running', 'pending', 'paused', undefined, null]) assert.equal(isTerminalTaskStatus(s), false, String(s))
 }
 
 // --- lastStreamLine ---

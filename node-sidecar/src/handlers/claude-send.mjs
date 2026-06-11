@@ -537,6 +537,10 @@ function handleTaskMessage(s, sessionId, msg) {
     const taskType = typeof msg.task_type === 'string' ? msg.task_type : null
     task = {
       id: taskId,
+      // Bind the task to the Agent/Task tool_use that spawned it. The
+      // renderer needs this to merge the lifecycle entry into the tool node
+      // (task_id and tool_use id live in different namespaces).
+      toolUseId: typeof msg.tool_use_id === 'string' ? msg.tool_use_id : null,
       type: taskType,
       isWorkflow: taskType === 'local_workflow' || taskType === 'workflow',
       workflowName: typeof msg.workflow_name === 'string' ? msg.workflow_name : null,
@@ -553,6 +557,7 @@ function handleTaskMessage(s, sessionId, msg) {
     const patch = msg.patch && typeof msg.patch === 'object' ? msg.patch : {}
     task = {
       id: taskId,
+      toolUseId: prev?.toolUseId ?? null,
       type: prev?.type ?? null,
       isWorkflow: prev?.isWorkflow ?? false,
       workflowName: prev?.workflowName ?? null,
@@ -561,6 +566,7 @@ function handleTaskMessage(s, sessionId, msg) {
       status: typeof patch.status === 'string' ? patch.status : (prev?.status ?? 'running'),
       startedAt: prev?.startedAt ?? Date.now(),
       ...(typeof patch.error === 'string' ? { error: patch.error } : {}),
+      ...(patch.is_backgrounded === true || prev?.isBackground === true ? { isBackground: true } : {}),
     }
     if (TERMINAL_TASK_STATUSES.has(task.status)) {
       s.activeTasks.delete(taskId)
@@ -568,7 +574,7 @@ function handleTaskMessage(s, sessionId, msg) {
       s.activeTasks.set(taskId, task)
     }
   }
-  debugLog('emit-task', sessionId, { id: taskId, subtype: msg.subtype, status: task.status, isWorkflow: task.isWorkflow })
+  debugLog('emit-task', sessionId, { id: taskId, subtype: msg.subtype, status: task.status, isWorkflow: task.isWorkflow, toolUseId: task.toolUseId })
   sendEvent('claude:task', { sessionId, task })
 }
 
@@ -907,8 +913,17 @@ registerHandler('claude.stopTask', async (params) => {
   if (!s || !s.streaming || !query || typeof query.stopTask !== 'function') {
     return { ok: false, error: 'no active query for session' }
   }
+  // The renderer often only knows the tool_use id; the SDK's stopTask wants
+  // the task_id. Map through the tracked tasks when possible, otherwise pass
+  // the id through unchanged (legacy fallback).
+  let targetId = taskId
+  if (s.activeTasks && !s.activeTasks.has(taskId)) {
+    for (const tracked of s.activeTasks.values()) {
+      if (tracked.toolUseId === taskId) { targetId = tracked.id; break }
+    }
+  }
   try {
-    await query.stopTask(taskId)
+    await query.stopTask(targetId)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

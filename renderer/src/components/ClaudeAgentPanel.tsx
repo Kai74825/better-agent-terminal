@@ -29,7 +29,7 @@ import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-
 import { buildCollapsedOutputPreview, formatContentSize, parseShellInvocation, stringifyToolResult, summarizeToolCommandInput, summarizeToolSearchResult, truncateMiddle } from './CodexAgentPanel.helpers'
 import { normalizePendingAskUser, summarizeAskUserInput, wrapPreviewHtml } from './AskUserQuestion.helpers'
 import { AgentActivityTree } from './AgentActivityTree'
-import { buildAgentTaskTree, summarizeAgentTree, type TaskLifecycle } from '../lib/agent-task-tree'
+import { buildAgentTaskTree, summarizeAgentTree, terminateLifecycleEntries, type TaskLifecycle } from '../lib/agent-task-tree'
 
 interface SessionMeta {
   model?: string
@@ -808,6 +808,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   }, [allMessages, taskLifecycle, subagentStreamingText])
   const agentTreeSummary = useMemo(() => summarizeAgentTree(agentTree), [agentTree])
 
+  // Stop a subagent/workflow by task id or tool_use id. Always terminates
+  // matching lifecycle entries locally afterwards: a ghost entry (its task is
+  // already gone) gets no terminal task event from the SDK, and for a live
+  // task the local flip is idempotent with the kill event that follows.
+  const stopAgentTask = useCallback(async (id: string) => {
+    try {
+      await host.claude.stopTask(sessionId, id)
+    } catch {
+      // Sidecar unreachable — still clear the local entry below.
+    }
+    setTaskLifecycle(prev => terminateLifecycleEntries(
+      prev, life => life.id === id || life.toolUseId === id, 'killed'))
+  }, [sessionId])
+
   // Tick counter to force re-render for elapsed time display
   const [, setElapsedTick] = useState(0)
   useEffect(() => {
@@ -1131,6 +1145,18 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
               setSubagentStreamingText(p => { const n = new Map(p); n.delete(id); return n })
               setSubagentStreamingThinking(p => { const n = new Map(p); n.delete(id); return n })
             }
+            // A terminal Agent/Task result also ends the bound `claude:task`
+            // lifecycle entry — the SDK never emits task_updated for denied
+            // tool calls, which otherwise leaves a ghost running entry.
+            // Exception: a successful run_in_background result only means
+            // "launched"; the background task keeps running past it.
+            if (isAgentStatusChange
+              && (m.toolName === 'Agent' || m.toolName === 'Task' || m.toolName === 'Workflow')
+              && !((m as ClaudeToolCall).input.run_in_background === true && updates.status !== 'error')) {
+              const terminal = updates.status === 'error' ? 'failed' : 'completed'
+              setTaskLifecycle(lifePrev => terminateLifecycleEntries(
+                lifePrev, life => life.id === id || life.toolUseId === id, terminal))
+            }
             return { ...m, ...updates } as ClaudeToolCall
           }
           return m
@@ -1190,6 +1216,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             }
             return m
           }))
+          // The sidecar drops its activeTasks map when the subprocess dies
+          // (closeLiveQuery) without emitting terminal task events — mirror
+          // that here or still-running lifecycle entries tick forever.
+          setTaskLifecycle(prev => terminateLifecycleEntries(prev, () => true, 'killed'))
         }
       }),
 
@@ -3550,7 +3580,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
                 <div className="claude-task-actions">
                   <button className="claude-task-stop-btn" onClick={(e) => {
                     e.stopPropagation()
-                    host.claude.stopTask(sessionId, item.id)
+                    void stopAgentTask(item.id)
                   }}>{t('claude.stop')}</button>
                 </div>
               )}
@@ -4129,7 +4159,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           onHide={() => setAgentTreeView('hidden')}
           streamingText={subagentStreamingText}
           onOpenTask={(node) => setTaskModal({ taskId: node.id, label: node.label, subagentType: node.subagentType })}
-          onStopTask={(id) => host.claude.stopTask(sessionId, id)}
+          onStopTask={(id) => { void stopAgentTask(id) }}
           t={t}
         />
       )}

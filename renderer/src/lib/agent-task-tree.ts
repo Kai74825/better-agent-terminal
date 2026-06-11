@@ -23,6 +23,10 @@ const AGENT_TOOL_NAMES = new Set(['Task', 'Agent', 'Workflow'])
 // task from its own map, so the renderer keeps them for the finished view.
 export interface TaskLifecycle {
   id: string
+  /** tool_use id of the Agent/Task call that spawned this task, when the SDK
+   * reports it. Binds the lifecycle entry to its tool node so the tree never
+   * renders the same agent twice (tool node + orphan lifecycle root). */
+  toolUseId?: string | null
   type?: string | null
   isWorkflow?: boolean
   workflowName?: string | null
@@ -31,6 +35,7 @@ export interface TaskLifecycle {
   status?: string
   startedAt?: number
   error?: string
+  isBackground?: boolean
 }
 
 export interface AgentTaskNode {
@@ -61,6 +66,30 @@ export interface AgentTreeSummary {
 }
 
 const TERMINAL_ERROR_STATUSES = new Set(['failed', 'killed', 'error'])
+
+/** True when a lifecycle status means the task is finished (success or not). */
+export function isTerminalTaskStatus(status: string | null | undefined): boolean {
+  return status != null && (status === 'completed' || TERMINAL_ERROR_STATUSES.has(status))
+}
+
+/**
+ * Return a copy of `entries` with every non-terminal entry matching `match`
+ * flipped to `status`. Returns the original map untouched (same reference)
+ * when nothing matches, so React setState callers skip the re-render.
+ */
+export function terminateLifecycleEntries(
+  entries: Map<string, TaskLifecycle>,
+  match: (life: TaskLifecycle) => boolean,
+  status: string,
+): Map<string, TaskLifecycle> {
+  let next: Map<string, TaskLifecycle> | null = null
+  for (const [key, life] of entries) {
+    if (isTerminalTaskStatus(life.status) || !match(life)) continue
+    if (!next) next = new Map(entries)
+    next.set(key, { ...life, status })
+  }
+  return next ?? entries
+}
 
 function isAgentToolCall(item: MessageItem): item is ClaudeToolCall {
   return isToolCall(item) && AGENT_TOOL_NAMES.has(item.toolName)
@@ -108,8 +137,11 @@ function nodeFromToolCall(
 ): AgentTaskNode {
   const life = lifecycle.get(tool.id)
   const lifeError = life?.status != null && TERMINAL_ERROR_STATUSES.has(life.status)
+  // A terminal lifecycle status overrides a stuck-running tool block in both
+  // directions: failed/killed → error, completed → completed. The tool_result
+  // can be lost (denied tools, reconnects), but the task is gone either way.
   const status: AgentTaskNode['status'] = tool.status === 'running'
-    ? (lifeError ? 'error' : 'running')
+    ? (lifeError ? 'error' : life?.status === 'completed' ? 'completed' : 'running')
     : tool.status === 'error' ? 'error' : 'completed'
   const node: AgentTaskNode = {
     id: tool.id,
@@ -174,6 +206,7 @@ function nodeFromLifecycle(life: TaskLifecycle): AgentTaskNode {
   if (life.description) node.progressText = life.description
   if (life.workflowName) node.workflowName = life.workflowName
   if (life.error) node.error = life.error
+  if (life.isBackground) node.isBackground = true
   return node
 }
 
@@ -189,16 +222,29 @@ export function buildAgentTaskTree(
   buckets: ReadonlyMap<string, MessageItem[]>,
   lifecycle: ReadonlyMap<string, TaskLifecycle> = new Map(),
 ): AgentTaskNode[] {
+  // Index lifecycle entries under their tool_use id too, so tool nodes pick
+  // up the metadata of entries bound via SDK tool_use_id (task_id and
+  // tool_use id live in different namespaces and never collide naturally;
+  // direct-id entries still win on the off chance they do).
+  const lifeByNode = new Map<string, TaskLifecycle>()
+  for (const life of lifecycle.values()) lifeByNode.set(life.id, life)
+  for (const life of lifecycle.values()) {
+    if (life.toolUseId && !lifeByNode.has(life.toolUseId)) lifeByNode.set(life.toolUseId, life)
+  }
   const visited = new Set<string>()
   const roots: AgentTaskNode[] = []
   const matchedIds = new Set<string>()
   for (const item of messages) {
     if (!isAgentToolCall(item) || item.parentToolUseId) continue
-    roots.push(nodeFromToolCall(item, buckets, lifecycle, visited))
+    roots.push(nodeFromToolCall(item, buckets, lifeByNode, visited))
     matchedIds.add(item.id)
   }
+  const hasNode = (id: string | null | undefined): boolean =>
+    typeof id === 'string' && id.length > 0 && (matchedIds.has(id) || visited.has(id))
   for (const life of lifecycle.values()) {
-    if (matchedIds.has(life.id) || visited.has(life.id)) continue
+    // Entries bound to a rendered tool node (directly or via tool_use_id)
+    // only decorate that node — never duplicate it as an orphan root.
+    if (hasNode(life.id) || hasNode(life.toolUseId)) continue
     roots.push(nodeFromLifecycle(life))
   }
   return roots

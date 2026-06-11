@@ -1354,6 +1354,8 @@ async function inProcess() {
         const first = await userIter.next()
         if (first.done) return
         yield { type: 'system', subtype: 'init', session_id: 'sdk-stop' }
+        // Tracked task bound to a tool_use id, for the stopTask id mapping.
+        yield { type: 'system', subtype: 'task_started', task_id: 'task-real', tool_use_id: 'toolu-real', description: 'bound task', session_id: 'sdk-stop' }
         stopTurnStartedResolve()
         await new Promise(resolve => { releaseStopResult = resolve })
         yield { type: 'result', subtype: 'success', session_id: 'sdk-stop', result: 'ok', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1 }
@@ -1388,6 +1390,13 @@ async function inProcess() {
       params: { sessionId: 'stop-1', toolUseId: 'tool-Z' } })
     assert.equal(stopReply2.result.ok, true)
     assert.deepEqual(stopCaptured, ['task-A', 'tool-Z'])
+
+    // A tool_use id bound to a tracked task maps to its real task_id (the
+    // SDK's stopTask only understands task ids).
+    const stopReply3 = await dispatch({ jsonrpc: '2.0', id: 234, method: 'claude.stopTask',
+      params: { sessionId: 'stop-1', taskId: 'toolu-real' } })
+    assert.equal(stopReply3.result.ok, true)
+    assert.deepEqual(stopCaptured, ['task-A', 'tool-Z', 'task-real'])
     releaseStopResult()
     await stopSend
 
@@ -1426,7 +1435,7 @@ async function inProcess() {
           const next = await userIter.next()
           if (next.done) return
           yield { type: 'system', subtype: 'init', session_id: 'sdk-int' }
-          yield { type: 'system', subtype: 'task_started', task_id: 't1', task_type: 'local_workflow', workflow_name: 'spec', description: 'run spec', session_id: 'sdk-int' }
+          yield { type: 'system', subtype: 'task_started', task_id: 't1', tool_use_id: 'toolu-spec', task_type: 'local_workflow', workflow_name: 'spec', description: 'run spec', session_id: 'sdk-int' }
           interruptTurnStartedResolve()
           await new Promise(resolve => { releaseInterruptResult = resolve })
           yield { type: 'result', subtype: 'error_during_execution', session_id: 'sdk-int', stop_reason: 'interrupted' }
@@ -1457,6 +1466,7 @@ async function inProcess() {
     assert.equal(taskEvent.payload.task.isWorkflow, true)
     assert.equal(taskEvent.payload.task.workflowName, 'spec')
     assert.equal(taskEvent.payload.task.status, 'running')
+    assert.equal(taskEvent.payload.task.toolUseId, 'toolu-spec', 'tool_use_id must be forwarded for renderer binding')
 
     const intReply = await dispatch({ jsonrpc: '2.0', id: 274, method: 'claude.interruptTurn',
       params: { sessionId: 'int-1' } })
