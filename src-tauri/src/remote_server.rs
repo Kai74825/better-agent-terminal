@@ -1788,7 +1788,22 @@ fn invoke_rust_for_remote(
             };
             route.map(|_| json!({ "error": "Rewind not supported for this session type" }))
         }
-        "claude:resolve-permission" | "claude:resolve-ask-user" | "claude:stop-task" => {
+        "claude:resolve-permission" => {
+            // Codex sessions have real approval prompts now; route the remote
+            // client's answer into the bridge so the JSON-RPC request gets a
+            // response (a stubbed `false` here leaves codex blocked).
+            let Some(route) = codex_for_remote_session(app, channel, params) else {
+                return None;
+            };
+            route.and_then(|(codex, session_id)| {
+                let tool_use_id = string_param(params, "toolUseId", channel)?;
+                let result = params.get("result").cloned().unwrap_or(Value::Null);
+                codex
+                    .resolve_permission(app, &session_id, &tool_use_id, &result)
+                    .map_err(bridge_error_message)
+            })
+        }
+        "claude:resolve-ask-user" | "claude:stop-task" => {
             let Some(route) = codex_for_remote_session(app, channel, params) else {
                 return None;
             };
@@ -1813,6 +1828,16 @@ fn invoke_rust_for_remote(
                 account_store::remove_account(&data_dir, &account_id)
                     .map(Value::Bool)
                     .map_err(|err| err.to_string())
+            })
+        }
+        "codex:account-list" => {
+            let codex = app.state::<CodexAppServerState>().inner().clone();
+            Ok(codex.account_list(app))
+        }
+        "codex:account-switch" => {
+            string_param(params, "codexHome", channel).and_then(|codex_home| {
+                let codex = app.state::<CodexAppServerState>().inner().clone();
+                codex.switch_account(app, codex_home)
             })
         }
         "claude:account-mark-warning-shown" => {

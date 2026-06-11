@@ -388,7 +388,22 @@ agent:resolve-ask-user
 `agent:resolve-permission` and `agent:resolve-ask-user` answer an outstanding host-owned prompt.
 They normalize to `claude:resolve-permission` / `claude:resolve-ask-user` on the host. Params:
 `agent:resolve-permission` takes `sessionId`, `toolUseId`, `result`; `agent:resolve-ask-user` takes
-`sessionId`, `toolUseId`, `answers`.
+`sessionId`, `toolUseId`, `answers`. For codex-owned sessions the host routes
+`claude:resolve-permission` into the codex app-server bridge so the pending JSON-RPC approval
+request is answered; `claude:resolve-ask-user` / `claude:stop-task` are no-ops for codex sessions.
+
+Codex accounts (host-owned, mirrors the Claude account channels):
+
+```text
+codex:account-list
+codex:account-switch
+```
+
+`codex:account-list` takes no params and returns the host's codex account list.
+`codex:account-switch` takes `codexHome` (the account entry id) and switches the host's active
+codex account; the host applies the switch and returns the result. Remote clients must not mutate
+local codex account state. Codex login remains host-only (the renderer blocks it on remote
+windows).
 
 PTY:
 

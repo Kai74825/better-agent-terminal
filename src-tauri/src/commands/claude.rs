@@ -3411,17 +3411,45 @@ pub async fn codex_account_info(
 #[tauri::command]
 pub async fn codex_account_list(
     app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "codex:account-list",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     Ok(codex.account_list(&app))
 }
 
 #[tauri::command]
 pub async fn codex_account_switch(
     app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
     codex: State<'_, CodexAppServerState>,
     codex_home: String,
 ) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "codex:account-switch",
+        vec![json!(codex_home.clone())],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     codex
         .switch_account(&app, codex_home)
         .map_err(|message| BridgeError { message })

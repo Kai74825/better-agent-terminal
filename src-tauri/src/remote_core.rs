@@ -230,6 +230,8 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "claude:load-archived" => Some(&["sessionId", "offset", "limit"]),
         "claude:fetch-subagent-messages" => Some(&["sessionId", "agentToolUseId"]),
         "claude:account-switch" | "claude:account-remove" => Some(&["accountId"]),
+        "codex:account-list" => Some(&[]),
+        "codex:account-switch" => Some(&["codexHome"]),
         "claude:check-mcp-json-status" | "claude:enable-all-project-mcp" => Some(&["cwd"]),
         "worktree:create" => Some(&["sessionId", "cwd", "installPnpm"]),
         "worktree:remove" => Some(&["sessionId", "deleteBranch"]),
