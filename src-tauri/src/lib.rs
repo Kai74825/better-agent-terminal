@@ -122,6 +122,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
         .manage(notification_cmd::NotificationState::default())
         .manage(notification_cmd::AgentNotificationState::default())
         .manage(fs_cmd::FsWatcherState::default())
+        .manage(fs_cmd::FsUploadState::default())
         .manage(snippet_cmd::SnippetState::default())
         .manage(worker_buffer_cmd::WorkerBufferState::default())
         .manage(worktree_cmd::WorktreeState::default())
@@ -190,6 +191,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             fs_cmd::fs_search,
             fs_cmd::fs_watch,
             fs_cmd::fs_unwatch,
+            fs_cmd::remote_upload_file_to_host,
             clipboard_cmd::clipboard_save_image,
             clipboard_cmd::clipboard_write_text,
             clipboard_cmd::clipboard_write_image,

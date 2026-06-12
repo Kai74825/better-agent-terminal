@@ -343,6 +343,11 @@
   },
 
   "dialogs": {
+    "remoteUploadTitle": "Upload to remote host?",
+    "remoteUploadBody_one": "The dropped file will be uploaded to the remote host's temp folder and referenced in the conversation.",
+    "remoteUploadBody_other": "The {{count}} dropped files will be uploaded to the remote host's temp folder and referenced in the conversation.",
+    "remoteUploadDontAskAgain": "Don't ask again",
+    "remoteUploadConfirm": "Upload",
     "closeCodeAgent": "Close Code Agent?",
     "closeCodeAgentConfirm": "Are you sure you want to close the Code Agent terminal? Any running process will be terminated.",
     "closeWorktreeSession": "Close Worktree Session?",

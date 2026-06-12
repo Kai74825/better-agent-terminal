@@ -343,6 +343,10 @@
   },
 
   "dialogs": {
+    "remoteUploadTitle": "上傳到遠端主機？",
+    "remoteUploadBody_other": "拖入的 {{count}} 個檔案將上傳到遠端主機的暫存資料夾，並在對話中引用。",
+    "remoteUploadDontAskAgain": "不再詢問",
+    "remoteUploadConfirm": "上傳",
     "closeCodeAgent": "關閉 Code Agent？",
     "closeCodeAgentConfirm": "確定要關閉 Code Agent 終端嗎？任何正在執行的程序將被終止。",
     "closeWorktreeSession": "關閉 Worktree 工作階段？",

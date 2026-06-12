@@ -326,6 +326,10 @@
     "collapsePanel": "收起面板"
   },
   "dialogs": {
+    "remoteUploadTitle": "上传到远程主机？",
+    "remoteUploadBody_other": "拖入的 {{count}} 个文件将上传到远程主机的临时文件夹，并在对话中引用。",
+    "remoteUploadDontAskAgain": "不再询问",
+    "remoteUploadConfirm": "上传",
     "closeCodeAgent": "关闭 Code Agent？",
     "closeCodeAgentConfirm": "确定要关闭 Code Agent 终端吗？任何正在执行的程序将被终止。",
     "closeWorktreeSession": "关闭 Worktree 会话？",

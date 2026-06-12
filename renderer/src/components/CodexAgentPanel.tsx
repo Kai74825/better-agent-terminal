@@ -19,6 +19,8 @@ import { buildMessageStream } from './messageSkip'
 import { filenameForPastedImage, readFileAsDataUrl } from '../utils/file-data-url'
 import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
+import { useRemoteDropUpload } from '../utils/remote-drop-upload'
+import { RemoteUploadConfirmDialog } from './RemoteUploadConfirmDialog'
 import { displayNameForClaudeSelection } from '../utils/claude-model-presets'
 import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../utils/codex-models'
 import { shouldNavigateInputHistoryFromTextarea } from '../utils/input-history-navigation'
@@ -3227,21 +3229,30 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
 
   const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.svg'])
 
+  const attachByPath = useCallback(async (filePath: string) => {
+    const extensionIndex = filePath.lastIndexOf('.')
+    const ext = extensionIndex >= 0 ? filePath.slice(extensionIndex).toLowerCase() : ''
+    if (IMAGE_EXTENSIONS.has(ext)) {
+      await addImageByPath(filePath)
+    } else {
+      addFileByPath(filePath)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addImageByPath, addFileByPath])
+
+  // Remote drop → upload to host tmp (confirm-gated), then attach the
+  // HOST-side path so image preview / file refs resolve on the host.
+  const remoteDropUpload = useRemoteDropUpload(attachByPath)
+
   const handleNativeDropPaths = useCallback(async (paths: string[]) => {
     if (isRemoteConnected) {
-      window.alert('Remote sessions can only attach local dropped images. File paths must exist on the host.')
+      remoteDropUpload.requestUpload(paths)
       return
     }
     for (const filePath of paths) {
-      const extensionIndex = filePath.lastIndexOf('.')
-      const ext = extensionIndex >= 0 ? filePath.slice(extensionIndex).toLowerCase() : ''
-      if (IMAGE_EXTENSIONS.has(ext)) {
-        await addImageByPath(filePath)
-      } else {
-        addFileByPath(filePath)
-      }
+      await attachByPath(filePath)
     }
-  }, [addImageByPath, addFileByPath, isRemoteConnected])
+  }, [attachByPath, isRemoteConnected, remoteDropUpload])
 
   useEffect(() => {
     return listenTauriNativeDrop((detail) => {
@@ -4487,6 +4498,14 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           )}
           <div className="claude-permission-hint">{t('claude.escToCancel')}</div>
         </div>
+      )}
+
+      {remoteDropUpload.pendingFileNames && (
+        <RemoteUploadConfirmDialog
+          fileNames={remoteDropUpload.pendingFileNames}
+          onConfirm={remoteDropUpload.confirmUpload}
+          onCancel={remoteDropUpload.cancelUpload}
+        />
       )}
 
       {/* Ctrl+P File Picker */}

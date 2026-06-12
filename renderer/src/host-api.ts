@@ -1234,6 +1234,13 @@ function createTauriHost(): BatAppAPI {
       onUsage: (callback: (payload: unknown) => void) =>
         listenAdapter<unknown>('claude-cli:usage', callback),
     },
+    remoteFs: {
+      // Streams a CLIENT-LOCAL file to the connected remote host's tmp dir
+      // (chunked over the remote transport) and resolves with the host-side
+      // path. Only meaningful in a remote-profile window.
+      uploadToHostTmp: (localPath: string) =>
+        getInvoke()<string>('remote_upload_file_to_host', { localPath }),
+    },
     worktree: new Proxy({}, {
       // worktree.* — agent-tied. Sidecar handlers mirror the host
       // WorktreeManager while keeping the renderer-facing shape stable.
@@ -1433,7 +1440,7 @@ const PORTED_NAMESPACES = new Set([
   'settings', 'runtime', 'shell', 'dialog', 'fs', 'clipboard', 'image',
   'pty', 'workspace', 'update', 'debug', 'git', 'app',
   'notification', 'system', 'github', 'snippet', 'profile',
-  'claude', 'claudeChannel', 'claudeCli', 'worktree', 'agent', 'workerBuffer',
+  'claude', 'claudeChannel', 'claudeCli', 'remoteFs', 'worktree', 'agent', 'workerBuffer',
   'remote', 'tunnel',
 ])
 

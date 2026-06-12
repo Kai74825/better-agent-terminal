@@ -287,6 +287,7 @@ export interface AppSettings {
   worktreePnpmInstallEnabled?: boolean;   // Auto-install pnpm dependencies for new worktrees using a shared pnpm store
   autoUpdateEnabled?: boolean;            // Background auto-update: check on launch and install silently (default: false — opt-in)
   updateChannel?: 'stable' | 'pre';       // Auto-update channel; 'pre' requires debug mode (default: 'stable')
+  remoteUploadSkipConfirm?: boolean;      // Skip the "file will be uploaded to host" confirm when dropping files in remote mode
 }
 
 // ============================================

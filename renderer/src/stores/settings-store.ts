@@ -369,6 +369,16 @@ class SettingsStore {
     this.save()
   }
 
+  getRemoteUploadSkipConfirm(): boolean {
+    return this.settings.remoteUploadSkipConfirm === true
+  }
+
+  setRemoteUploadSkipConfirm(skip: boolean): void {
+    this.settings = { ...this.settings, remoteUploadSkipConfirm: skip }
+    this.notify()
+    this.save()
+  }
+
   setRemoteServerPort(port: number): void {
     this.settings = { ...this.settings, remoteServerPort: port }
     this.notify()

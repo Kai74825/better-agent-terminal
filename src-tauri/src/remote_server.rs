@@ -2235,6 +2235,35 @@ fn invoke_rust_for_remote(
                 dir_path,
             ))
         }),
+        "fs:upload-tmp-begin" => string_param(params, "name", channel).and_then(|name| {
+            let total_bytes = params
+                .get("totalBytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            fs_cmd::fs_upload_begin_impl(
+                app.state::<fs_cmd::FsUploadState>().inner(),
+                name,
+                total_bytes,
+            )
+        }),
+        "fs:upload-tmp-chunk" => string_param(params, "uploadId", channel).and_then(|upload_id| {
+            string_param(params, "dataBase64", channel).and_then(|data_base64| {
+                fs_cmd::fs_upload_chunk_impl(
+                    app.state::<fs_cmd::FsUploadState>().inner(),
+                    upload_id,
+                    data_base64,
+                )
+            })
+        }),
+        "fs:upload-tmp-end" => string_param(params, "uploadId", channel).and_then(|upload_id| {
+            fs_cmd::fs_upload_end_impl(app.state::<fs_cmd::FsUploadState>().inner(), upload_id)
+        }),
+        "fs:upload-tmp-abort" => string_param(params, "uploadId", channel).map(|upload_id| {
+            Value::Bool(fs_cmd::fs_upload_abort_impl(
+                app.state::<fs_cmd::FsUploadState>().inner(),
+                upload_id,
+            ))
+        }),
         "git:get-github-url" => {
             string_param_any(params, &["folderPath", "cwd"], channel).and_then(|folder_path| {
                 let value =

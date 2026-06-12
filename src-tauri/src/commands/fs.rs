@@ -1065,10 +1065,349 @@ pub(crate) fn fs_unwatch_native(state: &FsWatcherState, dir_path: String) -> boo
     remove_watcher(&state, &dir_path)
 }
 
+// ---- fs:upload-tmp-* — chunked file upload from a remote client into the
+// host's temp directory. The client drags a local file into its window; the
+// bytes travel over the remote transport in base64 chunks and land in
+// <temp>/bat-remote-uploads/<name>-<id><ext>. The final path is returned so
+// the client can reference it in a conversation (CLAUDE.md: host applies the
+// mutation, client renders the result).
+
+const UPLOAD_MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB per file
+const UPLOAD_MAX_CHUNK_BYTES: usize = 4 * 1024 * 1024; // decoded, per chunk
+const UPLOAD_STALE_SECS: u64 = 600; // GC abandoned partial uploads
+
+struct UploadEntry {
+    file: fs::File,
+    path: PathBuf,
+    received: u64,
+    total: u64,
+    last_activity: std::time::Instant,
+}
+
+#[derive(Clone, Default)]
+pub struct FsUploadState {
+    entries: Arc<Mutex<HashMap<String, UploadEntry>>>,
+}
+
+// Strip path separators and control characters; keep a readable stem + ext.
+fn sanitize_upload_name(name: &str) -> (String, String) {
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("upload")
+        .trim()
+        .to_string();
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let (stem, ext) = match cleaned.rfind('.') {
+        Some(idx) if idx > 0 => (cleaned[..idx].to_string(), cleaned[idx..].to_string()),
+        _ => (cleaned, String::new()),
+    };
+    let stem = if stem.is_empty() { "upload".into() } else { stem };
+    // Cap the stem so the final path stays comfortably under OS limits.
+    let stem = stem.chars().take(80).collect::<String>();
+    let ext = ext.chars().take(16).collect::<String>();
+    (stem, ext)
+}
+
+fn prune_stale_uploads(entries: &mut HashMap<String, UploadEntry>) {
+    let stale: Vec<String> = entries
+        .iter()
+        .filter(|(_, e)| e.last_activity.elapsed().as_secs() > UPLOAD_STALE_SECS)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in stale {
+        if let Some(entry) = entries.remove(&id) {
+            drop(entry.file);
+            let _ = fs::remove_file(&entry.path);
+        }
+    }
+}
+
+pub(crate) fn fs_upload_begin_impl(
+    state: &FsUploadState,
+    name: String,
+    total_bytes: u64,
+) -> Result<Value, String> {
+    if total_bytes == 0 {
+        return Err("upload: totalBytes must be > 0".into());
+    }
+    if total_bytes > UPLOAD_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "upload: file too large ({} bytes, limit {} bytes)",
+            total_bytes, UPLOAD_MAX_TOTAL_BYTES
+        ));
+    }
+    let dir = std::env::temp_dir().join("bat-remote-uploads");
+    fs::create_dir_all(&dir).map_err(|err| format!("upload: create dir failed: {err}"))?;
+
+    let (stem, ext) = sanitize_upload_name(&name);
+    let upload_id = format!("{:016x}", rand::random::<u64>());
+    let path = dir.join(format!("{stem}-{}{ext}", &upload_id[..8]));
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|err| format!("upload: create file failed: {err}"))?;
+
+    let mut entries = state
+        .entries
+        .lock()
+        .map_err(|_| "upload: state poisoned".to_string())?;
+    prune_stale_uploads(&mut entries);
+    entries.insert(
+        upload_id.clone(),
+        UploadEntry {
+            file,
+            path: path.clone(),
+            received: 0,
+            total: total_bytes,
+            last_activity: std::time::Instant::now(),
+        },
+    );
+    Ok(json!({
+        "uploadId": upload_id,
+        "path": path.to_string_lossy(),
+    }))
+}
+
+pub(crate) fn fs_upload_chunk_impl(
+    state: &FsUploadState,
+    upload_id: String,
+    data_base64: String,
+) -> Result<Value, String> {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|err| format!("upload: bad base64: {err}"))?;
+    if bytes.len() > UPLOAD_MAX_CHUNK_BYTES {
+        return Err("upload: chunk too large".into());
+    }
+    let mut entries = state
+        .entries
+        .lock()
+        .map_err(|_| "upload: state poisoned".to_string())?;
+    let entry = entries
+        .get_mut(&upload_id)
+        .ok_or_else(|| "upload: unknown uploadId".to_string())?;
+    if entry.received + bytes.len() as u64 > entry.total {
+        let entry = entries.remove(&upload_id).expect("entry just fetched");
+        drop(entry.file);
+        let _ = fs::remove_file(&entry.path);
+        return Err("upload: more bytes than declared totalBytes".into());
+    }
+    entry
+        .file
+        .write_all(&bytes)
+        .map_err(|err| format!("upload: write failed: {err}"))?;
+    entry.received += bytes.len() as u64;
+    entry.last_activity = std::time::Instant::now();
+    Ok(json!({ "received": entry.received }))
+}
+
+pub(crate) fn fs_upload_end_impl(state: &FsUploadState, upload_id: String) -> Result<Value, String> {
+    let mut entries = state
+        .entries
+        .lock()
+        .map_err(|_| "upload: state poisoned".to_string())?;
+    let entry = entries
+        .remove(&upload_id)
+        .ok_or_else(|| "upload: unknown uploadId".to_string())?;
+    if entry.received != entry.total {
+        let path = entry.path.clone();
+        drop(entry.file);
+        let _ = fs::remove_file(&path);
+        return Err(format!(
+            "upload: incomplete ({} of {} bytes)",
+            entry.received, entry.total
+        ));
+    }
+    let path = entry.path.clone();
+    drop(entry.file); // flush + close before handing the path out
+    Ok(json!({ "path": path.to_string_lossy() }))
+}
+
+pub(crate) fn fs_upload_abort_impl(state: &FsUploadState, upload_id: String) -> bool {
+    let Ok(mut entries) = state.entries.lock() else {
+        return false;
+    };
+    if let Some(entry) = entries.remove(&upload_id) {
+        drop(entry.file);
+        let _ = fs::remove_file(&entry.path);
+        true
+    } else {
+        false
+    }
+}
+
+// Client-side command: read a LOCAL file (the drop target machine) and stream
+// it to the connected remote host's tmp dir. Only valid in a remote-profile
+// window — in local mode the dropped path is already host-local and callers
+// should use it directly.
+#[tauri::command]
+pub async fn remote_upload_file_to_host(
+    app: AppHandle,
+    window: WebviewWindow,
+    local_path: String,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    use std::io::Read as _;
+
+    if !is_remote_profile_window(&app, &window) {
+        return Err("remote_upload_file_to_host: not a remote session".into());
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let window_label = window.label().to_string();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let meta = fs::metadata(&local_path)
+            .map_err(|err| format!("upload: cannot read local file: {err}"))?;
+        if !meta.is_file() {
+            return Err("upload: not a file".into());
+        }
+        let total = meta.len();
+        if total == 0 {
+            return Err("upload: file is empty".into());
+        }
+        if total > UPLOAD_MAX_TOTAL_BYTES {
+            return Err(format!(
+                "upload: file too large ({} bytes, limit {} bytes)",
+                total, UPLOAD_MAX_TOTAL_BYTES
+            ));
+        }
+        let name = Path::new(&local_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "upload".into());
+
+        let begin = remote_client.invoke(
+            &window_label,
+            "fs:upload-tmp-begin",
+            vec![json!(name), json!(total)],
+            REMOTE_FS_TIMEOUT,
+        )?;
+        let upload_id = begin
+            .get("uploadId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "upload: host did not return uploadId".to_string())?
+            .to_string();
+
+        let abort = |remote_client: &RustRemoteClientState, reason: String| {
+            let _ = remote_client.invoke(
+                &window_label,
+                "fs:upload-tmp-abort",
+                vec![json!(upload_id.clone())],
+                REMOTE_FS_TIMEOUT,
+            );
+            Err::<String, String>(reason)
+        };
+
+        let mut file = match fs::File::open(&local_path) {
+            Ok(f) => f,
+            Err(err) => return abort(&remote_client, format!("upload: open failed: {err}")),
+        };
+        // 1 MiB raw per chunk → ~1.37 MiB base64 per ws message: small enough
+        // for any sane transport limit, big enough to keep round-trips low.
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let read = match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(err) => return abort(&remote_client, format!("upload: read failed: {err}")),
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..read]);
+            if let Err(err) = remote_client.invoke(
+                &window_label,
+                "fs:upload-tmp-chunk",
+                vec![json!(upload_id.clone()), json!(encoded)],
+                REMOTE_FS_TIMEOUT,
+            ) {
+                return abort(&remote_client, format!("upload: chunk failed: {err}"));
+            }
+        }
+
+        let end = remote_client.invoke(
+            &window_label,
+            "fs:upload-tmp-end",
+            vec![json!(upload_id.clone())],
+            REMOTE_FS_TIMEOUT,
+        )?;
+        end.get("path")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+            .ok_or_else(|| "upload: host did not return final path".to_string())
+    })
+    .await
+    .map_err(|err| format!("remote_upload_file_to_host worker failed: {err}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn upload_roundtrip_writes_file_to_tmp() {
+        use base64::Engine as _;
+        let state = FsUploadState::default();
+        let begin = fs_upload_begin_impl(&state, "notes.txt".into(), 11).unwrap();
+        let id = begin
+            .get("uploadId")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"hello world");
+        fs_upload_chunk_impl(&state, id.clone(), b64).unwrap();
+        let end = fs_upload_end_impl(&state, id).unwrap();
+        let path = end.get("path").and_then(Value::as_str).unwrap().to_string();
+        assert_eq!(fs::read(&path).unwrap(), b"hello world");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn upload_rejects_overflow_and_incomplete() {
+        use base64::Engine as _;
+        let state = FsUploadState::default();
+        // Declaring 3 bytes then sending 7 must kill the upload and the file.
+        let begin = fs_upload_begin_impl(&state, "a.bin".into(), 3).unwrap();
+        let id = begin
+            .get("uploadId")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let over = base64::engine::general_purpose::STANDARD.encode(b"toolong");
+        assert!(fs_upload_chunk_impl(&state, id.clone(), over).is_err());
+        assert!(fs_upload_end_impl(&state, id).is_err());
+        // Ending before all declared bytes arrive must fail and delete.
+        let begin = fs_upload_begin_impl(&state, "b.bin".into(), 10).unwrap();
+        let id2 = begin
+            .get("uploadId")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        let p2 = begin.get("path").and_then(Value::as_str).unwrap().to_string();
+        assert!(fs_upload_end_impl(&state, id2).is_err());
+        assert!(!Path::new(&p2).exists());
+    }
+
+    #[test]
+    fn sanitize_upload_name_strips_separators() {
+        let (stem, ext) = sanitize_upload_name("../../etc/passwd");
+        assert_eq!(stem, "passwd");
+        assert_eq!(ext, "");
+        let (stem, ext) = sanitize_upload_name("C:\\evil\\..\\name.png");
+        assert_eq!(stem, "name");
+        assert_eq!(ext, ".png");
+    }
 
     #[test]
     fn reads_small_utf8_file() {
