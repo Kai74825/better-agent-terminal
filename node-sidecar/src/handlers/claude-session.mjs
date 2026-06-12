@@ -17,7 +17,7 @@ import {
   resetSessionTranscript,
 } from '../lib/state.mjs'
 import { normalizeClaudeEffortMode, isUltracodeMode } from '../lib/claude-effort.mjs'
-import { expectedContextWindowForModel } from '../lib/models.mjs'
+import { autoCompactWindowForClaudeSelection, expectedContextWindowForModel, sdkModelForClaudeSelection } from '../lib/models.mjs'
 import { closeLiveQuery } from './claude-send.mjs'
 
 function applyEffortOptions(session, options) {
@@ -374,19 +374,32 @@ registerHandler('claude.setModel', async (params) => {
   if (isCodexSession(sessionId)) return setCodexModel(params)
   const s = ensureSession(sessionId)
   if (typeof params?.model === 'string') s.model = params.model
-  if (typeof params?.autoCompactWindow === 'number') s.autoCompactWindow = params.autoCompactWindow
+  let windowChanged = false
+  if (typeof params?.autoCompactWindow === 'number') {
+    s.autoCompactWindow = params.autoCompactWindow
+    windowChanged = true
+  } else if (typeof params?.model === 'string') {
+    // Remote clients may send a bare preset id without the window it
+    // encodes — derive it so the preset behaves like an explicit window.
+    const derived = autoCompactWindowForClaudeSelection(params.model)
+    if (derived !== undefined && (s.autoCompactWindow ?? null) !== derived) {
+      s.autoCompactWindow = derived
+      windowChanged = true
+    }
+  }
   // autoCompactWindow is read by the SDK-spawned CLI from env at boot,
   // so changing it requires a rebuild — close the live query.
   // Model swap goes through the control method first; only rebuild on
-  // failure.
+  // failure. The control method takes a real SDK model id, so preset
+  // selections must be mapped before the swap.
   const controlTarget = (s.liveQuery && !s.liveQuery.isClosed)
     ? s.liveQuery
     : (s.streaming ? s.currentQuery : null)
   if (controlTarget) {
-    if (typeof params?.autoCompactWindow === 'number') {
+    if (windowChanged) {
       closeLiveQuery(s)
     } else if (typeof params?.model === 'string' && typeof controlTarget.setModel === 'function') {
-      try { await controlTarget.setModel(s.model) }
+      try { await controlTarget.setModel(sdkModelForClaudeSelection(s.model)) }
       catch (err) {
         logWarn(`setModel control failed for ${sessionId}: ${err?.message || err}`)
         closeLiveQuery(s)

@@ -89,7 +89,27 @@ export const CLAUDE_PRESET_SDK_MODELS = new Map([
   ['claude-opus-4-7:auto-compact-400k', 'claude-opus-4-7'],
   ['claude-opus-4-7:1m', 'claude-opus-4-7'],
 ])
+// Preset id naming convention: `<base>:auto-compact-<N>k` compacts at
+// N*1000 tokens; `<base>:<N>m` disables early auto-compact. The regex
+// fallbacks keep presets working for remote clients even when a preset id
+// is newer than the explicit maps above.
+const AUTO_COMPACT_SUFFIX = /^(.+):auto-compact-(\d+)k$/
+const CONTEXT_ONLY_SUFFIX = /^(.+):\d+m$/
+
 export function sdkModelForClaudeSelection(model) {
   if (!model) return undefined
-  return CLAUDE_PRESET_SDK_MODELS.get(model) || model
+  const mapped = CLAUDE_PRESET_SDK_MODELS.get(model)
+  if (mapped) return mapped
+  const m = AUTO_COMPACT_SUFFIX.exec(model) || CONTEXT_ONLY_SUFFIX.exec(model)
+  return m ? m[1] : model
+}
+
+// Auto-compact window a preset id encodes: a number for auto-compact
+// presets, null for context-only presets (clear any early compaction),
+// undefined for plain model ids (leave the session's window untouched).
+export function autoCompactWindowForClaudeSelection(model) {
+  if (typeof model !== 'string') return undefined
+  const ac = AUTO_COMPACT_SUFFIX.exec(model)
+  if (ac) return Number(ac[2]) * 1000
+  return CONTEXT_ONLY_SUFFIX.test(model) ? null : undefined
 }
