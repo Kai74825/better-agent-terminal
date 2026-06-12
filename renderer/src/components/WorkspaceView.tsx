@@ -1197,7 +1197,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
       {activeTab === 'files' && (
         <Suspense fallback={<div className="loading-panel" />}>
           <div className="workspace-tab-content">
-            <FileTree rootPath={workspace.folderPath} />
+            <FileTree rootPath={workspace.folderPath} remoteMode={isRemoteConnected} />
           </div>
         </Suspense>
       )}

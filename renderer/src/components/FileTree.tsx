@@ -12,6 +12,9 @@ interface FileEntry {
 
 interface FileTreeProps {
   rootPath: string
+  /** True when this workspace is served by a remote host — refreshes are
+   *  debounced harder because every readdir is a network round-trip. */
+  remoteMode?: boolean
 }
 
 const TEXT_EXTS = new Set([
@@ -44,14 +47,35 @@ function canPreview(name: string): 'text' | 'image' | 'pdf' | null {
 }
 
 function FileTreeNode({
-  entry, depth, selectedPath, onSelect, onContextMenu,
+  entry, depth, selectedPath, onSelect, onContextMenu, refreshKey,
 }: {
   entry: FileEntry; depth: number; selectedPath: string | null; onSelect: (entry: FileEntry) => void
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void
+  refreshKey: number
 }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<FileEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
+  const lastRefreshRef = useRef(refreshKey)
+
+  // On refresh, re-fetch children IN PLACE instead of remounting the node, so
+  // the expansion state (and the user's place in the tree) survives. Nodes are
+  // keyed by path alone — refreshKey must NOT be part of the React key.
+  useEffect(() => {
+    if (lastRefreshRef.current === refreshKey) return
+    lastRefreshRef.current = refreshKey
+    if (!entry.isDirectory || children === null) return
+    if (!expanded) {
+      // Collapsed with stale cache: drop it so the next expand refetches.
+      setChildren(null)
+      return
+    }
+    let cancelled = false
+    host.fs.readdir(entry.path)
+      .then(next => { if (!cancelled) setChildren(next) })
+      .catch(() => { if (!cancelled) setChildren([]) })
+    return () => { cancelled = true }
+  }, [refreshKey, entry.isDirectory, entry.path, expanded, children])
 
   const handleClick = useCallback(async () => {
     if (entry.isDirectory) {
@@ -101,6 +125,7 @@ function FileTreeNode({
           selectedPath={selectedPath}
           onSelect={onSelect}
           onContextMenu={onContextMenu}
+          refreshKey={refreshKey}
         />
       ))}
     </>
@@ -382,7 +407,13 @@ function FilePreview({ filePath, fileName, refreshKey }: { filePath: string; fil
   return null
 }
 
-export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
+// Trailing debounce for watch-triggered refreshes. Remote workspaces get a
+// longer window: every refresh costs a network readdir per expanded folder,
+// and host-side agents touch files constantly.
+const WATCH_REFRESH_DEBOUNCE_LOCAL_MS = 400
+const WATCH_REFRESH_DEBOUNCE_REMOTE_MS = 2000
+
+export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProps>) {
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null)
@@ -438,27 +469,43 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
     return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [searchQuery, selectedFile])
 
-  // Restore scroll position after entries load
+  // Restore scroll position ONCE per root, after the first load completes.
+  // Restoring on every refresh fights the user's current scroll position —
+  // refreshes no longer touch scrollTop at all (rows update in place).
+  const scrollRestoredForRef = useRef<string | null>(null)
   useEffect(() => {
     if (loading || !listRef.current) return
+    if (scrollRestoredForRef.current === rootPath) return
+    scrollRestoredForRef.current = rootPath
     const saved = localStorage.getItem(`file-tree-scroll:${rootPath}`)
     if (saved) listRef.current.scrollTop = Number(saved)
   }, [loading, rootPath])
 
-  // Watch for file system changes and auto-refresh
+  // Watch for file system changes and auto-refresh, coalescing event bursts
+  // with a trailing debounce (host-side agents touch files constantly, and on
+  // remote workspaces each refresh is a network round-trip).
+  const watchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     host.fs.watch(rootPath)
+    const debounceMs = remoteMode ? WATCH_REFRESH_DEBOUNCE_REMOTE_MS : WATCH_REFRESH_DEBOUNCE_LOCAL_MS
     const unsubscribe = host.fs.onChanged((changedPath: string) => {
-      if (changedPath === rootPath) {
+      if (changedPath !== rootPath) return
+      if (watchDebounceRef.current) clearTimeout(watchDebounceRef.current)
+      watchDebounceRef.current = setTimeout(() => {
+        watchDebounceRef.current = null
         setRefreshKey(k => k + 1)
         loadRoot()
-      }
+      }, debounceMs)
     })
     return () => {
       unsubscribe()
       host.fs.unwatch(rootPath)
+      if (watchDebounceRef.current) {
+        clearTimeout(watchDebounceRef.current)
+        watchDebounceRef.current = null
+      }
     }
-  }, [rootPath, loadRoot])
+  }, [rootPath, loadRoot, remoteMode])
 
   // Close context menu on outside click
   useEffect(() => {
@@ -610,12 +657,13 @@ export function FileTree({ rootPath }: Readonly<FileTreeProps>) {
           ) : (
             entries.map(entry => (
               <FileTreeNode
-                key={`${entry.path}:${refreshKey}`}
+                key={entry.path}
                 entry={entry}
                 depth={0}
                 selectedPath={selectedFile?.path || null}
                 onSelect={handleSelect}
                 onContextMenu={handleContextMenu}
+                refreshKey={refreshKey}
               />
             ))
           )}
