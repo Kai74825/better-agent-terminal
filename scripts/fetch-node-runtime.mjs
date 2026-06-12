@@ -30,7 +30,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
 const runtimeRoot = join(repoRoot, 'node-sidecar', 'runtime')
 
-export const DEFAULT_VERSION = 'v20.18.1'
+export const DEFAULT_VERSION = 'v20.20.2'
 
 // Map our internal triple (platform-arch, using Rust-style arch names that
 // match std::env::consts::ARCH on the Rust side) to Node.org distribution
