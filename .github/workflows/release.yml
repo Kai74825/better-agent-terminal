@@ -159,6 +159,21 @@ jobs:
             asset_mode: ''
             prerelease: true
             pre_only: false
+          # Linux arm64 lightweight AppImage: same leg, no bundled runtimes —
+          # pairs with the in-app managed-runtime auto-install. Asset name gets
+          # the `.lightweight` suffix (BetterAgentTerminal-<ver>-arm64.lightweight.AppImage)
+          # and feeds the latest-<channel>-lightweight.json updater manifest, so
+          # a lightweight install only ever upgrades to a lightweight build.
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+            artifact: release-linux-arm64-lightweight
+            release_exts: '.AppImage'
+            bundle: appimage
+            bundle_mode: lightweight
+            asset_mode: lightweight
+            prerelease: true
+            pre_only: false
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
