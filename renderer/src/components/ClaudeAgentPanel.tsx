@@ -21,6 +21,7 @@ import { extractInterruptedContinuation } from '../utils/interrupted-prompt'
 import { isTauriNativeDropInside, listenTauriNativeDrop } from '../utils/tauri-native-drop'
 import { useRemoteDropUpload } from '../utils/remote-drop-upload'
 import { RemoteUploadConfirmDialog } from './RemoteUploadConfirmDialog'
+import { getHostUsageSnapshot, subscribeHostUsage } from '../utils/claude-usage-cache'
 import { autoCompactWindowForClaudeSelection, displayNameForClaudeSelection, normalizeClaudeModelSelection, sdkModelForClaudeSelection } from '../utils/claude-model-presets'
 import { shouldNavigateInputHistoryFromTextarea } from '../utils/input-history-navigation'
 import { buildSnippetContextPrompt, parseSnippetSlashCommand, type SnippetForContext } from '../utils/snippet-command'
@@ -256,7 +257,7 @@ function includeCurrentOption(values: readonly string[], current: string): strin
 }
 
 export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose, showUserMsg = true, showAssistantMsg = true, showToolMsg = true, showThinkingMsg = true, isRemoteConnected = false, targetAgent }: Readonly<ClaudeAgentPanelProps>) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   // Determine backend/session flavor from agentPreset
   const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
   const isCodexSession = targetAgent === 'codex' || terminal?.agentPreset === 'codex-agent'
@@ -342,6 +343,30 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
   const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
   const [usageAccount, setUsageAccount] = useState(workspaceStore.usageAccount)
   const [rateLimits, setRateLimits] = useState<Record<string, { resetsAt: number; utilization: number | null; isUsingOverage: boolean }>>({})
+  // Host-wide usage poll (one poller per host, active account) keeps the 5h/7d
+  // statusline items fresh while idle; mid-turn rate_limit_events still
+  // overwrite with the latest API-reported numbers. Provider follows the
+  // session: codex sessions show the codex account's windows, not Claude's.
+  useEffect(() => {
+    const apply = () => {
+      const snap = getHostUsageSnapshot(isCodexSession ? 'codex' : 'claude')
+      if (!snap) return
+      setRateLimits(prev => {
+        const next = { ...prev }
+        for (const [key, win] of [['five_hour', snap.fiveHour], ['seven_day', snap.sevenDay]] as const) {
+          if (!win) continue
+          next[key] = {
+            resetsAt: win.resetsAt ?? prev[key]?.resetsAt ?? Date.now(),
+            utilization: win.utilization,
+            isUsingOverage: prev[key]?.isUsingOverage ?? false,
+          }
+        }
+        return next
+      })
+    }
+    apply()
+    return subscribeHostUsage(apply)
+  }, [isCodexSession])
   const [availableModels, setAvailableModels] = useState<ModelInfo[]>([])
   const [availableEfforts, setAvailableEfforts] = useState<string[]>(() => [...EFFORT_LEVELS])
   const [availableCodexSandboxModes, setAvailableCodexSandboxModes] = useState<string[]>(() => [...CODEX_SANDBOX_MODES])
@@ -5564,7 +5589,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           usage5hReset: () => {
             const rl = rateLimits['five_hour']
             if (!rl) return null
-            return <span key="usage5hReset" className="claude-statusline-item" title="5h rate limit resets at">↻{fmtRemaining(new Date(rl.resetsAt))}</span>
+            const resetLabel = new Date(rl.resetsAt).toLocaleString(i18n.language, {
+              weekday: 'long', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+            })
+            return <span key="usage5hReset" className="claude-statusline-item" title={`5h reset: ${resetLabel}`}>↻{fmtRemaining(new Date(rl.resetsAt))}</span>
           },
           usage7d: () => {
             const rl = rateLimits['seven_day']
@@ -5576,7 +5604,10 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           usage7dReset: () => {
             const rl = rateLimits['seven_day']
             if (!rl) return null
-            return <span key="usage7dReset" className="claude-statusline-item" title="7d rate limit resets at">↻{fmtRemaining(new Date(rl.resetsAt))}</span>
+            const resetLabel = new Date(rl.resetsAt).toLocaleString(i18n.language, {
+              weekday: 'long', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+            })
+            return <span key="usage7dReset" className="claude-statusline-item" title={`7d reset: ${resetLabel}`}>↻{fmtRemaining(new Date(rl.resetsAt))}</span>
           },
           maxOut: () => !sessionMeta || !sessionMeta.maxOutputTokens ? null : (
             <span key="maxOut" className="claude-statusline-item" title={`Max output: ${sessionMeta.maxOutputTokens.toLocaleString()} tokens`}>

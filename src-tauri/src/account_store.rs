@@ -143,6 +143,12 @@ fn delete_account_credential(account_id: &str) {
     }
 }
 
+/// Read-only peek at a stored account credential (for usage lookups on
+/// NON-active accounts). Never refreshes or mutates the stored value.
+pub fn peek_account_credential(account_id: &str) -> Option<String> {
+    load_account_credential(account_id).ok()
+}
+
 fn home_dir() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         return Some(PathBuf::from(home));

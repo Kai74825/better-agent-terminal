@@ -511,6 +511,7 @@ pub fn is_proxied_remote_event(channel: &str) -> bool {
             | "claude:session-reset"
             | "claude:worktree-info"
             | "claude:rate-limit"
+            | "agent:usage"
             | "fs:changed"
             | "profile:changed"
             | "workspace:detached"

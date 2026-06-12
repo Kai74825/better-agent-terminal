@@ -8,6 +8,7 @@
 mod account_store;
 mod app_data;
 mod app_menu;
+mod claude_usage;
 mod codex_account_store;
 mod codex_app_server;
 mod codex_auth;
@@ -150,6 +151,10 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
                     app_cmd::attach_window_lifecycle(&window);
                 }
                 remote_cmd::spawn_auto_start_remote_server(app.handle().clone());
+                // Host-wide 5h/7d subscription usage poller (one thread per
+                // host, active account per tick). Rust-side so it survives
+                // sidecar restarts and works before the node runtime exists.
+                claude_usage::start(app.handle().clone());
                 if let Ok(token) = std::env::var("BAT_TAURI_DYNAMIC_WINDOW_SMOKE_TOKEN") {
                     let handle = app.handle().clone();
                     std::thread::spawn(move || {
@@ -355,6 +360,8 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             worktree_cmd::worktree_rehydrate,
             agent_cmd::agent_get_supported_session_types,
             agent_cmd::agent_list_presets,
+            claude_usage::agent_usage_snapshot,
+            claude_usage::agent_usage_peek,
             worker_buffer_cmd::worker_buffer_init,
             worker_buffer_cmd::worker_buffer_append,
             worker_buffer_cmd::worker_buffer_read_all,

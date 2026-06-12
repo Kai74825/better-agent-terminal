@@ -1278,6 +1278,19 @@ function createTauriHost(): BatAppAPI {
     agent: {
       getSupportedSessionTypes: () => getInvoke()<string[]>('agent_get_supported_session_types'),
       listPresets: () => getInvoke()<Array<string | Record<string, unknown>>>('agent_list_presets'),
+      // Host-wide subscription usage snapshot (5h/7d windows), broadcast by
+      // the Rust host's single per-host poller. Not session-scoped — agent:*
+      // because it describes the host/account, not one Claude session.
+      onUsage: (callback: (payload: unknown) => void) =>
+        listenAdapter<{ payload: unknown }>('agent:usage', p => callback(p?.payload)),
+      // Pull path: last snapshot per provider ({ claude?, codex? }). The first
+      // broadcast fires before the webview subscribes, so the renderer cache
+      // fetches this once on startup instead of waiting a full poll cycle.
+      getUsageSnapshot: () => getInvoke()<Record<string, unknown>>('agent_usage_snapshot'),
+      // Lazy usage peek for a NON-active Claude account (account dropdown
+      // only; short host-side cache; null when its stored token expired).
+      peekUsage: (accountId: string) =>
+        getInvoke()<Record<string, unknown> | null>('agent_usage_peek', { accountId }),
     },
     workerBuffer: {
       // Renderer-side terminal buffer cache. We back this with a Rust

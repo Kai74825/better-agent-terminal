@@ -549,6 +549,28 @@
   font-size: 10px;
 }
 
+.workspace-account-menu-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workspace-account-menu-usage-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.workspace-account-menu-usage-pct {
+  font-weight: 600;
+}
+
 /* Workspace Tab Content (Files / Git) */
 .workspace-tab-content {
   flex: 1;

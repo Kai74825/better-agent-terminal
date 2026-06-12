@@ -2946,6 +2946,29 @@ impl CodexAppServerState {
         }
     }
 
+    // Read the account-level 5h/weekly rate-limit snapshot over the EXISTING
+    // shared connection (one app-server process, one active account — so one
+    // poll covers every session/window). Returns None when codex isn't in use:
+    // we never spawn an app-server just to read usage.
+    pub fn fetch_account_rate_limits(&self, app: &AppHandle) -> Option<Value> {
+        let connection = self
+            .inner
+            .connection
+            .lock()
+            .ok()?
+            .as_ref()
+            .cloned()?;
+        connection
+            .request_logged(
+                app,
+                "usage",
+                "account/rateLimits/read",
+                json!({}),
+                Duration::from_secs(15),
+            )
+            .ok()
+    }
+
     fn clear_connection_if_pid(&self, pid: u32) -> bool {
         let Ok(mut guard) = self.inner.connection.lock() else {
             return false;
@@ -4590,6 +4613,12 @@ fn handle_server_request(
 }
 
 fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &str, params: Value) {
+    // Account-level notifications carry no thread/session id and must be
+    // handled BEFORE the session-mapping requirement below drops them.
+    if method == "account/rateLimits/updated" {
+        crate::claude_usage::publish_codex_usage(app, &params);
+        return;
+    }
     let Some(session_id) = state.session_id_for_notification(&params) else {
         if codex_debug_enabled() {
             app_cmd::log_tauri(
