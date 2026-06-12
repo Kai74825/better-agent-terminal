@@ -1,5 +1,5 @@
 import { host } from '../host-api'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
 import QRCode from 'qrcode'
@@ -9,6 +9,7 @@ import { settingsStore, parseStatuslineTemplate, exportStatuslineTemplate } from
 import { EnvVarEditor } from './EnvVarEditor'
 import { AgentPresetId, getVisiblePresets } from '../types/agent-presets'
 import { buildConnectionUrl } from '../utils/connection-url'
+import { checkUpdatesNow, getUpdateState, subscribeUpdate } from '../lib/auto-update'
 import { CLAUDE_BUILTIN_MODELS } from '../utils/claude-model-presets'
 import { CODEX_MODELS } from '../utils/codex-models'
 
@@ -118,6 +119,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [cxDetecting, setCxDetecting] = useState(false)
   const [codexUnifiedInfo, setCodexUnifiedInfo] = useState<string | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const updateState = useSyncExternalStore(subscribeUpdate, getUpdateState)
   const [runtimeLoading, setRuntimeLoading] = useState(false)
   const [runtimeInstallingTool, setRuntimeInstallingTool] = useState<RuntimeTool | null>(null)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
@@ -628,6 +630,33 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     <option value="stable">{t('settings.channelStable')}</option>
                     {isDebugMode && <option value="pre">{t('settings.channelPre')}</option>}
                   </select>
+                </div>
+                <div className="settings-group">
+                  <button
+                    className="settings-btn"
+                    onClick={() => { void checkUpdatesNow() }}
+                    disabled={updateState.status === 'checking' || updateState.status === 'downloading'}
+                  >
+                    {updateState.status === 'checking'
+                      ? t('settings.updateChecking')
+                      : t('settings.updateCheckNow')}
+                  </button>
+                  {updateState.status === 'downloading' && (
+                    <span className="settings-inline-status">
+                      {updateState.total
+                        ? t('update.downloadingPct', { pct: Math.round((updateState.downloaded / updateState.total) * 100) })
+                        : t('update.downloading')}
+                    </span>
+                  )}
+                  {updateState.status === 'ready' && (
+                    <span className="settings-inline-status">✅ {t('update.readyBody', { version: updateState.version })}</span>
+                  )}
+                  {updateState.status === 'uptodate' && (
+                    <span className="settings-inline-status">{t('settings.updateUpToDate')}</span>
+                  )}
+                  {updateState.status === 'error' && (
+                    <span className="settings-inline-status settings-inline-error">⚠️ {updateState.message}</span>
+                  )}
                 </div>
               </div>
 

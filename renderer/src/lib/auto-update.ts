@@ -19,6 +19,7 @@ export type UpdateState =
   | { status: 'checking' }
   | { status: 'downloading'; downloaded: number; total: number | null }
   | { status: 'ready'; version: string }
+  | { status: 'uptodate' } // manual check found nothing newer (banner ignores it)
   | { status: 'error'; message: string }
 
 let state: UpdateState = { status: 'idle' }
@@ -49,19 +50,17 @@ function effectiveChannel(): 'stable' | 'pre' {
   return wantsPre && debugOn ? 'pre' : 'stable'
 }
 
-async function runCheck(): Promise<void> {
-  const settings = settingsStore.getSettings()
-  // Opt-in: only auto-update when the user explicitly enabled it.
-  if (settings.autoUpdateEnabled !== true) return
-  // Don't restart a check while a download is in flight or an update is staged.
-  if (state.status === 'downloading' || state.status === 'ready') return
+async function performCheck(noUpdateState: UpdateState): Promise<void> {
+  // Don't restart a check while one is running, a download is in flight, or
+  // an update is already staged.
+  if (state.status === 'checking' || state.status === 'downloading' || state.status === 'ready') return
 
   const channel = effectiveChannel()
   try {
     setState({ status: 'checking' })
     const result = await host.update.checkNative(channel)
     if (!result?.available) {
-      setState({ status: 'idle' })
+      setState(noUpdateState)
       return
     }
     setState({ status: 'downloading', downloaded: 0, total: null })
@@ -74,6 +73,19 @@ async function runCheck(): Promise<void> {
   } catch (err) {
     setState({ status: 'error', message: err instanceof Error ? err.message : String(err) })
   }
+}
+
+async function runCheck(): Promise<void> {
+  const settings = settingsStore.getSettings()
+  // Opt-in: only auto-update when the user explicitly enabled it.
+  if (settings.autoUpdateEnabled !== true) return
+  await performCheck({ status: 'idle' })
+}
+
+// Manual "check now" from Settings: skips the auto-update opt-in gate (the
+// click IS the consent) and reports "up to date" instead of going silent.
+export async function checkUpdatesNow(): Promise<void> {
+  await performCheck({ status: 'uptodate' })
 }
 
 let started = false
