@@ -163,6 +163,15 @@ fn format_sidecar_spawn_log_line(
     )
 }
 
+// Sidecar deaths used to be silent — the log showed only the NEXT [spawn],
+// making "why did it die?" unanswerable. Two complementary markers fix that:
+// the stderr reader logs [exit] the moment the pipe closes (real-time, no
+// status), and ensure_spawned logs the harvested exit status when it finds
+// the previous child dead at respawn time.
+fn format_sidecar_exit_log_line(detail: &str) -> String {
+    format!("{} [exit] {}\n", timestamp_millis(), detail)
+}
+
 #[cfg(windows)]
 fn windows_sidecar_eval_bootstrap() -> &'static str {
     r#"
@@ -289,9 +298,18 @@ impl SidecarState {
             // Confirm the child is still alive. If it exited, drop and respawn.
             let mut child_guard = h.child.lock().expect("child lock");
             match child_guard.try_wait() {
-                Ok(Some(_)) => {
-                    // Exited. Fall through to respawn.
+                Ok(Some(status)) => {
+                    // Exited. Record the harvested status, then fall through
+                    // to respawn.
                     drop(child_guard);
+                    if let Some(dir) = &cfg.data_dir {
+                        let _ = append_line(
+                            &dir.join("logs").join("sidecar.log"),
+                            &format_sidecar_exit_log_line(&format!(
+                                "previous sidecar found dead at respawn: status={status}"
+                            )),
+                        );
+                    }
                     *guard = None;
                     self.record_restart_failure();
                 }
@@ -300,8 +318,16 @@ impl SidecarState {
                     drop(child_guard);
                     return Ok(Arc::clone(h));
                 }
-                Err(_) => {
+                Err(err) => {
                     drop(child_guard);
+                    if let Some(dir) = &cfg.data_dir {
+                        let _ = append_line(
+                            &dir.join("logs").join("sidecar.log"),
+                            &format_sidecar_exit_log_line(&format!(
+                                "previous sidecar unreachable at respawn: try_wait error={err}"
+                            )),
+                        );
+                    }
                     *guard = None;
                     self.record_restart_failure();
                 }
@@ -549,6 +575,7 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
     let stderr_tail_for_stdout_reader = Arc::clone(&stderr_tail);
     let stderr_tail_for_stderr_reader = Arc::clone(&stderr_tail);
     let emit_for_stderr = emit.clone();
+    let sidecar_pid = child.id();
     // Stderr reader: append to the tail buffer (capped) and fan out as
     // a `sidecar:stderr` event so the renderer / DevTools can show
     // diagnostic output in real time. The tail is also surfaced in the
@@ -572,6 +599,19 @@ fn spawn_sidecar(cfg: &SpawnConfig, emit: Option<EventSink>) -> Result<SidecarHa
             if let Some(path) = stderr_log_path.as_ref() {
                 let _ = append_line(path, &format_sidecar_log_line(&line));
             }
+        }
+        // Pipe EOF: the sidecar process closed stderr, which in practice
+        // means it exited (or was killed). Timestamp the death so silent
+        // disappearances are visible in the log instead of only the next
+        // [spawn]. The exit STATUS is logged separately by ensure_spawned
+        // when it harvests the dead child at respawn time.
+        if let Some(path) = stderr_log_path.as_ref() {
+            let _ = append_line(
+                path,
+                &format_sidecar_exit_log_line(&format!(
+                    "stderr closed; sidecar pid={sidecar_pid} likely exited"
+                )),
+            );
         }
     });
 
@@ -954,6 +994,14 @@ mod tests {
         assert!(backoff
             .remaining_block(now + Duration::from_secs(8))
             .is_none());
+    }
+
+    #[test]
+    fn sidecar_exit_log_line_has_exit_prefix() {
+        let line = format_sidecar_exit_log_line("stderr closed; sidecar pid=123 likely exited");
+        assert!(line.contains(" [exit] "));
+        assert!(line.contains("pid=123"));
+        assert!(line.ends_with('\n'));
     }
 
     #[test]
