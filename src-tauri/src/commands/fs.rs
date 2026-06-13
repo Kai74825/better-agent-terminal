@@ -1249,27 +1249,179 @@ pub(crate) fn fs_upload_abort_impl(state: &FsUploadState, upload_id: String) -> 
     }
 }
 
-// Client-side command: read a LOCAL file (the drop target machine) and stream
-// it to the connected remote host's tmp dir. Only valid in a remote-profile
-// window — in local mode the dropped path is already host-local and callers
-// should use it directly.
-#[tauri::command]
-pub async fn remote_upload_file_to_host(
-    app: AppHandle,
-    window: WebviewWindow,
-    local_path: String,
+// Create <dir>/<name>, falling back to <stem>-<n><ext> when taken. create_new
+// keeps the reserve atomic — no TOCTOU window between checking and opening.
+fn create_unique_in_dir(dir: &Path, name: &str) -> Result<(fs::File, PathBuf), String> {
+    let (stem, ext) = sanitize_upload_name(name);
+    for n in 0..1000u32 {
+        let file_name = if n == 0 {
+            format!("{stem}{ext}")
+        } else {
+            format!("{stem}-{n}{ext}")
+        };
+        let candidate = dir.join(file_name);
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((file, candidate)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("upload: create file failed: {err}")),
+        }
+    }
+    Err("upload: no free file name in destination".into())
+}
+
+fn validated_dest_dir(dest_dir: &str) -> Result<PathBuf, String> {
+    let dir =
+        std::path::absolute(dest_dir).map_err(|err| format!("upload: bad destination: {err}"))?;
+    if is_sensitive_path(&dir.to_string_lossy()) {
+        return Err("upload: access denied (sensitive path)".into());
+    }
+    if !dir.is_dir() {
+        return Err("upload: destination is not a directory".into());
+    }
+    Ok(dir)
+}
+
+// fs:upload-begin-dir — like fs:upload-tmp-begin, but lands the file in a
+// caller-chosen directory (the file tab's "upload into this folder"). The
+// chunk/end/abort channels are shared with the tmp flow.
+pub(crate) fn fs_upload_begin_in_dir_impl(
+    state: &FsUploadState,
+    dest_dir: String,
+    name: String,
+    total_bytes: u64,
+) -> Result<Value, String> {
+    if total_bytes == 0 {
+        return Err("upload: totalBytes must be > 0".into());
+    }
+    if total_bytes > UPLOAD_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "upload: file too large ({} bytes, limit {} bytes)",
+            total_bytes, UPLOAD_MAX_TOTAL_BYTES
+        ));
+    }
+    let dir = validated_dest_dir(&dest_dir)?;
+    let (file, path) = create_unique_in_dir(&dir, &name)?;
+    let upload_id = format!("{:016x}", rand::random::<u64>());
+    let mut entries = state
+        .entries
+        .lock()
+        .map_err(|_| "upload: state poisoned".to_string())?;
+    prune_stale_uploads(&mut entries);
+    entries.insert(
+        upload_id.clone(),
+        UploadEntry {
+            file,
+            path: path.clone(),
+            received: 0,
+            total: total_bytes,
+            last_activity: std::time::Instant::now(),
+        },
+    );
+    Ok(json!({
+        "uploadId": upload_id,
+        "path": path.to_string_lossy(),
+    }))
+}
+
+const DOWNLOAD_MAX_TOTAL_BYTES: u64 = UPLOAD_MAX_TOTAL_BYTES;
+const DOWNLOAD_CHUNK_BYTES: usize = 1024 * 1024;
+
+// fs:download-read — stateless chunked read for "download host file to the
+// remote client". Each call returns up to 1 MiB at `offset`; the client loops
+// until eof. Stateless on purpose: nothing to GC if the client vanishes.
+pub(crate) fn fs_download_read_impl(path: String, offset: u64) -> Result<Value, String> {
+    use base64::Engine as _;
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let abs = std::path::absolute(&path).map_err(|err| format!("download: bad path: {err}"))?;
+    if is_sensitive_path(&abs.to_string_lossy()) {
+        return Err("download: access denied (sensitive path)".into());
+    }
+    let meta = fs::metadata(&abs).map_err(|err| format!("download: stat failed: {err}"))?;
+    if !meta.is_file() {
+        return Err("download: not a file".into());
+    }
+    let total = meta.len();
+    if total > DOWNLOAD_MAX_TOTAL_BYTES {
+        return Err(format!(
+            "download: file too large ({total} bytes, limit {DOWNLOAD_MAX_TOTAL_BYTES} bytes)"
+        ));
+    }
+    let mut file = fs::File::open(&abs).map_err(|err| format!("download: open failed: {err}"))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|err| format!("download: seek failed: {err}"))?;
+    let mut buf = vec![0u8; DOWNLOAD_CHUNK_BYTES];
+    let mut filled = 0usize;
+    loop {
+        let read = file
+            .read(&mut buf[filled..])
+            .map_err(|err| format!("download: read failed: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+        if filled == buf.len() {
+            break;
+        }
+    }
+    let eof = offset + filled as u64 >= total;
+    Ok(json!({
+        "dataBase64": base64::engine::general_purpose::STANDARD.encode(&buf[..filled]),
+        "totalBytes": total,
+        "eof": eof,
+    }))
+}
+
+// Local-mode upload: copy a picked local file into the destination directory
+// with the same collision-safe naming as the remote path.
+pub(crate) fn fs_copy_into_dir_impl(src: String, dest_dir: String) -> Result<String, String> {
+    let src_abs =
+        std::path::absolute(&src).map_err(|err| format!("upload: bad source path: {err}"))?;
+    if is_sensitive_path(&src_abs.to_string_lossy()) {
+        return Err("upload: access denied (sensitive path)".into());
+    }
+    let meta =
+        fs::metadata(&src_abs).map_err(|err| format!("upload: cannot read local file: {err}"))?;
+    if !meta.is_file() {
+        return Err("upload: not a file".into());
+    }
+    let dir = validated_dest_dir(&dest_dir)?;
+    let name = src_abs
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "upload".into());
+    let (mut out, path) = create_unique_in_dir(&dir, &name)?;
+    let mut input =
+        fs::File::open(&src_abs).map_err(|err| format!("upload: open failed: {err}"))?;
+    if let Err(err) = std::io::copy(&mut input, &mut out) {
+        drop(out);
+        let _ = fs::remove_file(&path);
+        return Err(format!("upload: copy failed: {err}"));
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+// Shared client-side streaming loop: read a LOCAL file and push it to the
+// connected remote host in base64 chunks. The destination is chosen by the
+// begin channel — fs:upload-tmp-begin (host tmp dir, args [name, total]) or
+// fs:upload-begin-dir (caller-chosen dir, args [dir, name, total] via
+// begin_extra). Chunk/end/abort channels are shared between both flows.
+fn stream_local_file_to_host(
+    remote_client: &RustRemoteClientState,
+    window_label: &str,
+    local_path: &str,
+    begin_channel: &str,
+    begin_extra: Vec<Value>,
 ) -> Result<String, String> {
     use base64::Engine as _;
     use std::io::Read as _;
 
-    if !is_remote_profile_window(&app, &window) {
-        return Err("remote_upload_file_to_host: not a remote session".into());
-    }
-    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
-    let window_label = window.label().to_string();
-
-    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let meta = fs::metadata(&local_path)
+    {
+        let meta = fs::metadata(local_path)
             .map_err(|err| format!("upload: cannot read local file: {err}"))?;
         if !meta.is_file() {
             return Err("upload: not a file".into());
@@ -1284,17 +1436,16 @@ pub async fn remote_upload_file_to_host(
                 total, UPLOAD_MAX_TOTAL_BYTES
             ));
         }
-        let name = Path::new(&local_path)
+        let name = Path::new(local_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "upload".into());
 
-        let begin = remote_client.invoke(
-            &window_label,
-            "fs:upload-tmp-begin",
-            vec![json!(name), json!(total)],
-            REMOTE_FS_TIMEOUT,
-        )?;
+        let mut begin_args = begin_extra;
+        begin_args.push(json!(name));
+        begin_args.push(json!(total));
+        let begin =
+            remote_client.invoke(window_label, begin_channel, begin_args, REMOTE_FS_TIMEOUT)?;
         let upload_id = begin
             .get("uploadId")
             .and_then(Value::as_str)
@@ -1345,9 +1496,174 @@ pub async fn remote_upload_file_to_host(
             .and_then(Value::as_str)
             .map(|s| s.to_string())
             .ok_or_else(|| "upload: host did not return final path".to_string())
+    }
+}
+
+// Client-side command: read a LOCAL file (the drop target machine) and stream
+// it to the connected remote host's tmp dir. Only valid in a remote-profile
+// window — in local mode the dropped path is already host-local and callers
+// should use it directly.
+#[tauri::command]
+pub async fn remote_upload_file_to_host(
+    app: AppHandle,
+    window: WebviewWindow,
+    local_path: String,
+) -> Result<String, String> {
+    if !is_remote_profile_window(&app, &window) {
+        return Err("remote_upload_file_to_host: not a remote session".into());
+    }
+    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let window_label = window.label().to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        stream_local_file_to_host(
+            &remote_client,
+            &window_label,
+            &local_path,
+            "fs:upload-tmp-begin",
+            vec![],
+        )
     })
     .await
     .map_err(|err| format!("remote_upload_file_to_host worker failed: {err}"))?
+}
+
+// File-tab upload: put a picked LOCAL file into a destination directory.
+// Local mode copies on disk; remote mode streams the bytes to the host and
+// the host writes into the directory (host applies the mutation, client
+// renders the result). Returns the final path.
+#[tauri::command]
+pub async fn fs_upload_to_dir(
+    app: AppHandle,
+    window: WebviewWindow,
+    local_path: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    if is_remote_profile_window(&app, &window) {
+        let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+        let window_label = window.label().to_string();
+        return tauri::async_runtime::spawn_blocking(move || {
+            stream_local_file_to_host(
+                &remote_client,
+                &window_label,
+                &local_path,
+                "fs:upload-begin-dir",
+                vec![json!(dest_dir)],
+            )
+        })
+        .await
+        .map_err(|err| format!("fs_upload_to_dir worker failed: {err}"))?;
+    }
+    tauri::async_runtime::spawn_blocking(move || fs_copy_into_dir_impl(local_path, dest_dir))
+        .await
+        .map_err(|err| format!("fs_upload_to_dir worker failed: {err}"))?
+}
+
+// File-tab download: save a workspace file to a CLIENT-LOCAL location chosen
+// via the native save dialog. Local mode copies; remote mode pulls the bytes
+// from the host in chunks. Returns the saved path, or None on cancel.
+#[tauri::command]
+pub async fn fs_download_file(
+    app: AppHandle,
+    window: WebviewWindow,
+    source_path: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt as _;
+
+    let default_name = Path::new(&source_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
+    let remote = if is_remote_profile_window(&app, &window) {
+        Some((
+            app.state::<RustRemoteClientState>().inner().clone(),
+            window.label().to_string(),
+        ))
+    } else {
+        None
+    };
+    let app_for_dialog = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+        let picked = app_for_dialog
+            .dialog()
+            .file()
+            .set_file_name(&default_name)
+            .blocking_save_file();
+        let Some(file_path) = picked else {
+            return Ok(None);
+        };
+        let dest = file_path
+            .into_path()
+            .map_err(|_| "download: invalid save path".to_string())?;
+
+        if let Some((remote_client, window_label)) = remote {
+            stream_host_file_to_local(&remote_client, &window_label, &source_path, &dest)?;
+        } else {
+            let abs = std::path::absolute(&source_path)
+                .map_err(|err| format!("download: bad path: {err}"))?;
+            if is_sensitive_path(&abs.to_string_lossy()) {
+                return Err("download: access denied (sensitive path)".into());
+            }
+            if !fs::metadata(&abs).map(|m| m.is_file()).unwrap_or(false) {
+                return Err("download: not a file".into());
+            }
+            fs::copy(&abs, &dest).map_err(|err| format!("download: copy failed: {err}"))?;
+        }
+        Ok(Some(dest.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|err| format!("fs_download_file worker failed: {err}"))?
+}
+
+// Pull a host file down over the remote transport via fs:download-read,
+// writing chunks to the chosen local destination. Partial files are removed
+// on any failure.
+fn stream_host_file_to_local(
+    remote_client: &RustRemoteClientState,
+    window_label: &str,
+    source_path: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    use base64::Engine as _;
+    use std::io::Write as _;
+
+    let mut out =
+        fs::File::create(dest).map_err(|err| format!("download: create failed: {err}"))?;
+    let fail = |out: fs::File, reason: String| {
+        drop(out);
+        let _ = fs::remove_file(dest);
+        Err::<(), String>(reason)
+    };
+    let mut offset: u64 = 0;
+    loop {
+        let chunk = match remote_client.invoke(
+            window_label,
+            "fs:download-read",
+            vec![json!(source_path), json!(offset)],
+            REMOTE_FS_TIMEOUT,
+        ) {
+            Ok(value) => value,
+            Err(err) => return fail(out, err),
+        };
+        let data = chunk.get("dataBase64").and_then(Value::as_str).unwrap_or("");
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) {
+            Ok(bytes) => bytes,
+            Err(err) => return fail(out, format!("download: bad base64: {err}")),
+        };
+        if let Err(err) = out.write_all(&bytes) {
+            return fail(out, format!("download: write failed: {err}"));
+        }
+        offset += bytes.len() as u64;
+        let eof = chunk
+            .get("eof")
+            .and_then(Value::as_bool)
+            .unwrap_or(bytes.is_empty());
+        if eof || bytes.is_empty() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1397,6 +1713,107 @@ mod tests {
         let p2 = begin.get("path").and_then(Value::as_str).unwrap().to_string();
         assert!(fs_upload_end_impl(&state, id2).is_err());
         assert!(!Path::new(&p2).exists());
+    }
+
+    #[test]
+    fn upload_begin_in_dir_lands_in_destination_with_unique_names() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir().join(format!("bat-upload-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let state = FsUploadState::default();
+        let mut paths = Vec::new();
+        // Same name twice — second upload must get a suffixed file, not clobber.
+        for expected in ["notes.txt", "notes-1.txt"] {
+            let begin = fs_upload_begin_in_dir_impl(
+                &state,
+                dir.to_string_lossy().into(),
+                "notes.txt".into(),
+                5,
+            )
+            .unwrap();
+            let id = begin
+                .get("uploadId")
+                .and_then(Value::as_str)
+                .unwrap()
+                .to_string();
+            let b64 = base64::engine::general_purpose::STANDARD.encode(b"hello");
+            fs_upload_chunk_impl(&state, id.clone(), b64).unwrap();
+            let end = fs_upload_end_impl(&state, id).unwrap();
+            let path = end.get("path").and_then(Value::as_str).unwrap().to_string();
+            assert!(path.ends_with(expected), "{path} should end with {expected}");
+            assert_eq!(fs::read(&path).unwrap(), b"hello");
+            paths.push(path);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upload_begin_in_dir_rejects_missing_destination() {
+        let state = FsUploadState::default();
+        let missing = std::env::temp_dir().join("bat-upload-missing-dir-xyz");
+        let result = fs_upload_begin_in_dir_impl(
+            &state,
+            missing.to_string_lossy().into(),
+            "a.txt".into(),
+            1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn download_read_returns_chunks_until_eof() {
+        use base64::Engine as _;
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("bat-download-{}.bin", std::process::id()));
+        fs::write(&path, b"hello world").unwrap();
+
+        let first = fs_download_read_impl(path.to_string_lossy().into(), 0).unwrap();
+        let data = first.get("dataBase64").and_then(Value::as_str).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .unwrap();
+        assert_eq!(bytes, b"hello world");
+        assert_eq!(first.get("totalBytes").and_then(Value::as_u64), Some(11));
+        assert_eq!(first.get("eof").and_then(Value::as_bool), Some(true));
+
+        // Offset read returns the tail only.
+        let tail = fs_download_read_impl(path.to_string_lossy().into(), 6).unwrap();
+        let data = tail.get("dataBase64").and_then(Value::as_str).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .unwrap();
+        assert_eq!(bytes, b"world");
+
+        // Directories are refused.
+        assert!(fs_download_read_impl(dir.to_string_lossy().into(), 0).is_err());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn copy_into_dir_copies_and_dedupes_names() {
+        let base = std::env::temp_dir().join(format!("bat-copy-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let dest = base.join("dest");
+        fs::create_dir_all(&dest).unwrap();
+        let src = base.join("data.txt");
+        fs::write(&src, b"payload").unwrap();
+
+        let first = fs_copy_into_dir_impl(
+            src.to_string_lossy().into(),
+            dest.to_string_lossy().into(),
+        )
+        .unwrap();
+        let second = fs_copy_into_dir_impl(
+            src.to_string_lossy().into(),
+            dest.to_string_lossy().into(),
+        )
+        .unwrap();
+        assert!(first.ends_with("data.txt"));
+        assert!(second.ends_with("data-1.txt"));
+        assert_eq!(fs::read(&first).unwrap(), b"payload");
+        assert_eq!(fs::read(&second).unwrap(), b"payload");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

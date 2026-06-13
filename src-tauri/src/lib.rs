@@ -197,6 +197,8 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             fs_cmd::fs_watch,
             fs_cmd::fs_unwatch,
             fs_cmd::remote_upload_file_to_host,
+            fs_cmd::fs_upload_to_dir,
+            fs_cmd::fs_download_file,
             clipboard_cmd::clipboard_save_image,
             clipboard_cmd::clipboard_write_text,
             clipboard_cmd::clipboard_write_image,

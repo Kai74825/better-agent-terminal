@@ -539,6 +539,15 @@ function createTauriHost(): BatAppAPI {
         getInvoke()<
           { rawPath: string; path: string; exists: boolean; line?: number; column?: number }[]
         >('fs_resolve_path_links', { cwd, rawPaths }),
+      // Upload a CLIENT-LOCAL file into a workspace directory (local copy, or
+      // chunked stream to the host in remote mode). Resolves with the final path.
+      uploadToDir: (localPath: string, destDir: string) =>
+        getInvoke()<string>('fs_upload_to_dir', { localPath, destDir }),
+      // Save a workspace file to a client-local location via the native save
+      // dialog (local copy, or chunked pull from the host in remote mode).
+      // Resolves with the saved path, or null when the user cancels.
+      downloadFile: (sourcePath: string) =>
+        getInvoke()<string | null>('fs_download_file', { sourcePath }),
       watch: (dirPath: string) => getInvoke()<boolean>('fs_watch', { dirPath }),
       unwatch: (dirPath: string) => getInvoke()<boolean>('fs_unwatch', { dirPath }),
       onChanged: (callback: (dirPath: string) => void) =>

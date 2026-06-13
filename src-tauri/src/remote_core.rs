@@ -253,6 +253,8 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "fs:upload-tmp-begin" => Some(&["name", "totalBytes"]),
         "fs:upload-tmp-chunk" => Some(&["uploadId", "dataBase64"]),
         "fs:upload-tmp-end" | "fs:upload-tmp-abort" => Some(&["uploadId"]),
+        "fs:upload-begin-dir" => Some(&["dir", "name", "totalBytes"]),
+        "fs:download-read" => Some(&["path", "offset"]),
         "fs:mkdir" => Some(&["parentPath", "name"]),
         "fs:delete-path" => Some(&["targetPath"]),
         "fs:resolve-path-links" => Some(&["cwd", "rawPaths"]),

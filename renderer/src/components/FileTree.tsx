@@ -602,12 +602,172 @@ export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProp
     setContextMenu(null)
   }, [contextMenu])
 
+  // Upload: pick client-local files, copy/stream each into the destination
+  // directory, then refresh so the new entries show up.
+  const [uploading, setUploading] = useState(false)
+  const uploadFilesTo = useCallback(async (destDir: string) => {
+    let picked: string[] = []
+    try {
+      picked = await host.dialog.selectFiles()
+    } catch {
+      return
+    }
+    if (picked.length === 0) return
+    setUploading(true)
+    try {
+      for (const localPath of picked) {
+        try {
+          await host.fs.uploadToDir(localPath, destDir)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          window.alert(`Upload failed: ${message}`)
+        }
+      }
+    } finally {
+      setUploading(false)
+      handleRefresh()
+    }
+  }, [handleRefresh])
+
+  const handleUploadToRoot = useCallback(() => {
+    void uploadFilesTo(rootPath)
+  }, [uploadFilesTo, rootPath])
+
+  const handleUploadHere = useCallback(() => {
+    if (!contextMenu) return
+    const destDir = contextMenu.entry.isDirectory
+      ? contextMenu.entry.path
+      : contextMenu.entry.path.replace(/[\\/][^\\/]+$/, '') // parent dir
+    setContextMenu(null)
+    void uploadFilesTo(destDir)
+  }, [contextMenu, uploadFilesTo])
+
+  // Download: native save dialog, then local copy or chunked pull from the
+  // remote host. Cancel resolves to null — nothing to report.
+  const downloadFile = useCallback(async (sourcePath: string) => {
+    try {
+      await host.fs.downloadFile(sourcePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      window.alert(`Download failed: ${message}`)
+    }
+  }, [])
+
+  const handleDownloadFromMenu = useCallback(() => {
+    if (!contextMenu) return
+    const sourcePath = contextMenu.entry.path
+    setContextMenu(null)
+    void downloadFile(sourcePath)
+  }, [contextMenu, downloadFile])
+
+  // New folder: inline form under the header (same pattern as FolderPicker).
+  // newFolderDir is the destination — root via the header button, or the
+  // right-clicked folder via the context menu.
+  const [newFolderDir, setNewFolderDir] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [newFolderError, setNewFolderError] = useState<string | null>(null)
+  const newFolderInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (newFolderDir !== null) newFolderInputRef.current?.focus()
+  }, [newFolderDir])
+
+  const openNewFolderForm = useCallback((destDir: string) => {
+    setNewFolderDir(destDir)
+    setNewFolderName('')
+    setNewFolderError(null)
+  }, [])
+
+  const closeNewFolderForm = useCallback(() => {
+    setNewFolderDir(null)
+    setNewFolderName('')
+    setNewFolderError(null)
+  }, [])
+
+  const handleCreateFolder = useCallback(async () => {
+    const name = newFolderName.trim()
+    if (!name || newFolderDir === null) return
+    setNewFolderError(null)
+    const result = await host.fs.mkdir(newFolderDir, name)
+    if ('error' in result) {
+      setNewFolderError(result.error)
+      return
+    }
+    closeNewFolderForm()
+    handleRefresh()
+  }, [newFolderName, newFolderDir, closeNewFolderForm, handleRefresh])
+
+  const handleNewFolderHere = useCallback(() => {
+    if (!contextMenu) return
+    const destDir = contextMenu.entry.isDirectory
+      ? contextMenu.entry.path
+      : contextMenu.entry.path.replace(/[\\/][^\\/]+$/, '') // parent dir
+    setContextMenu(null)
+    openNewFolderForm(destDir)
+  }, [contextMenu, openNewFolderForm])
+
+  // Delete folder: deliberately strict — a modal that requires typing the
+  // folder name before the (recursive, irreversible) delete is enabled.
+  // The backend refuses non-directories, so this is folders-only by design.
+  const [deleteTarget, setDeleteTarget] = useState<FileEntry | null>(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const deleteInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (deleteTarget) deleteInputRef.current?.focus()
+  }, [deleteTarget])
+
+  const handleDeleteFolderFromMenu = useCallback(() => {
+    if (!contextMenu || !contextMenu.entry.isDirectory) return
+    setDeleteTarget(contextMenu.entry)
+    setDeleteConfirmText('')
+    setDeleteError(null)
+    setContextMenu(null)
+  }, [contextMenu])
+
+  const closeDeleteDialog = useCallback(() => {
+    if (deleting) return
+    setDeleteTarget(null)
+    setDeleteConfirmText('')
+    setDeleteError(null)
+  }, [deleting])
+
+  const deleteConfirmed = deleteTarget !== null && deleteConfirmText.trim() === deleteTarget.name
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTarget || deleteConfirmText.trim() !== deleteTarget.name || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const result = await host.fs.deletePath(deleteTarget.path)
+      if ('error' in result) {
+        setDeleteError(result.error)
+        return
+      }
+      // Drop the preview if the selected file lived inside the deleted folder
+      // (separator-suffixed so /a/foo doesn't also match /a/foobar).
+      if (
+        selectedFile &&
+        (selectedFile.path.startsWith(`${deleteTarget.path}/`) ||
+          selectedFile.path.startsWith(`${deleteTarget.path}\\`))
+      ) {
+        setSelectedFile(null)
+        localStorage.removeItem(`file-tree-selected:${rootPath}`)
+      }
+      setDeleteTarget(null)
+      setDeleteConfirmText('')
+      handleRefresh()
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(false)
+    }
+  }, [deleteTarget, deleteConfirmText, deleting, selectedFile, rootPath, handleRefresh])
+
   if (loading && entries.length === 0) {
     return <div className="file-tree-empty">Loading...</div>
-  }
-
-  if (entries.length === 0) {
-    return <div className="file-tree-empty">No files found</div>
   }
 
   const displayEntries = searchResults !== null ? searchResults : entries
@@ -624,8 +784,43 @@ export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProp
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
+          <button
+            className="file-tree-refresh-btn"
+            onClick={() => openNewFolderForm(rootPath)}
+            title="New folder"
+          >📁+</button>
+          <button
+            className="file-tree-refresh-btn"
+            onClick={handleUploadToRoot}
+            disabled={uploading}
+            title="Upload files"
+          >{uploading ? '…' : '⤒'}</button>
           <button className="file-tree-refresh-btn" onClick={handleRefresh} title="Refresh">↻</button>
         </div>
+        {newFolderDir !== null && (
+          <div className="file-tree-new-folder">
+            <input
+              ref={newFolderInputRef}
+              type="text"
+              className="file-tree-search"
+              placeholder="New folder name..."
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleCreateFolder()
+                if (e.key === 'Escape') closeNewFolderForm()
+              }}
+            />
+            <button
+              className="file-tree-refresh-btn"
+              onClick={() => void handleCreateFolder()}
+              disabled={!newFolderName.trim()}
+              title="Create"
+            >✓</button>
+            <button className="file-tree-refresh-btn" onClick={closeNewFolderForm} title="Cancel">✕</button>
+            {newFolderError && <span className="file-tree-new-folder-error">{newFolderError}</span>}
+          </div>
+        )}
         <div
           className="file-tree-list"
           ref={listRef}
@@ -670,6 +865,9 @@ export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProp
           {searchResults !== null && searchResults.length === 0 && !searching && (
             <div className="file-tree-empty">No matches</div>
           )}
+          {searchResults === null && !loading && entries.length === 0 && (
+            <div className="file-tree-empty">No files found</div>
+          )}
         </div>
       </div>
       <div className="file-preview">
@@ -677,6 +875,11 @@ export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProp
           <>
             <div className="file-preview-header">
               <span className="file-preview-filename">{selectedFile.name}</span>
+              <button
+                className="file-tree-refresh-btn"
+                onClick={() => void downloadFile(selectedFile.path)}
+                title="Download"
+              >⤓</button>
               <button className="file-tree-refresh-btn" onClick={handleRefresh} title="Refresh">↻</button>
             </div>
             <div className="file-preview-body">
@@ -712,11 +915,87 @@ export function FileTree({ rootPath, remoteMode = false }: Readonly<FileTreeProp
             Copy Absolute Path
           </div>
           <div className="context-menu-divider" />
+          {!contextMenu.entry.isDirectory && (
+            <div className="context-menu-item" onClick={handleDownloadFromMenu}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download
+            </div>
+          )}
+          <div className="context-menu-item" onClick={handleUploadHere}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            {contextMenu.entry.isDirectory ? 'Upload Files Here' : 'Upload Files to This Folder'}
+          </div>
+          <div className="context-menu-item" onClick={handleNewFolderHere}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <line x1="12" y1="11" x2="12" y2="17" />
+              <line x1="9" y1="14" x2="15" y2="14" />
+            </svg>
+            New Folder Here
+          </div>
+          <div className="context-menu-divider" />
           <div className="context-menu-item" onClick={handleOpenInExplorer}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
             Open in Explorer
+          </div>
+          {contextMenu.entry.isDirectory && (
+            <>
+              <div className="context-menu-divider" />
+              <div className="context-menu-item danger" onClick={handleDeleteFolderFromMenu}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                Delete Folder…
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Delete folder confirmation — requires typing the folder name */}
+      {deleteTarget && (
+        <div className="dialog-overlay" onClick={closeDeleteDialog}>
+          <div className="dialog" onClick={e => e.stopPropagation()}>
+            <h3>Delete Folder</h3>
+            <p>This will permanently delete the folder and everything inside it:</p>
+            <p className="file-tree-delete-path">{deleteTarget.path}</p>
+            <p>Type <strong>{deleteTarget.name}</strong> to confirm.</p>
+            <input
+              ref={deleteInputRef}
+              type="text"
+              className="file-tree-search"
+              placeholder={deleteTarget.name}
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && deleteConfirmed) void handleConfirmDelete()
+                if (e.key === 'Escape') closeDeleteDialog()
+              }}
+            />
+            {deleteError && <p className="file-tree-delete-error">{deleteError}</p>}
+            <div className="dialog-actions">
+              <button className="dialog-btn cancel" onClick={closeDeleteDialog} disabled={deleting}>
+                Cancel
+              </button>
+              <button
+                className="dialog-btn confirm"
+                onClick={() => void handleConfirmDelete()}
+                disabled={!deleteConfirmed || deleting}
+              >
+                {deleting ? 'Deleting…' : 'Delete Folder'}
+              </button>
+            </div>
           </div>
         </div>
       )}

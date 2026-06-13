@@ -435,6 +435,25 @@ profile:activate
 profile:deactivate
 ```
 
+Filesystem transfer (host-owned; the host writes/reads files, clients stream
+bytes over the transport):
+
+```text
+fs:upload-tmp-begin   name, totalBytes        → { uploadId, path }
+fs:upload-begin-dir   dir, name, totalBytes   → { uploadId, path }
+fs:upload-tmp-chunk   uploadId, dataBase64    → { received }
+fs:upload-tmp-end     uploadId                → { path }
+fs:upload-tmp-abort   uploadId                → bool
+fs:download-read      path, offset            → { dataBase64, totalBytes, eof }
+```
+
+`fs:upload-tmp-begin` lands the file in the host's tmp dir (drag-drop into a
+chat). `fs:upload-begin-dir` lands it in a caller-chosen host directory with
+collision-safe naming (file tab upload); both share the chunk/end/abort
+channels. Files are capped at 64 MiB and chunks at 4 MiB decoded.
+`fs:download-read` is a stateless chunked read (≤1 MiB per call) used by the
+file tab's download; the client loops with increasing `offset` until `eof`.
+
 Worktree:
 
 ```text

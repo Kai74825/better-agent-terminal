@@ -2282,6 +2282,24 @@ fn invoke_rust_for_remote(
                 total_bytes,
             )
         }),
+        "fs:upload-begin-dir" => string_param(params, "dir", channel).and_then(|dir| {
+            string_param(params, "name", channel).and_then(|name| {
+                let total_bytes = params
+                    .get("totalBytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                fs_cmd::fs_upload_begin_in_dir_impl(
+                    app.state::<fs_cmd::FsUploadState>().inner(),
+                    dir,
+                    name,
+                    total_bytes,
+                )
+            })
+        }),
+        "fs:download-read" => string_param(params, "path", channel).and_then(|path| {
+            let offset = params.get("offset").and_then(Value::as_u64).unwrap_or(0);
+            fs_cmd::fs_download_read_impl(path, offset)
+        }),
         "fs:upload-tmp-chunk" => string_param(params, "uploadId", channel).and_then(|upload_id| {
             string_param(params, "dataBase64", channel).and_then(|data_base64| {
                 fs_cmd::fs_upload_chunk_impl(
