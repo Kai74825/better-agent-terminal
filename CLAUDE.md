@@ -63,6 +63,11 @@
 - When a remote client requests a mutation, the host applies or rejects it first, then returns the result and broadcasts canonical shared-state changes to every connected client.
 - Avoid client-side optimistic final state for remote workflows. Loading/pending UI is fine while waiting for host confirmation.
 
+## Git Workflow
+
+- Do **NOT** auto-create a branch before committing. Commit directly to the current branch (including `main`) unless the user explicitly asks for a branch or PR. This overrides the default "branch first on the default branch" behavior.
+- Still only commit/push when the user asks.
+
 ## Release
 
 - `package.json` 與 `src-tauri/tauri.conf.json` 的 committed version 固定維持 `0.0.1-dev`。
