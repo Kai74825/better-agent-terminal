@@ -746,15 +746,47 @@ fn connect_socket(
         ));
     }
 
-    tcp_for_handshake
-        .set_read_timeout(Some(POLL_TIMEOUT))
-        .map_err(|err| format!("remote stream polling timeout failed: {err}"))?;
+    // The websocket upgrade and auth handshake below both block on reads for the
+    // server's response (the HTTP 101, then the auth-result frame). Keep the
+    // generous AUTH_TIMEOUT that is already on the socket in effect through both
+    // stages — only switch to the short non-blocking POLL_TIMEOUT once the
+    // connection is live (for the steady-state client loop). On relayed /
+    // high-latency paths (e.g. Tailscale DERP) the 101 can take several hundred
+    // ms; previously POLL_TIMEOUT was applied *before* the upgrade, so the read
+    // for the 101 timed out ~100ms after sending the upgrade and every such
+    // connection failed regardless of the much larger AUTH_TIMEOUT. (gh #116)
     let tls = StreamOwned::new(connection, tcp_for_handshake);
     let request = format!("wss://{host}:{port}/")
         .into_client_request()
         .map_err(|err| format!("remote websocket request failed: {err}"))?;
-    let (mut ws, _) = tungstenite::client(request, tls)
-        .map_err(|err| format!("remote websocket connect failed: {err}"))?;
+    let (mut ws, _) = tungstenite::client(request, tls).map_err(|err| {
+        // A read timeout while waiting for the server's HTTP 101 surfaces as
+        // `Interrupted` (WouldBlock on Unix) or `Failure(Io(TimedOut))` (on
+        // Windows). Report it distinctly so a slow/relayed path is not mistaken
+        // for an auth or fingerprint failure. (gh #116)
+        let timed_out = match &err {
+            tungstenite::HandshakeError::Interrupted(_) => true,
+            tungstenite::HandshakeError::Failure(tungstenite::Error::Io(io_err)) => {
+                io_err.kind() == io::ErrorKind::WouldBlock
+                    || io_err.kind() == io::ErrorKind::TimedOut
+            }
+            _ => false,
+        };
+        if timed_out {
+            format!(
+                "remote websocket upgrade timed out after {}s waiting for the server response (slow or relayed network path?)",
+                AUTH_TIMEOUT.as_secs()
+            )
+        } else {
+            format!("remote websocket connect failed: {err}")
+        }
+    })?;
+    // Connection established; the auth loop below and the steady-state client
+    // loop both expect the short non-blocking poll timeout.
+    ws.get_ref()
+        .sock
+        .set_read_timeout(Some(POLL_TIMEOUT))
+        .map_err(|err| format!("remote stream polling timeout failed: {err}"))?;
     let mut client_info = json!({
         "appName": "Better Agent Terminal Desktop",
         "appVersion": env!("CARGO_PKG_VERSION"),
