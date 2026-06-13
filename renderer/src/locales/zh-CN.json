@@ -20,7 +20,8 @@
     "welcomeHint": "点击「+ 新增工作区」开始使用",
     "remoteConnectionFailed": "远程连接失败：{{error}}",
     "remoteConnectionFailedFallback": "远程连接失败：{{error}}\n正在切换回本地配置文件。",
-    "remoteMissingInfo": "远程配置文件缺少连接信息。"
+    "remoteMissingInfo": "远程配置文件缺少连接信息。",
+    "remoteVersionMismatch": "已连接到版本不同的远程主机（client {{clientVersion}} vs server {{serverVersion}}）。版本不一致可能会污染共享的工作区状态（见 issue #115），方便时请更新较旧的那一端。"
   },
   "quickPick": {
     "searchPlaceholder": "输入以筛选终端类型…",

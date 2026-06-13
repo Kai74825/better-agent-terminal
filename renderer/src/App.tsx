@@ -607,6 +607,16 @@ export default function App() {
             setActiveRemoteProfileId(active.remoteProfileId || 'default')
             setActiveRemoteOrigin(`${active.remoteHost}:${active.remotePort || 9876}`)
             setRemoteClientConnected(true)
+            // Surface client/server app version skew once per fresh connect.
+            // A 3.1.22 host silently accepting 3.1.26 clients was the trigger
+            // for issue #115's cross-profile state leakage; warning the user
+            // turns that gap into something diagnosable on the first dial.
+            // Hosts that predate the handshake (~3.1.27) send no
+            // `serverVersion`, in which case there is nothing to compare.
+            const cr = connectResult as { clientVersion?: string; serverVersion?: string | null }
+            if (cr.clientVersion && cr.serverVersion && cr.clientVersion !== cr.serverVersion) {
+              setAppNotification(t('app.remoteVersionMismatch', { clientVersion: cr.clientVersion, serverVersion: cr.serverVersion }))
+            }
             // Remember how we connected so the status poll can silently
             // re-dial after an idle drop without restarting the app.
             remoteConnParamsRef.current = {

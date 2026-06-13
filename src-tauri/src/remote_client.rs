@@ -93,6 +93,11 @@ struct RunningClient {
     port: u16,
     compression: RemoteCompression,
     protocol: String,
+    // Host's app version as echoed in the auth-result `serverVersion` field,
+    // or None when the host predates the version-handshake fix. The renderer
+    // compares it to the client's own version to surface a skew warning
+    // (issue #115 was triggered by exactly that gap going undetected).
+    server_version: Option<String>,
     connected: Arc<AtomicBool>,
     tx: mpsc::Sender<ClientCommand>,
     // window_labels currently bound to this connection. The socket is torn down
@@ -122,6 +127,7 @@ struct RemoteConnection {
     ws: RemoteWebSocket,
     protocol: String,
     compression: RemoteCompression,
+    server_version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -184,6 +190,10 @@ impl RustRemoteClientState {
         window_id: Option<String>,
     ) -> Result<Value, String> {
         validate_connection_fields(&host, port, &token, &fingerprint)?;
+        // Capture before `app` may be moved into the client_loop thread below;
+        // surfaced in the connect return so the renderer can compare against
+        // `serverVersion` and flag client/server skew (issue #115).
+        let client_version = tauri::Manager::package_info(&app).version.to_string();
         let label = label
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(default_client_label);
@@ -226,6 +236,7 @@ impl RustRemoteClientState {
                 )?;
                 let compression = connection.compression;
                 let protocol = connection.protocol.clone();
+                let server_version = connection.server_version.clone();
                 let (tx, rx) = mpsc::channel();
                 let connected = Arc::new(AtomicBool::new(true));
                 let connected_for_loop = Arc::clone(&connected);
@@ -245,6 +256,7 @@ impl RustRemoteClientState {
                     port,
                     compression,
                     protocol,
+                    server_version,
                     connected,
                     tx,
                     referrers: Mutex::new(HashSet::new()),
@@ -275,7 +287,22 @@ impl RustRemoteClientState {
             "port": client.port,
             "compression": client.compression.as_str(),
         });
-        Ok(json!({ "connected": true, "info": info, "protocol": client.protocol }))
+        // Surface client/server app version pair so the renderer can flag
+        // skew once per connect (issue #115's data-corruption window opened
+        // when a 3.1.22 host kept accepting 3.1.26 clients silently).
+        // `serverVersion` is None against hosts that predate this handshake.
+        let server_version = client
+            .server_version
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+        Ok(json!({
+            "connected": true,
+            "info": info,
+            "protocol": client.protocol,
+            "clientVersion": client_version,
+            "serverVersion": server_version,
+        }))
     }
 
     /// Release a window's connection binding. The underlying socket is torn down
@@ -832,10 +859,17 @@ fn connect_socket(
                     Some(REMOTE_COMPRESSION_GZIP) => RemoteCompression::Gzip,
                     _ => RemoteCompression::None,
                 };
+                let server_version = frame
+                    .get("serverVersion")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
                 return Ok(RemoteConnection {
                     ws,
                     protocol,
                     compression,
+                    server_version,
                 });
             }
             Ok(_) => {}
@@ -1086,6 +1120,7 @@ mod tests {
             port: 9001,
             compression: RemoteCompression::None,
             protocol: "v2".to_string(),
+            server_version: None,
             connected: Arc::new(AtomicBool::new(true)),
             tx,
             referrers: Mutex::new(HashSet::new()),

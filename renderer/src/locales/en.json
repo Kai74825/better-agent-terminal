@@ -21,7 +21,8 @@
     "welcomeHint": "Click \"+ Add Workspace\" to get started",
     "remoteConnectionFailed": "Remote connection failed: {{error}}",
     "remoteConnectionFailedFallback": "Remote connection failed: {{error}}\nSwitching back to local profile.",
-    "remoteMissingInfo": "Remote profile is missing connection info."
+    "remoteMissingInfo": "Remote profile is missing connection info.",
+    "remoteVersionMismatch": "Connected to remote host running a different version (client {{clientVersion}} vs server {{serverVersion}}). Mismatched versions can corrupt shared workspace state (see issue #115); update the older side when convenient."
   },
 
   "quickPick": {

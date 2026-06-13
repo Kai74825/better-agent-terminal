@@ -2158,6 +2158,38 @@ fn is_codex_worktree_options(options: &Option<Value>) -> bool {
         == Some("codex-agent-worktree")
 }
 
+/// Refuse to spawn a local agent when the workspace cwd doesn't point at an
+/// existing directory on THIS machine — defense-in-depth against state
+/// corruption where a remote profile's workspace (e.g. a Linux `/home/x` path)
+/// leaks into a local profile and we'd otherwise try to launch the agent
+/// through the local sidecar with a foreign cwd. The native binary spawn
+/// fails opaquely in that case ("claude.exe exists but failed to launch")
+/// and burns a session per attempt; a clear refusal here makes the
+/// mis-routing diagnosable. See issue #115. Called AFTER the remote-forward
+/// branch returns None, so remote sessions still launch normally on the host.
+fn validate_local_session_cwd(options: Option<&Value>) -> Result<(), BridgeError> {
+    let Some(options) = options else { return Ok(()) };
+    let Some(cwd) = options.get("cwd").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let trimmed = cwd.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if std::path::Path::new(trimmed).is_dir() {
+        return Ok(());
+    }
+    Err(BridgeError {
+        message: format!(
+            "Refusing to start local agent: cwd \"{trimmed}\" is not a directory on this machine. \
+             If this workspace belongs to a remote profile, open that profile's window instead — \
+             the path only exists on the remote host. If you believe the workspace IS local, the \
+             folder may have been moved or deleted, or local state may have leaked from a remote \
+             profile (issue #115); check the workspace's folderPath in settings."
+        ),
+    })
+}
+
 async fn prepare_codex_worktree_options(
     worktree_state: worktree_cmd::WorktreeState,
     session_id: String,
@@ -3032,6 +3064,7 @@ pub async fn claude_start_session(
     {
         return result;
     }
+    validate_local_session_cwd(options.as_ref())?;
     let options =
         prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
             .await?;
@@ -4541,6 +4574,7 @@ pub async fn claude_resume_session(
     {
         return result;
     }
+    validate_local_session_cwd(options.as_ref())?;
     let options =
         prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
             .await?;
@@ -4666,6 +4700,37 @@ mod tests {
     use super::*;
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn validate_local_session_cwd_passes_when_cwd_missing_or_empty() {
+        // No options at all — nothing to validate; downstream picks defaults.
+        assert!(validate_local_session_cwd(None).is_ok());
+        // Empty options object — still nothing to validate.
+        let empty = json!({});
+        assert!(validate_local_session_cwd(Some(&empty)).is_ok());
+        // Whitespace-only cwd is treated as "unset" and skipped.
+        let blank = json!({ "cwd": "   " });
+        assert!(validate_local_session_cwd(Some(&blank)).is_ok());
+    }
+
+    #[test]
+    fn validate_local_session_cwd_passes_for_existing_directory() {
+        let dir = env::temp_dir();
+        let options = json!({ "cwd": dir.to_string_lossy().to_string() });
+        assert!(validate_local_session_cwd(Some(&options)).is_ok());
+    }
+
+    #[test]
+    fn validate_local_session_cwd_rejects_non_existent_directory() {
+        // The exact symptom of issue #115: a foreign Linux path arrives on a
+        // local-routed start — we refuse before the binary spawn fails opaquely.
+        let options = json!({ "cwd": "/home/definitely-not-on-this-machine-115" });
+        let err = validate_local_session_cwd(Some(&options))
+            .expect_err("a path that doesn't exist must be refused");
+        assert!(err.message.contains("not a directory"));
+        assert!(err.message.contains("/home/definitely-not-on-this-machine-115"));
+        assert!(err.message.contains("#115"));
+    }
 
     fn temp_data_dir(name: &str) -> PathBuf {
         let stamp = SystemTime::now()
