@@ -1073,6 +1073,13 @@ fn handle_client(
             } else {
                 notification_cmd::add_remote_client_notification(&app, &client_label);
             }
+            // Echo the host's app version so the client can detect
+            // client/server skew and warn (issue #115 was triggered by a
+            // 3.1.22 server still running while clients had moved past it;
+            // pre-validation hosts that lacked the windowId fixes corrupted
+            // shared workspace state). Surfacing the mismatch turns a silent
+            // protocol gap into something diagnosable on first connect.
+            let server_version = app.package_info().version.to_string();
             send_frame(
                 &mut ws,
                 json!({
@@ -1081,6 +1088,7 @@ fn handle_client(
                     "result": true,
                     "protocol": protocol_name,
                     "compression": client_compression.as_str(),
+                    "serverVersion": server_version,
                 }),
                 RemoteCompression::None,
             )?;

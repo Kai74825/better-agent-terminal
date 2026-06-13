@@ -21,7 +21,8 @@
     "welcomeHint": "點擊「+ 新增工作區」開始使用",
     "remoteConnectionFailed": "遠端連線失敗：{{error}}",
     "remoteConnectionFailedFallback": "遠端連線失敗：{{error}}\n正在切換回本機設定檔。",
-    "remoteMissingInfo": "遠端設定檔缺少連線資訊。"
+    "remoteMissingInfo": "遠端設定檔缺少連線資訊。",
+    "remoteVersionMismatch": "已連線至版本不同的遠端主機（client {{clientVersion}} vs server {{serverVersion}}）。版本不一致可能會污染共用的工作區狀態（見 issue #115），方便時請更新較舊的那一端。"
   },
 
   "quickPick": {
