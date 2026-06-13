@@ -569,8 +569,17 @@ export default function App() {
           )
           dlog(`[init] remote.connect: ${(performance.now() - tRemote).toFixed(0)}ms`)
           if ('error' in connectResult) {
-            if (effectiveLaunchProfileId) {
-              // New window launch failed — show error and close instead of corrupting shared state
+            // Surface WHY the dial failed — otherwise a remote window just goes
+            // blank (the reason was previously swallowed on the restore path,
+            // leaving only an unrelated "not connected" unhandledrejection in
+            // the log). Logged for every path, including the local fallback.
+            dlog(`[init] remote.connect failed host=${active.remoteHost}:${active.remotePort || 9876} error=${String((connectResult as { error?: unknown }).error)}`)
+            if (effectiveLaunchProfileId || windowProfileTakesPriority) {
+              // A window dedicated to this remote profile (a --profile launch, or
+              // a restored profile-bound window) has no business silently becoming
+              // a local window when the host is unreachable — that's the "blank
+              // bat window" symptom. Surface why and close, leaving shared local
+              // state untouched. Only the main window falls back to local below.
               setAppNotification(t('app.remoteConnectionFailed', { error: connectResult.error }))
               setTimeout(() => window.close(), 3000)
               return
@@ -628,8 +637,9 @@ export default function App() {
             reconnectRef.current = { inFlight: false, backoff: RECONNECT_BACKOFF_MIN, nextAt: 0 }
           }
         } else if (active?.type === 'remote') {
-          // Remote profile missing connection info — fall back
-          if (effectiveLaunchProfileId) {
+          // Remote profile missing connection info — close dedicated profile
+          // windows (launch or restored) instead of silently degrading to local.
+          if (effectiveLaunchProfileId || windowProfileTakesPriority) {
             setAppNotification(t('app.remoteMissingInfo'))
             setTimeout(() => window.close(), 3000)
             return

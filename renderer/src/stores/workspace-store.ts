@@ -749,7 +749,7 @@ class WorkspaceStore {
         // client wraps legacy host strings into tagged objects, so just
         // re-fetch through this window's own routing.
         debugLog('[workspace-store] string reload payload; refetching own workspace instead of adopting')
-        this.load({ preserveActiveSelection: true })
+        this.reloadFromHost({ preserveActiveSelection: true })
         return
       }
       if (payload && typeof payload === 'object') {
@@ -784,7 +784,7 @@ class WorkspaceStore {
             debugLog('[workspace-store] reload without profileId on remote client; reloading bound profile', {
               viewedRemoteProfileId: this.viewedRemoteProfileId,
             })
-            this.load({ preserveActiveSelection: true })
+            this.reloadFromHost({ preserveActiveSelection: true })
             return
           }
           if (reloadProfileId !== this.viewedRemoteProfileId) {
@@ -820,7 +820,22 @@ class WorkspaceStore {
           return
         }
       }
-      this.load()
+      this.reloadFromHost()
+    })
+  }
+
+  // Fire-and-forget reload used by the reload-event listener. load() awaits a
+  // host round-trip that REJECTS with "not connected to remote server" when a
+  // remote window's socket is down; calling it bare from the event callback let
+  // that rejection escape as an unhandledrejection (see App init blank-window
+  // reports). Swallow it here with an explanatory log — a failed reload is
+  // non-fatal; the window keeps its current list and re-syncs on reconnect.
+  private reloadFromHost(options?: { preserveActiveSelection?: boolean }): void {
+    void this.load(options).catch(err => {
+      debugLog('[workspace-store] reload failed', {
+        message: err instanceof Error ? err.message : String(err),
+        viewedRemoteProfileId: this.viewedRemoteProfileId,
+      })
     })
   }
 
