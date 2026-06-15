@@ -988,6 +988,45 @@ function createTauriHost(): BatAppAPI {
             }),
           })
         }
+        // clientResume: like resumeSession, but the host re-emits the session's
+        // history WITHOUT disturbing it when it already exists there (e.g. a
+        // remote host that has the session open), and only does a real resume
+        // when the session is absent. Remote panels call this on remount so the
+        // transcript loads even when the host keeps the session live — plain
+        // getSessionState comes back empty in that case and would render blank.
+        if (key === 'clientResume') {
+          return async (
+            sessionId: string,
+            sdkSessionId: string,
+            cwd: string,
+            model?: string,
+            apiVersion?: string,
+            useWorktree?: boolean,
+            worktreePath?: string,
+            worktreeBranch?: string,
+            agentPreset?: string,
+            codexSandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access',
+            codexApprovalPolicy?: 'untrusted' | 'on-request' | 'never',
+            permissionMode?: string,
+            effort?: string,
+            ultracode?: boolean,
+          ) => getInvoke()<unknown>('claude_client_resume', {
+            sessionId,
+            sdkSessionId,
+            options: await attachWorkspaceIdentity(sessionId, {
+              cwd,
+              model,
+              apiVersion,
+              ...(useWorktree ? { useWorktree, worktreePath, worktreeBranch } : {}),
+              ...(agentPreset ? { agentPreset } : {}),
+              ...(codexSandboxMode ? { codexSandboxMode } : {}),
+              ...(codexApprovalPolicy ? { codexApprovalPolicy } : {}),
+              ...(permissionMode ? { permissionMode } : {}),
+              ...(effort ? { effort } : {}),
+              ...(ultracode ? { ultracode } : {}),
+            }),
+          })
+        }
         // Account / auth ops.
         if (key === 'authLogin') return () => getInvoke()<unknown>('claude_auth_login')
         if (key === 'authLogout') return () => getInvoke()<unknown>('claude_auth_logout')

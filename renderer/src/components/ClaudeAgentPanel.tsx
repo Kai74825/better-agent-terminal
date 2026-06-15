@@ -1653,10 +1653,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
         const existingMessages = (existingState.messages || []) as MessageItem[]
         historyLoadedRef.current = true
         setIsResumingHistory(false)
-        if (existingMessages.length > 0 || messageCountRef.current === 0) {
+        // On remote, getSessionState returns the host's empty in-memory buffer
+        // even when a transcript exists; the real history arrives via the
+        // claude:history event that clientResume (in ensureSessionStarted)
+        // triggers. Don't apply an empty snapshot here — it would clobber that
+        // history (or flash blank before it lands). onHistory owns the remote
+        // case; local keeps applying getSessionState directly.
+        if (existingMessages.length > 0 || (messageCountRef.current === 0 && !isRemoteConnected)) {
           setMessages(existingMessages)
         } else if (host.debug.isDebugMode === true) {
-          dlog(`${stag} skip empty getSessionState messages; preserving rendered history count=${messageCountRef.current}`)
+          dlog(`${stag} skip empty getSessionState messages; preserving rendered history count=${messageCountRef.current} remote=${isRemoteConnected}`)
         }
         setIsStreaming(!!existingState.isStreaming)
         setStreamingText(existingState.streamingText || '')
@@ -1719,6 +1725,36 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
       const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
       if (existingState) {
+        // On a remote window the host can report a session as "existing" while
+        // its in-memory getSessionState carries no messages — the transcript is
+        // only streamed via claude:history on (re)attach. A bare return here
+        // leaves the panel blank. Ask the host to re-emit history
+        // non-destructively (clientResume: read-only when the session is live,
+        // a real resume only when it's absent), so onHistory repopulates the
+        // view without disturbing an in-flight host turn. Local windows keep the
+        // existing short-circuit (their getSessionState already has messages).
+        if (isRemoteConnected && savedSdkSessionId) {
+          dlog(`${stag} ensureSessionStarted: existing remote session; clientResume for history`)
+          await host.claude.clientResume(
+            sessionId,
+            savedSdkSessionId,
+            cwd,
+            effectiveModel || savedModel,
+            apiVersion,
+            useWorktree ? true : undefined,
+            terminalState?.worktreePath,
+            terminalState?.worktreeBranch,
+            terminalState?.agentPreset,
+            undefined,
+            undefined,
+            permissionMode,
+            effectiveEffort,
+            effectiveUltracode ? true : undefined,
+          ).catch((err: unknown) => {
+            dlog(`${stag} clientResume failed: ${err instanceof Error ? err.message : String(err)}`)
+          })
+          return
+        }
         dlog(`${stag} ensureSessionStarted: existing session`)
         return
       }

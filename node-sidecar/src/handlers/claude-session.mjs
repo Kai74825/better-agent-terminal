@@ -135,7 +135,7 @@ registerHandler('claude.startSession', async (params) => {
 // the conversation from its own session store. We default the
 // permissionMode to 'bypassPermissions' to match Electron's resume
 // contract (resumed sessions don't re-prompt for prior approvals).
-registerHandler('claude.resumeSession', async (params) => {
+async function resumeClaudeSession(params) {
   const sessionId = params?.sessionId
   const sdkSessionIdToResume = params?.sdkSessionId
   if (typeof sessionId !== 'string' || !sessionId) {
@@ -200,6 +200,46 @@ registerHandler('claude.resumeSession', async (params) => {
   s.sdkSessionId = sdkSessionIdToResume
   saveSessionConfig(sessionId, s)
   return { ok: true, sessionId, sdkSessionId: sdkSessionIdToResume }
+}
+
+registerHandler('claude.resumeSession', resumeClaudeSession)
+
+// claude.clientResume: a remote client (re)opening a session view wants the
+// transcript back, but must NOT disturb a session the host may have live.
+// Unlike resumeSession (which tears down + rebuilds the SDK session), this is
+// non-destructive when the session already exists here: it re-emits the
+// persisted history read-only (no teardown, no SDK restart). When the session
+// is absent, it falls back to a normal resume so the transcript still loads.
+// Either way it (re)emits `claude:history`, so the client never goes blank.
+registerHandler('claude.clientResume', async (params) => {
+  const sessionId = params?.sessionId
+  const sdkSessionId = params?.sdkSessionId
+  if (typeof sessionId !== 'string' || !sessionId) {
+    throw new Error('claude.clientResume: missing sessionId')
+  }
+  if (typeof sdkSessionId !== 'string' || !sdkSessionId) {
+    throw new Error('claude.clientResume: missing sdkSessionId')
+  }
+  // Codex history is owned by the Tauri codex app-server runtime, not the
+  // sidecar — defer to the normal codex resume which already returns history.
+  if (isCodexAgentPreset(params?.options?.agentPreset) || isCodexSession(sessionId)) {
+    return resumeClaudeSession(params)
+  }
+  const existing = sessions.get(sessionId)
+  if (existing) {
+    const optCwd = params?.options && typeof params.options.cwd === 'string' ? params.options.cwd : ''
+    const cwd = optCwd
+      || (existing.options && typeof existing.options.cwd === 'string' ? existing.options.cwd : '')
+      || process.cwd()
+    const live = existing.streaming === true
+      || (existing.liveQuery && existing.liveQuery.isClosed === false)
+    const history = await loadSessionHistory(sessionId, sdkSessionId, cwd, {
+      allowGlobalFallback: false,
+      preserveLiveMessages: live,
+    })
+    return { ok: true, sessionId, sdkSessionId, existed: true, alreadyLive: !!live, found: history.found }
+  }
+  return resumeClaudeSession(params)
 })
 
 // claude.restSession / wakeSession / isResting: mirror the resting-UX

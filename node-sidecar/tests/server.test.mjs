@@ -1935,6 +1935,60 @@ async function inProcess() {
     restoreResumeSend()
   }
 
+  // claude.clientResume: non-destructive history re-emit for a (re)connecting
+  // client. When the session is absent it behaves like resume (emits history,
+  // stashes sdkSessionId). When the session already exists it re-emits
+  // claude:history WITHOUT tearing down / rebuilding the session record — so a
+  // remote client opening a session the host keeps live never goes blank and
+  // an in-flight host turn is not disturbed.
+  {
+    const ccCaptured = []
+    const ccProjectsDir = mkdtempSync(join(tmpdir(), 'sidecar-client-resume-'))
+    const setCcProjectsDir = mod.__setProjectsDirOverrideForTests
+    setCcProjectsDir(ccProjectsDir)
+    const ccCwd = '/cc'
+    const ccProjectDir = join(ccProjectsDir, ccCwd.replace(/[^a-zA-Z0-9]/g, '-'))
+    mkdirSync(ccProjectDir, { recursive: true })
+    writeFileSync(join(ccProjectDir, 'sdk-cc-1.jsonl'), [
+      JSON.stringify({ type: 'user', uuid: 'cc-u-1', timestamp: '2026-05-11T00:00:00.000Z', message: { role: 'user', content: 'hi' } }),
+      JSON.stringify({ type: 'assistant', uuid: 'cc-a-1', timestamp: '2026-05-11T00:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }] } }),
+    ].join('\n') + '\n')
+    const restoreCcSend = mod.__setSendEventForTests((name, payload) => ccCaptured.push({ name, payload }))
+    try {
+      // Absent session → falls back to a normal resume (history + sdkSessionId).
+      const absentReply = await dispatch({ jsonrpc: '2.0', id: 700, method: 'claude.clientResume',
+        params: { sessionId: 'cc-1', sdkSessionId: 'sdk-cc-1', options: { cwd: ccCwd } } })
+      assert.equal(absentReply.result.ok, true)
+      const absentHistory = ccCaptured.find(e => e.name === 'claude:history')
+      assert.ok(absentHistory, 'clientResume must emit claude:history when the session is absent')
+      assert.deepEqual(absentHistory.payload.items.map(i => `${i.role}:${i.content}`), ['user:hi', 'assistant:hello'])
+      assert.equal(mod.sessions.get('cc-1').sdkSessionId, 'sdk-cc-1')
+
+      // Existing session → re-emit history read-only, same record (not rebuilt).
+      ccCaptured.length = 0
+      const existingRef = mod.sessions.get('cc-1')
+      const existedReply = await dispatch({ jsonrpc: '2.0', id: 701, method: 'claude.clientResume',
+        params: { sessionId: 'cc-1', sdkSessionId: 'sdk-cc-1', options: { cwd: ccCwd } } })
+      assert.equal(existedReply.result.existed, true)
+      assert.equal(existedReply.result.found, true)
+      const existedHistory = ccCaptured.find(e => e.name === 'claude:history')
+      assert.ok(existedHistory, 'clientResume must re-emit claude:history for an existing session')
+      assert.deepEqual(existedHistory.payload.items.map(i => `${i.role}:${i.content}`), ['user:hi', 'assistant:hello'])
+      assert.strictEqual(mod.sessions.get('cc-1'), existingRef, 'clientResume must not rebuild an existing session record')
+      assert.equal(mod.sessions.get('cc-1').sdkSessionId, 'sdk-cc-1')
+
+      // Validation mirrors resumeSession.
+      const noSid = await dispatch({ jsonrpc: '2.0', id: 702, method: 'claude.clientResume', params: { sessionId: 'x' } })
+      assert.match(noSid.error?.message || '', /missing sdkSessionId/)
+      const noSession = await dispatch({ jsonrpc: '2.0', id: 703, method: 'claude.clientResume', params: { sdkSessionId: 'y' } })
+      assert.match(noSession.error?.message || '', /missing sessionId/)
+    } finally {
+      setCcProjectsDir(null)
+      rmSync(ccProjectsDir, { recursive: true, force: true })
+      restoreCcSend()
+    }
+  }
+
   // claude.rewindToPrompt: cut the SDK transcript at a given user-prompt
   // index and write a fresh transcript under a new SDK session id.
   // Test drives the on-disk projects dir via a tmpdir override, builds

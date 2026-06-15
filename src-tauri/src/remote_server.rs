@@ -2600,6 +2600,7 @@ fn remote_invoke_timeout(channel: &str) -> Duration {
     match canonical.as_str() {
         "claude:start-session"
         | "claude:resume-session"
+        | "claude:client-resume"
         | "claude:send-message"
         | "claude:fork-session" => SESSION_INVOKE_TIMEOUT,
         _ => INVOKE_TIMEOUT,

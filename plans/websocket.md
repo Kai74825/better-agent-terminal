@@ -373,6 +373,7 @@ Claude / Codex session control:
 ```text
 agent:start-session
 agent:resume-session
+agent:client-resume
 agent:send-message
 agent:stop-session
 agent:abort-session
@@ -384,6 +385,16 @@ agent:set-codex-approval-policy
 agent:resolve-permission
 agent:resolve-ask-user
 ```
+
+`agent:client-resume` is a non-destructive resume for a (re)connecting client. It takes the same
+params as `agent:resume-session` (`sessionId`, `sdkSessionId`, options) and normalizes to
+`claude:client-resume` on the host. When the host already has the session live, it re-emits the
+persisted history (`claude:history`) read-only — without tearing down / restarting the SDK session,
+so an in-flight host turn is not disturbed. When the session is absent on the host, it falls back to
+a normal resume so the transcript still loads. Either way `claude:history` is (re)emitted, so a
+client opening a session the host keeps active never renders blank (plain `agent:get-session-state`
+returns the host's empty in-memory buffer in that case). Codex-owned sessions defer to the regular
+resume path. Use this instead of `agent:resume-session` when a client just wants to view history.
 
 `agent:resolve-permission` and `agent:resolve-ask-user` answer an outstanding host-owned prompt.
 They normalize to `claude:resolve-permission` / `claude:resolve-ask-user` on the host. Params:

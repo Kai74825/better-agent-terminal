@@ -2638,6 +2638,31 @@ impl ClaudeRuntimeRouter {
         .await
     }
 
+    // Non-destructive resume for a (re)connecting client: re-emit history
+    // without disturbing a live host session when it already exists, else fall
+    // back to a normal resume. Codex history is owned by the app-server runtime,
+    // so codex sessions defer to the regular resume.
+    async fn client_resume(
+        &self,
+        session_id: String,
+        sdk_session_id: String,
+        options: Option<Value>,
+    ) -> Result<Value, BridgeError> {
+        if should_handle_codex(&options) || self.codex.is_owned(&session_id) {
+            return self.resume_session(session_id, sdk_session_id, options).await;
+        }
+        self.sidecar_call(
+            "claude.clientResume",
+            json!({
+                "sessionId": session_id,
+                "sdkSessionId": sdk_session_id,
+                "options": options,
+            }),
+            DEFAULT_TIMEOUT,
+        )
+        .await
+    }
+
     fn supported_models(&self, session_id: &str) -> Value {
         if self.codex.is_owned(session_id) {
             return self.codex.supported_models();
@@ -4586,6 +4611,65 @@ pub async fn claude_resume_session(
     );
     ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
         .resume_session(session_id, sdk_session_id, options)
+        .await
+}
+
+// claude.clientResume: a remote client (re)opening a session view wants its
+// history without disturbing a session the host may have live. Routes to the
+// host over `agent:client-resume`; on the host (or for local windows) the
+// runtime re-emits history read-only when the session exists, else resumes.
+#[tauri::command]
+pub async fn claude_client_resume(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    worktree_state: State<'_, worktree_cmd::WorktreeState>,
+    codex_state: State<'_, CodexAppServerState>,
+    session_id: String,
+    sdk_session_id: String,
+    options: Option<Value>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &app,
+        &state,
+        &window,
+        "agent:client-resume",
+        vec![
+            json!(session_id.clone()),
+            json!(sdk_session_id.clone()),
+            option_field(&options, "cwd"),
+            option_field(&options, "model"),
+            option_field(&options, "apiVersion"),
+            option_field(&options, "useWorktree"),
+            option_field(&options, "worktreePath"),
+            option_field(&options, "worktreeBranch"),
+            option_field(&options, "agentPreset"),
+            option_field(&options, "codexSandboxMode"),
+            option_field(&options, "codexApprovalPolicy"),
+            option_field(&options, "permissionMode"),
+            option_field(&options, "effort"),
+            option_field(&options, "ultracode"),
+            option_field(&options, "workspaceId"),
+            option_field(&options, "workspaceName"),
+        ],
+        SESSION_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    validate_local_session_cwd(options.as_ref())?;
+    let options =
+        prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
+            .await?;
+    notification_cmd::register_agent_session_from_options(
+        &app,
+        window.label(),
+        &session_id,
+        options.as_ref(),
+    );
+    ClaudeRuntimeRouter::from_states(app, &state, &codex_state)
+        .client_resume(session_id, sdk_session_id, options)
         .await
 }
 

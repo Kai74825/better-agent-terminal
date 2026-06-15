@@ -288,7 +288,7 @@ pub fn legacy_v1_args_to_params(channel: &str, args: &[Value]) -> Value {
             "sessionId": args.first().cloned().unwrap_or(Value::Null),
             "options": args.get(1).cloned().unwrap_or(Value::Null),
         }),
-        "claude:resume-session" => {
+        "claude:resume-session" | "claude:client-resume" => {
             let has_ultracode_slot = args.len() >= 16
                 || args
                     .get(13)

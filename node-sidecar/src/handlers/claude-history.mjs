@@ -174,7 +174,11 @@ export async function loadSessionHistory(sessionId, sdkSessionId, cwd, opts = {}
     const raw = await readHistoryFile(sdkSessionId, cwd, opts)
     const items = raw !== null ? historyItemsFromJsonl(raw, sessionId) : []
     const session = sessions.get(sessionId)
-    if (session) {
+    // `preserveLiveMessages` is set by claude.clientResume when a remote
+    // client re-opens a session whose turn is still streaming here: re-emit
+    // the persisted history to that client WITHOUT clobbering the running
+    // session's in-memory transcript (which would drop live-streamed turns).
+    if (session && !opts.preserveLiveMessages) {
       resetSessionTranscript(session)
       session.messages = items.slice(-300)
     }
