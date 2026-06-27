@@ -1390,8 +1390,6 @@ fn invoke_sidecar_for_remote(
     channel: &str,
     frame: &Value,
 ) -> Result<Value, String> {
-    #[cfg(feature = "desktop")]
-    let app = ctx.app();
     if channel.is_empty() {
         return Err("remote invoke: missing channel".to_string());
     }
