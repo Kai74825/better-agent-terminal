@@ -221,7 +221,12 @@ fn store_and_publish(app: &AppHandle, provider: &str, snapshot: Value) {
         // "polled fine but nobody was listening" from "never ran".
         warn(app, &format!("first {provider} usage snapshot published"));
     }
-    publish_runtime_event(app, "agent:usage", json!({ "payload": snapshot }), "rust-usage-poller");
+    publish_runtime_event(
+        &crate::host_context::HostContext::from_app(app.clone()),
+        "agent:usage",
+        json!({ "payload": snapshot }),
+        "rust-usage-poller",
+    );
 }
 
 /// Pull path for the renderer cache: last snapshot per provider, or empty.
@@ -361,7 +366,7 @@ pub fn publish_codex_usage(app: &AppHandle, raw: &Value) {
 // an app-server just to read usage.
 fn poll_codex_once(app: &AppHandle) -> Duration {
     let state = app.state::<crate::codex_app_server::CodexAppServerState>();
-    match state.fetch_account_rate_limits(app) {
+    match state.fetch_account_rate_limits(&crate::host_context::HostContext::from_app(app.clone())) {
         Some(raw) => publish_codex_usage(app, &raw),
         None => {}
     }

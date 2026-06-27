@@ -7,6 +7,7 @@
 
 use super::profile as profile_cmd;
 use crate::app_data;
+use crate::host_context::HostContext;
 use crate::log_file::append_line;
 use crate::remote_client::RustRemoteClientState;
 use crate::window_registry;
@@ -143,9 +144,9 @@ pub(crate) fn renderer_url(path: &str) -> WebviewUrl {
     WebviewUrl::App(path.into())
 }
 
-pub(crate) fn log_tauri(app: &AppHandle, message: &str) {
+pub(crate) fn log_tauri(app: &HostContext, message: &str) {
     eprintln!("[tauri] {message}");
-    let Some(path) = app_data::app_data_dir_opt(app).map(|dir| dir.join("logs").join("debug.log"))
+    let Some(path) = app.data_dir_opt().map(|dir| dir.join("logs").join("debug.log"))
     else {
         return;
     };
@@ -190,9 +191,7 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     }
     let build_app = app.clone();
     let build_window_id = window_id.to_string();
-    log_tauri(
-        app,
-        &format!("[window] queue-build label={build_window_id}"),
+    log_tauri(&HostContext::from_app(app.clone()), &format!("[window] queue-build label={build_window_id}"),
     );
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -200,17 +199,13 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
         let schedule_window_id = build_window_id.clone();
         if let Err(error) = build_app.run_on_main_thread(move || {
             if let Err(error) = build_window_now(&schedule_app, &schedule_window_id) {
-                log_tauri(
-                    &schedule_app,
-                    &format!(
+                log_tauri(&HostContext::from_app(schedule_app.clone()), &format!(
                         "[window] queued-build-failed label={schedule_window_id} error={error}"
                     ),
                 );
             }
         }) {
-            log_tauri(
-                &build_app,
-                &format!("[window] queue-schedule-failed label={build_window_id} error={error}"),
+            log_tauri(&HostContext::from_app(build_app.clone()), &format!("[window] queue-schedule-failed label={build_window_id} error={error}"),
             );
         }
     });
@@ -224,9 +219,7 @@ fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
         return Ok(());
     }
     let url = renderer_url("index.html");
-    log_tauri(
-        app,
-        &format!(
+    log_tauri(&HostContext::from_app(app.clone()), &format!(
             "[window] create label={window_id} url={}",
             webview_url_debug(&url)
         ),
@@ -238,15 +231,12 @@ fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
         .title("Better Agent Terminal")
         .min_inner_size(800.0, 600.0)
         .on_navigation(move |url| {
-            log_tauri(
-                &nav_app,
-                &format!("[window] navigation label={nav_label} url={url}"),
+            log_tauri(&HostContext::from_app(nav_app.clone()), &format!("[window] navigation label={nav_label} url={url}"),
             );
             true
         })
         .on_page_load(move |window, payload| {
-            log_tauri(
-                window.app_handle(),
+            log_tauri(&HostContext::from_app(window.app_handle().clone()),
                 &format!(
                     "[window] page-load label={load_label} event={:?} url={}",
                     payload.event(),
@@ -261,13 +251,11 @@ fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     }
     let window = builder.build().map_err(|err| {
         let error = err.to_string();
-        log_tauri(
-            app,
-            &format!("[window] build-failed label={window_id} error={error}"),
+        log_tauri(&HostContext::from_app(app.clone()), &format!("[window] build-failed label={window_id} error={error}"),
         );
         error
     })?;
-    log_tauri(app, &format!("[window] created label={window_id}"));
+    log_tauri(&HostContext::from_app(app.clone()), &format!("[window] created label={window_id}"));
     attach_window_lifecycle(&window);
     Ok(())
 }
@@ -357,7 +345,7 @@ pub fn attach_window_lifecycle(window: &WebviewWindow) {
                 }
             }
         } else if matches!(event, WindowEvent::Destroyed) {
-            log_tauri(&app, &format!("[window] destroyed label={window_id}"));
+            log_tauri(&HostContext::from_app(app.clone()), &format!("[window] destroyed label={window_id}"));
             // Release this window's remote connection binding. The shared socket
             // is torn down only if this window was its last referrer, so sibling
             // windows on the same host keep their connection.
@@ -367,7 +355,7 @@ pub fn attach_window_lifecycle(window: &WebviewWindow) {
             clear_profile_window_close_state(&window_id);
             if let Some(profile_id) = window_registry::profile_id_for_window(&app, &window_id) {
                 if !window_registry::has_other_live_profile_windows(&app, &profile_id, &window_id) {
-                    let _ = profile_cmd::deactivate_profile_id(&app, &profile_id);
+                    let _ = profile_cmd::deactivate_profile_id(&HostContext::from_app(app.clone()), &profile_id);
                 }
             }
         }
@@ -495,16 +483,12 @@ fn remote_app_new_window(app: &AppHandle, window_label: &str, profile_id: &str) 
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string),
         Ok(other) => {
-            log_tauri(
-                app,
-                &format!("[remote-client] app:new-window returned unexpected payload={other}"),
+            log_tauri(&HostContext::from_app(app.clone()), &format!("[remote-client] app:new-window returned unexpected payload={other}"),
             );
             None
         }
         Err(err) => {
-            log_tauri(
-                app,
-                &format!("[remote-client] app:new-window failed: {err}"),
+            log_tauri(&HostContext::from_app(app.clone()), &format!("[remote-client] app:new-window failed: {err}"),
             );
             None
         }
@@ -554,7 +538,7 @@ pub fn app_focus_next_window(app: AppHandle, window: WebviewWindow) -> bool {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInstanceResult {
-    let _ = profile_cmd::activate_profile_id(&app, &profile_id);
+    let _ = profile_cmd::activate_profile_id(&HostContext::from_app(app.clone()), &profile_id);
     let live = window_registry::entries_for_profile(&app, &profile_id)
         .into_iter()
         .filter(|entry| app.get_webview_window(&entry.id).is_some())

@@ -265,7 +265,7 @@ pub async fn worker_procfile_start(
         history_key: None,
     };
     let started_id = crate::async_rt::spawn_blocking(move || {
-        start_pty_session(&app, pty_handle, Some(worker_handle), create_options)
+        start_pty_session(&crate::host_context::HostContext::from_app(app.clone()), pty_handle, Some(worker_handle), create_options)
     })
     .await
     .map_err(|err| CommandError {
@@ -293,7 +293,7 @@ pub fn worker_procfile_stop(
     name: String,
 ) -> Result<bool, CommandError> {
     let pty_id = worker_pty_id(&panel_id, &name);
-    crate::commands::pty::kill_pty_session_with_exit(&app, &pty_state, &pty_id).map_err(|err| {
+    crate::commands::pty::kill_pty_session_with_exit(&crate::host_context::HostContext::from_app(app.clone()), &pty_state, &pty_id).map_err(|err| {
         CommandError {
             message: format!("{err:?}"),
         }

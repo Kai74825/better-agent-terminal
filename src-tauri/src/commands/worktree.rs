@@ -6,9 +6,11 @@
 
 use super::app::log_tauri;
 use crate::commands::profile as profile_cmd;
+use crate::host_context::HostContext;
 use crate::remote_client::RustRemoteClientState;
 use crate::sidecar::BridgeError;
 use crate::subprocess::hide_console_window;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -19,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -126,7 +129,7 @@ fn bat_debug_enabled() -> bool {
     )
 }
 
-fn worktree_debug_log(app: Option<&AppHandle>, message: impl AsRef<str>) {
+fn worktree_debug_log(app: Option<&HostContext>, message: impl AsRef<str>) {
     if bat_debug_enabled() {
         if let Some(app) = app {
             log_tauri(app, message.as_ref());
@@ -345,7 +348,7 @@ fn link_claude_untracked(git_root: &Path, worktree_path: &Path) {
 }
 
 fn create_worktree_native(
-    app: Option<AppHandle>,
+    app: Option<HostContext>,
     state: &WorktreeState,
     session_id: String,
     cwd: String,
@@ -415,7 +418,7 @@ fn create_worktree_native(
 }
 
 fn spawn_pnpm_install_for_worktree(
-    app: Option<AppHandle>,
+    app: Option<HostContext>,
     git_root: PathBuf,
     worktree_path: PathBuf,
 ) {
@@ -536,7 +539,7 @@ fn spawn_pnpm_install_for_worktree(
     });
 }
 
-fn log_pnpm_output_tail(app: &AppHandle, cwd: &Path, stream: &str, bytes: &[u8]) {
+fn log_pnpm_output_tail(app: &HostContext, cwd: &Path, stream: &str, bytes: &[u8]) {
     let Some(tail) = output_tail_for_log(bytes) else {
         return;
     };
@@ -1181,6 +1184,7 @@ fn rehydrate_worktree_native(
 // claude.rs / git.rs routing — proxy to the host's worktree:* channels
 // (remote_server.rs) when the calling window belongs to a remote profile,
 // otherwise fall through to the native local implementation.
+#[cfg(feature = "desktop")]
 fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
         return false;
@@ -1190,6 +1194,7 @@ fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "desktop")]
 async fn remote_invoke_for_window(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -1221,7 +1226,7 @@ async fn remote_invoke_for_window(
 // wrappers add remote routing; remote_server.rs calls these directly when it
 // serves the same channels on the host side (no window context there).
 pub async fn worktree_create_local(
-    app: AppHandle,
+    app: HostContext,
     state: WorktreeState,
     session_id: String,
     cwd: String,
@@ -1267,7 +1272,14 @@ pub async fn worktree_create(
     {
         return result;
     }
-    worktree_create_local(app, (*state).clone(), session_id, cwd, install_pnpm).await
+    worktree_create_local(
+        HostContext::from_app(app),
+        (*state).clone(),
+        session_id,
+        cwd,
+        install_pnpm,
+    )
+    .await
 }
 
 pub async fn worktree_remove_local(

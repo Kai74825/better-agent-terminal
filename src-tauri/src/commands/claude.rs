@@ -24,10 +24,12 @@ use crate::commands::notification as notification_cmd;
 use crate::commands::profile as profile_cmd;
 use crate::commands::worktree as worktree_cmd;
 use crate::event_hub::publish_runtime_event;
+use crate::host_context::HostContext;
 use crate::remote_client::RustRemoteClientState;
 use crate::remote_core::remote_agent_channel;
-use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, SidecarState};
+use crate::sidecar::{BridgeError, SidecarState};
 use crate::subprocess::hide_console_window;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
@@ -99,14 +101,14 @@ fn bat_debug_enabled() -> bool {
     )
 }
 
-fn claude_debug_log(app: &AppHandle, message: impl AsRef<str>) {
+fn claude_debug_log(app: &HostContext, message: impl AsRef<str>) {
     if bat_debug_enabled() {
         app_cmd::log_tauri(app, message.as_ref());
     }
 }
 
 fn call(
-    app: &AppHandle,
+    app: &HostContext,
     state: &SidecarState,
     method: &str,
     params: Value,
@@ -115,17 +117,18 @@ fn call(
 }
 
 fn call_with_timeout(
-    app: &AppHandle,
+    app: &HostContext,
     state: &SidecarState,
     method: &str,
     params: Value,
     timeout: Duration,
 ) -> Result<Value, BridgeError> {
-    let cfg = resolve_spawn_config(app)?;
-    let sink = app_handle_emit_sink(app.clone());
+    let cfg = app.sidecar_spawn_config()?;
+    let sink = app.sidecar_emit_sink();
     state.call_with_emit(&cfg, Some(sink), method, params, timeout)
 }
 
+#[cfg(feature = "desktop")]
 async fn call_blocking(
     app: AppHandle,
     state: State<'_, SidecarState>,
@@ -135,17 +138,19 @@ async fn call_blocking(
     call_with_timeout_blocking(app, state, method, params, DEFAULT_TIMEOUT).await
 }
 
-fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
-    let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
+#[cfg(feature = "desktop")]
+fn is_remote_profile_window(app: &HostContext, window: &WebviewWindow) -> bool {
+    let Some(profile_id) = window_registry::profile_id_for_window(app.app(), window.label()) else {
         return false;
     };
-    profile_cmd::profile_get(app.clone(), profile_id)
+    profile_cmd::profile_get(app.app().clone(), profile_id)
         .map(|profile| profile.kind == "remote")
         .unwrap_or(false)
 }
 
+#[cfg(feature = "desktop")]
 async fn remote_invoke_for_window(
-    app: &AppHandle,
+    app: &HostContext,
     _state: &SidecarState,
     window: &WebviewWindow,
     channel: &'static str,
@@ -155,7 +160,7 @@ async fn remote_invoke_for_window(
     if !is_remote_profile_window(app, window) {
         return None;
     }
-    let remote_client = app.state::<RustRemoteClientState>().inner().clone();
+    let remote_client = app.state::<RustRemoteClientState>();
     let window_label = window.label().to_string();
     let remote_channel = remote_agent_channel(channel);
     let error_channel = remote_channel.clone();
@@ -182,8 +187,8 @@ fn option_field(options: &Option<Value>, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, BridgeError> {
-    app_data::app_data_dir(app).map_err(|err| BridgeError {
+fn app_data_dir(app: &HostContext) -> Result<PathBuf, BridgeError> {
+    app.data_dir().map_err(|err| BridgeError {
         message: format!("could not resolve app data dir: {err}"),
     })
 }
@@ -252,7 +257,7 @@ fn managed_claude_cli_path(data_dir: &Path, target_os: &str, arch: &str) -> Opti
     )
 }
 
-fn find_managed_claude_cli(app: &AppHandle, target_os: &str, arch: &str) -> Option<PathBuf> {
+fn find_managed_claude_cli(app: &HostContext, target_os: &str, arch: &str) -> Option<PathBuf> {
     let candidate = managed_claude_cli_path(&app_data_dir(app).ok()?, target_os, arch)?;
     (candidate.is_file() && claude_cli_version_check(&candidate)).then_some(candidate)
 }
@@ -273,7 +278,7 @@ fn compressed_claude_cli_cache_key(path: &Path) -> Option<String> {
 }
 
 fn extract_compressed_claude_cli(
-    app: &AppHandle,
+    app: &HostContext,
     compressed_path: &Path,
     target_os: &str,
 ) -> Option<PathBuf> {
@@ -305,7 +310,7 @@ fn extract_compressed_claude_cli(
 }
 
 fn find_packaged_claude_cli_in_base(
-    app: &AppHandle,
+    app: &HostContext,
     base_dir: &Path,
     target_os: &str,
     arch: &str,
@@ -435,7 +440,7 @@ fn resolve_system_claude_cli_path(target_os: &str) -> Option<PathBuf> {
     .filter(|candidate| claude_cli_version_check(candidate))
 }
 
-pub(crate) fn resolve_claude_cli_path(app: &AppHandle) -> String {
+pub(crate) fn resolve_claude_cli_path(app: &HostContext) -> String {
     if let Ok(override_path) = std::env::var("BAT_SIDECAR_CLAUDE_BIN") {
         if !override_path.trim().is_empty() {
             return override_path;
@@ -449,7 +454,9 @@ pub(crate) fn resolve_claude_cli_path(app: &AppHandle) -> String {
     if let Some(candidate) = resolve_system_claude_cli_path(target_os) {
         return candidate.to_string_lossy().to_string();
     }
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    // Bundled-resource lookup is a desktop packaging concept only.
+    #[cfg(feature = "desktop")]
+    if let Ok(resource_dir) = app.app().path().resource_dir() {
         if let Some(candidate) =
             find_packaged_claude_cli_in_base(app, &resource_dir, target_os, arch)
         {
@@ -484,7 +491,7 @@ fn build_claude_cli_command(cli_path: &str, args: &[&str]) -> Command {
 }
 
 fn run_claude_cli_native(
-    app: &AppHandle,
+    app: &HostContext,
     args: &[&str],
     timeout: Duration,
 ) -> Result<String, String> {
@@ -525,7 +532,7 @@ fn parse_auth_status_stdout(stdout: &str) -> Value {
     serde_json::from_str::<Value>(stdout).unwrap_or(Value::Null)
 }
 
-pub(crate) fn fetch_auth_status_native(app: &AppHandle) -> Value {
+pub(crate) fn fetch_auth_status_native(app: &HostContext) -> Value {
     run_claude_cli_native(app, &["auth", "status"], AUTH_STATUS_TIMEOUT)
         .map(|stdout| parse_auth_status_stdout(&stdout))
         .unwrap_or(Value::Null)
@@ -550,14 +557,14 @@ pub(crate) fn account_info_from_auth_status(value: &Value) -> Value {
     Value::Object(info)
 }
 
-pub(crate) fn auth_login_native(app: &AppHandle) -> Value {
+pub(crate) fn auth_login_native(app: &HostContext) -> Value {
     match run_claude_cli_native(app, &["auth", "login"], AUTH_LOGIN_TIMEOUT) {
         Ok(_) => json!({ "success": true }),
         Err(err) => json!({ "success": false, "error": err }),
     }
 }
 
-pub(crate) fn auth_logout_native(app: &AppHandle) -> Value {
+pub(crate) fn auth_logout_native(app: &HostContext) -> Value {
     match run_claude_cli_native(app, &["auth", "logout"], AUTH_STATUS_TIMEOUT) {
         Ok(_) => json!({ "success": true }),
         Err(err) => json!({ "success": false, "error": err }),
@@ -839,19 +846,19 @@ fn build_claude_cli_hook_command(
     )
 }
 
-fn claude_cli_dir(app: &AppHandle) -> Result<PathBuf, BridgeError> {
+fn claude_cli_dir(app: &HostContext) -> Result<PathBuf, BridgeError> {
     Ok(app_data_dir(app)?.join("claude-cli"))
 }
 
-fn claude_cli_events_path(app: &AppHandle) -> Result<PathBuf, BridgeError> {
+fn claude_cli_events_path(app: &HostContext) -> Result<PathBuf, BridgeError> {
     Ok(claude_cli_dir(app)?.join("session-events.jsonl"))
 }
 
-fn claude_cli_hook_script_path(app: &AppHandle) -> Result<PathBuf, BridgeError> {
+fn claude_cli_hook_script_path(app: &HostContext) -> Result<PathBuf, BridgeError> {
     Ok(claude_cli_dir(app)?.join("hook-session-start.mjs"))
 }
 
-fn claude_cli_settings_path(app: &AppHandle, terminal_id: &str) -> Result<PathBuf, BridgeError> {
+fn claude_cli_settings_path(app: &HostContext, terminal_id: &str) -> Result<PathBuf, BridgeError> {
     Ok(claude_cli_dir(app)?
         .join("settings")
         .join(format!("{}.json", safe_file_segment(terminal_id))))
@@ -926,7 +933,7 @@ fn choose_claude_cli_session(
 }
 
 fn write_claude_cli_hook_assets(
-    app: &AppHandle,
+    app: &HostContext,
     terminal_id: &str,
     workspace_id: &str,
     cwd: &str,
@@ -935,7 +942,7 @@ fn write_claude_cli_hook_assets(
     let settings_path = claude_cli_settings_path(app, terminal_id)?;
     let events_path = claude_cli_events_path(app)?;
     let hook_script_path = claude_cli_hook_script_path(app)?;
-    let node_path = resolve_spawn_config(app)?.node_path;
+    let node_path = app.sidecar_spawn_config()?.node_path;
     let node_path_text = node_path.to_string_lossy().to_string();
 
     write_if_changed(&hook_script_path, CLAUDE_CLI_HOOK_SCRIPT)?;
@@ -973,7 +980,7 @@ fn write_claude_cli_hook_assets(
 }
 
 pub(crate) fn prepare_cli_session_native(
-    app: &AppHandle,
+    app: &HostContext,
     terminal_id: String,
     workspace_id: String,
     cwd: String,
@@ -2102,6 +2109,7 @@ fn login_success(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "desktop")]
 async fn call_with_timeout_blocking(
     app: AppHandle,
     state: State<'_, SidecarState>,
@@ -2109,11 +2117,18 @@ async fn call_with_timeout_blocking(
     params: Value,
     timeout: Duration,
 ) -> Result<Value, BridgeError> {
-    call_sidecar_with_timeout_blocking(app, (*state).clone(), method, params, timeout).await
+    call_sidecar_with_timeout_blocking(
+        HostContext::from_app(app),
+        (*state).clone(),
+        method,
+        params,
+        timeout,
+    )
+    .await
 }
 
 async fn call_sidecar_with_timeout_blocking(
-    app: AppHandle,
+    app: HostContext,
     state: SidecarState,
     method: &'static str,
     params: Value,
@@ -2129,7 +2144,7 @@ async fn call_sidecar_with_timeout_blocking(
 }
 
 fn emit_codex_route_metric(
-    app: &AppHandle,
+    app: &HostContext,
     phase: &str,
     method: &str,
     session_id: &str,
@@ -2263,23 +2278,35 @@ async fn prepare_codex_worktree_options(
 
 #[derive(Clone)]
 struct ClaudeRuntimeRouter {
-    app: AppHandle,
+    app: HostContext,
     sidecar: SidecarState,
     codex: CodexAppServerState,
 }
 
 impl ClaudeRuntimeRouter {
+    #[cfg(feature = "desktop")]
     fn from_states(
         app: AppHandle,
         sidecar: &State<'_, SidecarState>,
         codex: &State<'_, CodexAppServerState>,
     ) -> Self {
         Self {
-            app,
+            app: HostContext::from_app(app),
             sidecar: sidecar.inner().clone(),
             codex: codex.inner().clone(),
         }
     }
+
+    #[cfg(not(feature = "desktop"))]
+    #[allow(dead_code)]
+    fn from_ctx(app: HostContext, sidecar: SidecarState, codex: CodexAppServerState) -> Self {
+        Self {
+            app,
+            sidecar,
+            codex,
+        }
+    }
+
 
     async fn sidecar_call(
         &self,
@@ -2731,9 +2758,9 @@ impl ClaudeRuntimeRouter {
         if self.codex.is_owned(&session_id) {
             return Ok(Value::Null);
         }
-        let app = self.app.clone();
+        let host = self.app.clone();
         crate::async_rt::spawn_blocking(move || {
-            account_info_from_auth_status(&fetch_auth_status_native(&app))
+            account_info_from_auth_status(&fetch_auth_status_native(&host))
         })
         .await
         .map_err(|err| BridgeError {
@@ -3013,7 +3040,7 @@ pub fn claude_ping(
     state: State<'_, SidecarState>,
     payload: Option<Value>,
 ) -> Result<Value, BridgeError> {
-    call(&app, &state, "ping", payload.unwrap_or(Value::Null))
+    call(&HostContext::from_app(app.clone()), &state, "ping", payload.unwrap_or(Value::Null))
 }
 
 #[cfg(feature = "desktop")]
@@ -3024,7 +3051,7 @@ pub async fn claude_auth_status(
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:auth-status",
@@ -3035,7 +3062,7 @@ pub async fn claude_auth_status(
     {
         return result;
     }
-    let value = crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&app))
+    let value = crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&HostContext::from_app(app.clone())))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authStatus worker failed: {err}"),
@@ -3051,7 +3078,7 @@ pub async fn claude_account_list(
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:account-list",
@@ -3062,7 +3089,7 @@ pub async fn claude_account_list(
     {
         return result;
     }
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     let index = account_store::read_index(&app_data_dir);
     Ok(serde_json::to_value(index).unwrap_or(Value::Null))
 }
@@ -3079,7 +3106,7 @@ pub async fn claude_start_session(
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:start-session",
@@ -3098,7 +3125,7 @@ pub async fn claude_start_session(
         prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
             .await?;
     notification_cmd::register_agent_session_from_options(
-        &app,
+        &HostContext::from_app(app.clone()),
         window.label(),
         &session_id,
         options.as_ref(),
@@ -3123,9 +3150,9 @@ pub async fn claude_send_message(
     display_prompt: Option<String>,
     suppress_user_echo: Option<bool>,
 ) -> Result<Value, BridgeError> {
-    notification_cmd::set_agent_session_resting(&app, &session_id, false);
+    notification_cmd::set_agent_session_resting(&HostContext::from_app(app.clone()), &session_id, false);
     claude_debug_log(
-        &app,
+        &HostContext::from_app(app.clone()),
         &format!(
             "[claude_send_message:{}] requested promptLen={} images={} autoCompactWindow={:?}",
             session_id.chars().take(8).collect::<String>(),
@@ -3135,7 +3162,7 @@ pub async fn claude_send_message(
         ),
     );
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:send-message",
@@ -3176,9 +3203,9 @@ pub async fn claude_stop_session(
     codex_state: State<'_, CodexAppServerState>,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    notification_cmd::unregister_agent_session(&app, &session_id);
+    notification_cmd::unregister_agent_session(&HostContext::from_app(app.clone()), &session_id);
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:stop-session",
@@ -3204,14 +3231,14 @@ pub async fn claude_abort_session(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     claude_debug_log(
-        &app,
+        &HostContext::from_app(app.clone()),
         &format!(
             "[claude_abort_session:{}] requested",
             session_id.chars().take(8).collect::<String>()
         ),
     );
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:abort-session",
@@ -3241,7 +3268,7 @@ pub async fn claude_interrupt_turn(
     // hard abort (no remote regression). Local sessions get the real
     // turn-only interrupt.
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:abort-session",
@@ -3268,7 +3295,7 @@ pub async fn claude_stop_task(
     task_id: String,
 ) -> Result<bool, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:stop-task",
@@ -3297,7 +3324,7 @@ pub async fn claude_auth_login(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    crate::async_rt::spawn_blocking(move || auth_login_native(&app))
+    crate::async_rt::spawn_blocking(move || auth_login_native(&HostContext::from_app(app.clone())))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authLogin worker failed: {err}"),
@@ -3310,7 +3337,7 @@ pub async fn claude_auth_logout(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    crate::async_rt::spawn_blocking(move || auth_logout_native(&app))
+    crate::async_rt::spawn_blocking(move || auth_logout_native(&HostContext::from_app(app.clone())))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authLogout worker failed: {err}"),
@@ -3323,10 +3350,10 @@ pub async fn claude_account_import_current(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     let status_app = app.clone();
     let status_value =
-        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&status_app))
+        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&HostContext::from_app(status_app.clone())))
             .await
             .map_err(|err| BridgeError {
                 message: format!("claude.accountImportCurrent authStatus worker failed: {err}"),
@@ -3348,12 +3375,12 @@ pub async fn claude_account_login_new(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     let index = account_store::read_index(&app_data_dir);
     let active_account_id = index.active_account_id.clone();
     let backup_credential = account_store::read_cli_credentials();
     let login_app = app.clone();
-    let login_result = crate::async_rt::spawn_blocking(move || auth_login_native(&login_app))
+    let login_result = crate::async_rt::spawn_blocking(move || auth_login_native(&HostContext::from_app(login_app.clone())))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.accountLoginNew authLogin worker failed: {err}"),
@@ -3363,7 +3390,7 @@ pub async fn claude_account_login_new(
     }
     let status_app = app.clone();
     let status_value =
-        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&status_app))
+        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&HostContext::from_app(status_app.clone())))
             .await
             .map_err(|err| BridgeError {
                 message: format!("claude.accountLoginNew authStatus worker failed: {err}"),
@@ -3409,7 +3436,7 @@ pub async fn claude_account_switch(
     account_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:account-switch",
@@ -3420,7 +3447,7 @@ pub async fn claude_account_switch(
     {
         return result;
     }
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     let ok = account_store::switch_account(&app_data_dir, &account_id).map_err(account_error)?;
     Ok(Value::Bool(ok))
 }
@@ -3434,7 +3461,7 @@ pub async fn claude_account_remove(
     account_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:account-remove",
@@ -3445,7 +3472,7 @@ pub async fn claude_account_remove(
     {
         return result;
     }
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     let ok = account_store::remove_account(&app_data_dir, &account_id).map_err(account_error)?;
     Ok(Value::Bool(ok))
 }
@@ -3458,7 +3485,7 @@ pub async fn claude_account_mark_warning_shown(
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:account-mark-warning-shown",
@@ -3469,7 +3496,7 @@ pub async fn claude_account_mark_warning_shown(
     {
         return result;
     }
-    let app_data_dir = app_data_dir(&app)?;
+    let app_data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     account_store::mark_warning_shown(&app_data_dir).map_err(account_error)?;
     Ok(Value::Bool(true))
 }
@@ -3480,7 +3507,7 @@ pub async fn codex_account_info(
     app: AppHandle,
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
-    Ok(codex.account_info(&app))
+    Ok(codex.account_info(&HostContext::from_app(app.clone())))
 }
 
 #[cfg(feature = "desktop")]
@@ -3492,7 +3519,7 @@ pub async fn codex_account_list(
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "codex:account-list",
@@ -3503,7 +3530,7 @@ pub async fn codex_account_list(
     {
         return result;
     }
-    Ok(codex.account_list(&app))
+    Ok(codex.account_list(&HostContext::from_app(app.clone())))
 }
 
 #[cfg(feature = "desktop")]
@@ -3516,7 +3543,7 @@ pub async fn codex_account_switch(
     codex_home: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "codex:account-switch",
@@ -3528,7 +3555,7 @@ pub async fn codex_account_switch(
         return result;
     }
     codex
-        .switch_account(&app, codex_home)
+        .switch_account(&HostContext::from_app(app.clone()), codex_home)
         .map_err(|message| BridgeError { message })
 }
 
@@ -3538,7 +3565,7 @@ pub async fn codex_unified_status(
     app: AppHandle,
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
-    Ok(codex.unified_status(&app))
+    Ok(codex.unified_status(&HostContext::from_app(app.clone())))
 }
 
 #[cfg(feature = "desktop")]
@@ -3548,7 +3575,7 @@ pub async fn codex_unified_migrate(
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
     codex
-        .unified_migrate(&app)
+        .unified_migrate(&HostContext::from_app(app.clone()))
         .map_err(|message| BridgeError { message })
 }
 
@@ -3560,7 +3587,7 @@ pub async fn codex_account_capture_current(
     label: Option<String>,
 ) -> Result<Value, BridgeError> {
     codex
-        .account_capture_current(&app, label)
+        .account_capture_current(&HostContext::from_app(app.clone()), label)
         .map_err(|message| BridgeError { message })
 }
 
@@ -3572,7 +3599,7 @@ pub async fn codex_account_remove_unified(
     account_id: String,
 ) -> Result<Value, BridgeError> {
     codex
-        .account_remove_unified(&app, account_id)
+        .account_remove_unified(&HostContext::from_app(app.clone()), account_id)
         .map_err(|message| BridgeError { message })
 }
 
@@ -3586,7 +3613,7 @@ pub async fn codex_account_login(
     // codex login is interactive (browser OAuth) and can take a while — run it
     // off the async runtime so it doesn't stall other commands.
     let codex = codex.inner().clone();
-    crate::async_rt::spawn_blocking(move || codex.account_login(&app, api_key))
+    crate::async_rt::spawn_blocking(move || codex.account_login(&HostContext::from_app(app.clone()), api_key))
         .await
         .map_err(|err| BridgeError {
             message: format!("codex login worker failed: {err}"),
@@ -3612,7 +3639,7 @@ pub async fn claude_get_cli_path(
     state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-cli-path",
@@ -3623,7 +3650,7 @@ pub async fn claude_get_cli_path(
     {
         return result;
     }
-    Ok(Value::String(resolve_claude_cli_path(&app)))
+    Ok(Value::String(resolve_claude_cli_path(&HostContext::from_app(app.clone()))))
 }
 
 #[cfg(feature = "desktop")]
@@ -3639,7 +3666,7 @@ pub async fn claude_prepare_cli_session(
     current_session_id: Option<String>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:prepare-cli-session",
@@ -3657,7 +3684,7 @@ pub async fn claude_prepare_cli_session(
         return result;
     }
     prepare_cli_session_native(
-        &app,
+        &HostContext::from_app(app.clone()),
         terminal_id,
         workspace_id,
         cwd,
@@ -3676,7 +3703,7 @@ pub async fn claude_list_sessions(
     agent_kind: Option<String>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:list-sessions",
@@ -3688,7 +3715,7 @@ pub async fn claude_list_sessions(
         return result;
     }
     if agent_kind.as_deref() == Some("codex") {
-        let sessions = active_codex_home(&app)
+        let sessions = active_codex_home(&HostContext::from_app(app.clone()))
             .map(|codex_home| list_codex_sessions_in_root(&codex_home.join("sessions"), &cwd))
             .unwrap_or_default();
         return Ok(serde_json::to_value(sessions).unwrap_or_else(|_| json!([])));
@@ -3709,7 +3736,7 @@ pub async fn claude_get_supported_models(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-models",
@@ -3733,7 +3760,7 @@ pub async fn claude_get_supported_efforts(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-efforts",
@@ -3757,7 +3784,7 @@ pub async fn claude_get_supported_codex_sandbox_modes(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-codex-sandbox-modes",
@@ -3782,7 +3809,7 @@ pub async fn claude_get_supported_codex_approval_policies(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-codex-approval-policies",
@@ -3807,7 +3834,7 @@ pub async fn claude_get_supported_commands(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-commands",
@@ -3833,7 +3860,7 @@ pub async fn claude_get_supported_agents(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-supported-agents",
@@ -3859,7 +3886,7 @@ pub async fn claude_get_account_info(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-account-info",
@@ -3886,7 +3913,7 @@ pub async fn claude_get_session_state(
     agent_preset: Option<String>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-session-state",
@@ -3913,7 +3940,7 @@ pub async fn claude_get_session_meta(
     agent_preset: Option<String>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-session-meta",
@@ -3939,7 +3966,7 @@ pub async fn claude_get_context_usage(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-context-usage",
@@ -3964,7 +3991,7 @@ pub async fn claude_get_worktree_status(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-worktree-status",
@@ -3975,7 +4002,7 @@ pub async fn claude_get_worktree_status(
     {
         return result;
     }
-    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&HostContext::from_app(app.clone()), &session_id) {
         let status = crate::async_rt::spawn_blocking(move || {
             worktree_status_from_notification_snapshot(&session)
         })
@@ -4005,7 +4032,7 @@ pub async fn claude_scan_skills(
     cwd: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:scan-skills",
@@ -4030,7 +4057,7 @@ pub async fn claude_cleanup_worktree(
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:cleanup-worktree",
@@ -4041,7 +4068,7 @@ pub async fn claude_cleanup_worktree(
     {
         return result;
     }
-    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&HostContext::from_app(app.clone()), &session_id) {
         if session.worktree_path.is_some() {
             let native_session = session.clone();
             let cleaned = crate::async_rt::spawn_blocking(move || {
@@ -4052,12 +4079,12 @@ pub async fn claude_cleanup_worktree(
                 message: format!("claude.cleanupWorktree native worker failed: {err}"),
             })?;
             if cleaned {
-                notification_cmd::clear_agent_session_worktree(&app, &session_id);
+                notification_cmd::clear_agent_session_worktree(&HostContext::from_app(app.clone()), &session_id);
                 if let Some(updated) =
-                    notification_cmd::get_agent_session_snapshot(&app, &session_id)
+                    notification_cmd::get_agent_session_snapshot(&HostContext::from_app(app.clone()), &session_id)
                 {
                     publish_runtime_event(
-                        &app,
+                        &HostContext::from_app(app.clone()),
                         "claude:status",
                         json!({
                             "sessionId": session_id.as_str(),
@@ -4067,7 +4094,7 @@ pub async fn claude_cleanup_worktree(
                     );
                 }
                 publish_runtime_event(
-                    &app,
+                    &HostContext::from_app(app.clone()),
                     "claude:worktree-info",
                     json!({ "sessionId": session_id.as_str(), "payload": Value::Null }),
                     "tauri-native",
@@ -4087,7 +4114,7 @@ pub async fn claude_cleanup_worktree(
     )
     .await?;
     if result.as_bool().unwrap_or(false) {
-        notification_cmd::clear_agent_session_worktree(&app, &session_id);
+        notification_cmd::clear_agent_session_worktree(&HostContext::from_app(app.clone()), &session_id);
     }
     Ok(result)
 }
@@ -4105,7 +4132,7 @@ pub async fn claude_set_auto_continue(
     opts: Value,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-auto-continue",
@@ -4131,7 +4158,7 @@ pub async fn claude_get_auto_continue(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:get-auto-continue",
@@ -4158,7 +4185,7 @@ pub async fn claude_set_permission_mode(
     mode: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-permission-mode",
@@ -4185,7 +4212,7 @@ pub async fn claude_set_codex_sandbox_mode(
     mode: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-codex-sandbox-mode",
@@ -4212,7 +4239,7 @@ pub async fn claude_set_codex_approval_policy(
     policy: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-codex-approval-policy",
@@ -4240,7 +4267,7 @@ pub async fn claude_set_model(
     auto_compact_window: Option<i64>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-model",
@@ -4255,7 +4282,7 @@ pub async fn claude_set_model(
     {
         return result;
     }
-    if let Some(value) = codex_state.set_model(&app, &session_id, model.clone()) {
+    if let Some(value) = codex_state.set_model(&HostContext::from_app(app.clone()), &session_id, model.clone()) {
         return Ok(value);
     }
     let result = call_blocking(
@@ -4269,7 +4296,7 @@ pub async fn claude_set_model(
     .await?;
     if result.as_bool().unwrap_or(false) {
         notification_cmd::update_agent_session_model(
-            &app,
+            &HostContext::from_app(app.clone()),
             &session_id,
             &model,
             auto_compact_window,
@@ -4289,7 +4316,7 @@ pub async fn claude_set_effort(
     effort: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:set-effort",
@@ -4300,7 +4327,7 @@ pub async fn claude_set_effort(
     {
         return result;
     }
-    if let Some(value) = codex_state.set_effort(&app, &session_id, effort.clone()) {
+    if let Some(value) = codex_state.set_effort(&HostContext::from_app(app.clone()), &session_id, effort.clone()) {
         return Ok(value);
     }
     let result = call_blocking(
@@ -4313,7 +4340,7 @@ pub async fn claude_set_effort(
     )
     .await?;
     if result.as_bool().unwrap_or(false) {
-        notification_cmd::update_agent_session_effort(&app, &session_id, &effort);
+        notification_cmd::update_agent_session_effort(&HostContext::from_app(app.clone()), &session_id, &effort);
     }
     Ok(result)
 }
@@ -4328,7 +4355,7 @@ pub async fn claude_reset_session(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:reset-session",
@@ -4354,7 +4381,7 @@ pub async fn claude_fork_session(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:fork-session",
@@ -4380,7 +4407,7 @@ pub async fn claude_archive_messages(
     messages: Value,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:archive-messages",
@@ -4391,7 +4418,7 @@ pub async fn claude_archive_messages(
     {
         return result;
     }
-    let data_dir = app_data_dir(&app)?;
+    let data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     match archive_messages_in_dir(&data_dir, &session_id, &messages) {
         Ok(value) => Ok(json!(value)),
         Err(_) => Ok(json!(false)),
@@ -4409,7 +4436,7 @@ pub async fn claude_load_archived(
     limit: u32,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:load-archived",
@@ -4420,7 +4447,7 @@ pub async fn claude_load_archived(
     {
         return result;
     }
-    let data_dir = app_data_dir(&app)?;
+    let data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     Ok(load_archived_from_dir(
         &data_dir,
         &session_id,
@@ -4438,7 +4465,7 @@ pub async fn claude_clear_archive(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:clear-archive",
@@ -4449,7 +4476,7 @@ pub async fn claude_clear_archive(
     {
         return result;
     }
-    let data_dir = app_data_dir(&app)?;
+    let data_dir = app_data_dir(&HostContext::from_app(app.clone()))?;
     Ok(json!(clear_archive_in_dir(&data_dir, &session_id)))
 }
 
@@ -4463,7 +4490,7 @@ pub async fn claude_rest_session(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:rest-session",
@@ -4474,7 +4501,7 @@ pub async fn claude_rest_session(
     {
         return result;
     }
-    if let Some(value) = codex_state.rest_session(&app, &session_id) {
+    if let Some(value) = codex_state.rest_session(&HostContext::from_app(app.clone()), &session_id) {
         return Ok(value);
     }
     let result = call_blocking(
@@ -4485,7 +4512,7 @@ pub async fn claude_rest_session(
     )
     .await?;
     if result.as_bool().unwrap_or(false) {
-        notification_cmd::set_agent_session_resting(&app, &session_id, true);
+        notification_cmd::set_agent_session_resting(&HostContext::from_app(app.clone()), &session_id, true);
     }
     Ok(result)
 }
@@ -4500,7 +4527,7 @@ pub async fn claude_wake_session(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:wake-session",
@@ -4522,7 +4549,7 @@ pub async fn claude_wake_session(
     )
     .await?;
     if result.as_bool().unwrap_or(false) {
-        notification_cmd::set_agent_session_resting(&app, &session_id, false);
+        notification_cmd::set_agent_session_resting(&HostContext::from_app(app.clone()), &session_id, false);
     }
     Ok(result)
 }
@@ -4537,7 +4564,7 @@ pub async fn claude_is_resting(
     session_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:is-resting",
@@ -4551,7 +4578,7 @@ pub async fn claude_is_resting(
     if let Some(value) = codex_state.is_resting(&session_id) {
         return Ok(value);
     }
-    if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
+    if let Some(session) = notification_cmd::get_agent_session_snapshot(&HostContext::from_app(app.clone()), &session_id) {
         return Ok(json!(session.is_resting));
     }
     call_blocking(
@@ -4574,7 +4601,7 @@ pub async fn claude_fetch_subagent_messages(
     agent_tool_use_id: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:fetch-subagent-messages",
@@ -4601,7 +4628,7 @@ pub async fn claude_rewind_to_prompt(
     prompt_index: u32,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:rewind-to-prompt",
@@ -4630,7 +4657,7 @@ pub async fn claude_resume_session(
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:resume-session",
@@ -4663,7 +4690,7 @@ pub async fn claude_resume_session(
         prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
             .await?;
     notification_cmd::register_agent_session_from_options(
-        &app,
+        &HostContext::from_app(app.clone()),
         window.label(),
         &session_id,
         options.as_ref(),
@@ -4690,7 +4717,7 @@ pub async fn claude_client_resume(
     options: Option<Value>,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:client-resume",
@@ -4723,7 +4750,7 @@ pub async fn claude_client_resume(
         prepare_codex_worktree_options((*worktree_state).clone(), session_id.clone(), options)
             .await?;
     notification_cmd::register_agent_session_from_options(
-        &app,
+        &HostContext::from_app(app.clone()),
         window.label(),
         &session_id,
         options.as_ref(),
@@ -4745,7 +4772,7 @@ pub async fn claude_resolve_permission(
     result: Value,
 ) -> Result<Value, BridgeError> {
     if let Some(remote_result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:resolve-permission",
@@ -4777,7 +4804,7 @@ pub async fn claude_resolve_ask_user(
     answers: Value,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:resolve-ask-user",
@@ -4806,7 +4833,7 @@ pub async fn claude_check_mcp_json_status(
     cwd: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:check-mcp-json-status",
@@ -4829,7 +4856,7 @@ pub async fn claude_enable_all_project_mcp(
     cwd: String,
 ) -> Result<Value, BridgeError> {
     if let Some(result) = remote_invoke_for_window(
-        &app,
+        &HostContext::from_app(app.clone()),
         &state,
         &window,
         "agent:enable-all-project-mcp",

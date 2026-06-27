@@ -7,7 +7,10 @@
 
 use crate::electron_safe_storage::decrypt_electron_safe_storage_data;
 use crate::event_hub::publish_runtime_event;
-use crate::{app_data, window_registry};
+use crate::host_context::HostContext;
+use crate::app_data;
+#[cfg(feature = "desktop")]
+use crate::window_registry;
 #[cfg(not(test))]
 use keyring::use_native_store;
 use keyring_core::Entry as KeyringEntry;
@@ -18,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, WebviewWindow};
 
 const DEFAULT_PROFILE_ID: &str = "default";
@@ -137,15 +141,15 @@ fn default_index() -> ProfileIndex {
     }
 }
 
-fn profiles_dir(app: &AppHandle) -> Option<PathBuf> {
-    app_data::app_data_dir_opt(app).map(|dir| dir.join("profiles"))
+fn profiles_dir(app: &HostContext) -> Option<PathBuf> {
+    app.data_dir_opt().map(|dir| dir.join("profiles"))
 }
 
-fn app_data_dir(app: &AppHandle) -> Option<PathBuf> {
-    app_data::app_data_dir_opt(app)
+fn app_data_dir(app: &HostContext) -> Option<PathBuf> {
+    app.data_dir_opt()
 }
 
-fn workspace_path(app: &AppHandle) -> Option<PathBuf> {
+fn workspace_path(app: &HostContext) -> Option<PathBuf> {
     app_data_dir(app).map(|dir| dir.join("workspaces.json"))
 }
 
@@ -435,7 +439,7 @@ fn list_response_at(dir: &Path) -> ProfileListResponse {
     }
 }
 
-fn emit_profile_changed(app: &AppHandle) {
+fn emit_profile_changed(app: &HostContext) {
     let payload = profiles_dir(app)
         .map(|dir| {
             let response = list_response_at(&dir);
@@ -591,7 +595,7 @@ fn workspace_from_first_snapshot_window(snapshot: &Value) -> Option<Value> {
     }))
 }
 
-fn seed_default_snapshot_if_missing(dir: &Path, app: &AppHandle, index: &ProfileIndex) {
+fn seed_default_snapshot_if_missing(dir: &Path, app: &HostContext, index: &ProfileIndex) {
     if read_snapshot_at(dir, DEFAULT_PROFILE_ID).is_some() {
         return;
     }
@@ -613,7 +617,7 @@ fn seed_default_snapshot_if_missing(dir: &Path, app: &AppHandle, index: &Profile
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_list(app: AppHandle) -> ProfileListResponse {
-    profiles_dir(&app)
+    profiles_dir(&HostContext::from_app(app.clone()))
         .map(|dir| {
             let response = list_response_at(&dir);
             let index = ProfileIndex {
@@ -621,7 +625,7 @@ pub fn profile_list(app: AppHandle) -> ProfileListResponse {
                 active_profile_ids: response.active_profile_ids.clone(),
                 active_profile_id: None,
             };
-            seed_default_snapshot_if_missing(&dir, &app, &index);
+            seed_default_snapshot_if_missing(&dir, &HostContext::from_app(app.clone()), &index);
             response
         })
         .unwrap_or_else(|| ProfileListResponse {
@@ -639,7 +643,7 @@ pub fn profile_list_local(app: AppHandle) -> ProfileListResponse {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_get(app: AppHandle, profile_id: String) -> Option<ProfileEntry> {
-    let dir = profiles_dir(&app)?;
+    let dir = profiles_dir(&HostContext::from_app(app.clone()))?;
     read_index_at(&dir)
         .profiles
         .into_iter()
@@ -649,17 +653,17 @@ pub fn profile_get(app: AppHandle, profile_id: String) -> Option<ProfileEntry> {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_get_active_ids(app: AppHandle) -> Vec<String> {
-    profiles_dir(&app)
+    profiles_dir(&HostContext::from_app(app.clone()))
         .map(|dir| read_index_at(&dir).active_profile_ids)
         .unwrap_or_else(|| vec![DEFAULT_PROFILE_ID.into()])
 }
 
-pub fn profile_load_snapshot_for_remote(app: &AppHandle, profile_id: &str) -> Option<Value> {
+pub fn profile_load_snapshot_for_remote(app: &HostContext, profile_id: &str) -> Option<Value> {
     let dir = profiles_dir(app)?;
     load_profile_snapshot_at(&dir, profile_id, false)
 }
 
-pub fn profile_load_for_remote(app: &AppHandle, profile_id: &str) -> Option<Value> {
+pub fn profile_load_for_remote(app: &HostContext, profile_id: &str) -> Option<Value> {
     let dir = profiles_dir(app)?;
     let snapshot = load_profile_snapshot_at(&dir, profile_id, true);
     if snapshot.is_some() {
@@ -668,9 +672,12 @@ pub fn profile_load_for_remote(app: &AppHandle, profile_id: &str) -> Option<Valu
     snapshot
 }
 
-pub fn profile_workspace_json_for_remote(app: &AppHandle, profile_id: &str) -> Option<String> {
+pub fn profile_workspace_json_for_remote(app: &HostContext, profile_id: &str) -> Option<String> {
+    // A live local window can hold unsaved workspace edits; headless has no
+    // windows, so it reads the persisted snapshot below.
+    #[cfg(feature = "desktop")]
     if let Some(workspace) =
-        window_registry::profile_workspace_from_existing_window(app, profile_id)
+        window_registry::profile_workspace_from_existing_window(app.app(), profile_id)
     {
         return serde_json::to_string_pretty(&workspace).ok();
     }
@@ -680,7 +687,7 @@ pub fn profile_workspace_json_for_remote(app: &AppHandle, profile_id: &str) -> O
     serde_json::to_string_pretty(&workspace).ok()
 }
 
-pub fn profile_save_workspace_for_remote(app: &AppHandle, profile_id: &str, data: &str) -> bool {
+pub fn profile_save_workspace_for_remote(app: &HostContext, profile_id: &str, data: &str) -> bool {
     let Some(dir) = profiles_dir(app) else {
         return false;
     };
@@ -713,7 +720,7 @@ pub fn profile_create(
     name: String,
     options: Option<CreateProfileOptions>,
 ) -> ProfileEntry {
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return profile_from_options(DEFAULT_PROFILE_ID.into(), name, options);
     };
     let mut index = read_index_at(&dir);
@@ -724,14 +731,14 @@ pub fn profile_create(
         let _ = write_snapshot_at(&dir, &entry.id, &empty_snapshot(&entry));
     }
     let _ = write_index_at(&dir, index);
-    emit_profile_changed(&app);
+    emit_profile_changed(&HostContext::from_app(app.clone()));
     entry
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return false;
     };
     let index = read_index_at(&dir);
@@ -742,7 +749,7 @@ pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
     else {
         return false;
     };
-    let workspace = workspace_path(&app)
+    let workspace = workspace_path(&HostContext::from_app(app.clone()))
         .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
         .unwrap_or_else(empty_workspace_state);
@@ -760,7 +767,7 @@ pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
     }
     let saved = write_index_at(&dir, index).is_ok();
     if saved {
-        emit_profile_changed(&app);
+        emit_profile_changed(&HostContext::from_app(app.clone()));
     }
     saved
 }
@@ -768,7 +775,7 @@ pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -> Value {
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return Value::Null;
     };
     let index = read_index_at(&dir);
@@ -786,7 +793,7 @@ pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -
         .and_then(workspace_from_first_snapshot_window)
         .or_else(|| window_registry::profile_workspace_from_existing_window(&app, &profile_id));
     if let Some(workspace) = workspace {
-        if let Some(path) = workspace_path(&app) {
+        if let Some(path) = workspace_path(&HostContext::from_app(app.clone())) {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
@@ -807,12 +814,12 @@ pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -
     let mut index = index;
     if activate_profile_in_index(&mut index, &profile_id) {
         let _ = write_index_at(&dir, index);
-        emit_profile_changed(&app);
+        emit_profile_changed(&HostContext::from_app(app.clone()));
     }
     snapshot.unwrap_or_else(|| empty_snapshot(&profile))
 }
 
-pub fn activate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
+pub fn activate_profile_id(app: &HostContext, profile_id: &str) -> bool {
     let Some(dir) = profiles_dir(app) else {
         return false;
     };
@@ -827,7 +834,7 @@ pub fn activate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
     saved
 }
 
-pub fn deactivate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
+pub fn deactivate_profile_id(app: &HostContext, profile_id: &str) -> bool {
     let Some(dir) = profiles_dir(app) else {
         return false;
     };
@@ -849,7 +856,7 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     if profile_id == DEFAULT_PROFILE_ID {
         return false;
     }
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return false;
     };
     let mut index = read_index_at(&dir);
@@ -863,7 +870,7 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     let _ = fs::remove_file(profile_path(&dir, &profile_id));
     let saved = write_index_at(&dir, index).is_ok();
     if saved {
-        emit_profile_changed(&app);
+        emit_profile_changed(&HostContext::from_app(app.clone()));
     }
     saved
 }
@@ -871,7 +878,7 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> bool {
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return false;
     };
     let mut index = read_index_at(&dir);
@@ -891,7 +898,7 @@ pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> b
     }
     let saved = write_index_at(&dir, index).is_ok();
     if saved {
-        emit_profile_changed(&app);
+        emit_profile_changed(&HostContext::from_app(app.clone()));
     }
     saved
 }
@@ -903,7 +910,7 @@ pub fn profile_update(
     profile_id: String,
     updates: Option<UpdateProfileOptions>,
 ) -> bool {
-    let Some(dir) = profiles_dir(&app) else {
+    let Some(dir) = profiles_dir(&HostContext::from_app(app.clone())) else {
         return false;
     };
     let Some(updates) = updates else {
@@ -941,7 +948,7 @@ pub fn profile_update(
     profile.updated_at = now_millis();
     let saved = write_index_at(&dir, index).is_ok();
     if saved {
-        emit_profile_changed(&app);
+        emit_profile_changed(&HostContext::from_app(app.clone()));
     }
     saved
 }
@@ -953,7 +960,7 @@ pub fn profile_duplicate(
     profile_id: String,
     new_name: String,
 ) -> Option<ProfileEntry> {
-    let dir = profiles_dir(&app)?;
+    let dir = profiles_dir(&HostContext::from_app(app.clone()))?;
     let mut index = read_index_at(&dir);
     let source = index
         .profiles
@@ -975,20 +982,20 @@ pub fn profile_duplicate(
         let _ = write_snapshot_at(&dir, &copy.id, &empty_snapshot(&copy));
     }
     write_index_at(&dir, index).ok()?;
-    emit_profile_changed(&app);
+    emit_profile_changed(&HostContext::from_app(app.clone()));
     Some(copy)
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_activate(app: AppHandle, profile_id: String) {
-    let _ = activate_profile_id(&app, &profile_id);
+    let _ = activate_profile_id(&HostContext::from_app(app.clone()), &profile_id);
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_deactivate(app: AppHandle, profile_id: String) {
-    let _ = deactivate_profile_id(&app, &profile_id);
+    let _ = deactivate_profile_id(&HostContext::from_app(app.clone()), &profile_id);
 }
 
 #[cfg(test)]

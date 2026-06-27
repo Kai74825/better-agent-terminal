@@ -3,12 +3,13 @@ use crate::sidecar::{app_handle_emit_sink, resolve_spawn_config, BridgeError, Si
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 use tauri::{AppHandle, State};
+use crate::host_context::HostContext;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 const CLI_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn call_cli(
-    app: &AppHandle,
+    app: &HostContext,
     state: &SidecarState,
     method: &str,
     mut params: Value,
@@ -18,8 +19,8 @@ fn call_cli(
         map.entry("cliPath".to_string())
             .or_insert_with(|| Value::String(resolve_claude_cli_path(app)));
     }
-    let cfg = resolve_spawn_config(app)?;
-    let sink = app_handle_emit_sink(app.clone());
+    let cfg = app.sidecar_spawn_config()?;
+    let sink = app.sidecar_emit_sink();
     state.call_with_emit(&cfg, Some(sink), method, params, timeout)
 }
 
@@ -31,7 +32,7 @@ async fn call_cli_blocking(
     timeout: Duration,
 ) -> Result<Value, BridgeError> {
     let sidecar = (*state).clone();
-    crate::async_rt::spawn_blocking(move || call_cli(&app, &sidecar, method, params, timeout))
+    crate::async_rt::spawn_blocking(move || call_cli(&HostContext::from_app(app.clone()), &sidecar, method, params, timeout))
         .await
         .map_err(|err| BridgeError {
             message: format!("{method} worker failed: {err}"),

@@ -14,6 +14,8 @@ use crate::commands::profile as profile_cmd;
 use crate::event_hub::publish_runtime_event;
 use crate::path_guard::is_sensitive_path;
 use crate::remote_client::RustRemoteClientState;
+use crate::host_context::HostContext;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -26,6 +28,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
@@ -56,6 +59,7 @@ const RESOLVE_TEXT_EXTS: &[&str] = &[
 
 const REMOTE_FS_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[cfg(feature = "desktop")]
 fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
         return false;
@@ -65,6 +69,7 @@ fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "desktop")]
 async fn remote_invoke_for_window(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -87,6 +92,7 @@ async fn remote_invoke_for_window(
     })
 }
 
+#[cfg(feature = "desktop")]
 fn remote_invoke_for_window_blocking(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -111,8 +117,8 @@ fn is_ignored_name(name: &str) -> bool {
     IGNORED_DIR_NAMES.iter().any(|n| *n == name)
 }
 
-fn home_string(app: &tauri::AppHandle) -> Option<PathBuf> {
-    app.path().home_dir().ok()
+fn home_string(app: &HostContext) -> Option<PathBuf> {
+    app.home_dir()
 }
 
 fn expand_tilde(p: &str, home: &Path) -> PathBuf {
@@ -243,7 +249,7 @@ fn entry_sort_key(a: &FsEntry, b: &FsEntry) -> std::cmp::Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
 }
 
-pub(crate) fn fs_home_native(app: &AppHandle) -> String {
+pub(crate) fn fs_home_native(app: &HostContext) -> String {
     home_string(app)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| String::from("/"))
@@ -257,7 +263,7 @@ pub async fn fs_home(app: AppHandle, window: WebviewWindow) -> String {
             .and_then(from_remote_value)
             .unwrap_or_else(|_| String::from("/"));
     }
-    fs_home_native(&app)
+    fs_home_native(&crate::host_context::HostContext::from_app(app.clone()))
 }
 
 #[cfg(feature = "desktop")]
@@ -385,7 +391,7 @@ pub async fn fs_list_dirs(
                 ..Default::default()
             });
     }
-    let home = home_string(&app).unwrap_or_else(|| PathBuf::from("/"));
+    let home = home_string(&crate::host_context::HostContext::from_app(app.clone())).unwrap_or_else(|| PathBuf::from("/"));
     crate::async_rt::spawn_blocking(move || fs_list_dirs_impl(home, dir_path, include_hidden))
         .await
         .unwrap_or_else(|e| ListDirsResult {
@@ -462,7 +468,7 @@ pub(crate) fn fs_list_dirs_impl(
 }
 
 pub(crate) fn fs_list_dirs_native(
-    app: &AppHandle,
+    app: &HostContext,
     dir_path: String,
     include_hidden: bool,
 ) -> ListDirsResult {
@@ -665,7 +671,7 @@ pub async fn fs_quick_locations(app: AppHandle, window: WebviewWindow) -> Vec<Qu
     {
         return result.and_then(from_remote_value).unwrap_or_default();
     }
-    let home = home_string(&app);
+    let home = home_string(&crate::host_context::HostContext::from_app(app.clone()));
     crate::async_rt::spawn_blocking(move || fs_quick_locations_impl(home))
         .await
         .unwrap_or_default()
@@ -719,7 +725,7 @@ pub(crate) fn fs_quick_locations_impl(home: Option<PathBuf>) -> Vec<QuickLocatio
     out
 }
 
-pub(crate) fn fs_quick_locations_native(app: &AppHandle) -> Vec<QuickLocation> {
+pub(crate) fn fs_quick_locations_native(app: &HostContext) -> Vec<QuickLocation> {
     fs_quick_locations_impl(home_string(app))
 }
 
@@ -978,10 +984,10 @@ pub fn fs_watch(
     {
         return result.and_then(from_remote_value).unwrap_or(false);
     }
-    fs_watch_native(app, &state, dir_path)
+    fs_watch_native(crate::host_context::HostContext::from_app(app), &state, dir_path)
 }
 
-pub(crate) fn fs_watch_native(app: AppHandle, state: &FsWatcherState, dir_path: String) -> bool {
+pub(crate) fn fs_watch_native(app: HostContext, state: &FsWatcherState, dir_path: String) -> bool {
     if dir_path.trim().is_empty() {
         return false;
     }

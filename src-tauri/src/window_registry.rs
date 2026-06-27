@@ -23,7 +23,10 @@ fn bat_debug_enabled() -> bool {
 
 fn debug_registry_log(app: &AppHandle, message: impl AsRef<str>) {
     if bat_debug_enabled() {
-        log_tauri(app, &format!("[window-registry] {}", message.as_ref()));
+        log_tauri(
+            &crate::host_context::HostContext::from_app(app.clone()),
+            &format!("[window-registry] {}", message.as_ref()),
+        );
     }
 }
 

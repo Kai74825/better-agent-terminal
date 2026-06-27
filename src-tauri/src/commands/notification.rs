@@ -12,12 +12,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+use crate::host_context::HostContext;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 
 const MAX_ENTRIES: usize = 50;
@@ -61,9 +64,9 @@ pub struct NotificationEntry {
     pub title: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NotificationState {
-    inner: Mutex<Vec<NotificationEntry>>,
+    inner: Arc<Mutex<Vec<NotificationEntry>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,9 +92,9 @@ pub struct AgentNotificationSession {
     pub is_resting: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AgentNotificationState {
-    inner: Mutex<HashMap<String, AgentNotificationSession>>,
+    inner: Arc<Mutex<HashMap<String, AgentNotificationSession>>>,
 }
 
 impl NotificationState {
@@ -254,7 +257,7 @@ pub fn notification_focus_entry(
 }
 
 pub fn register_agent_session_from_options(
-    app: &AppHandle,
+    app: &HostContext,
     window_id: &str,
     session_id: &str,
     options: Option<&Value>,
@@ -266,7 +269,12 @@ pub fn register_agent_session_from_options(
     if cwd.is_empty() {
         return;
     }
-    let profile_id = Some(window_registry::get_entry(app, window_id).profile_id);
+    // The window->profile map is GUI-only; headless sessions carry no local
+    // window, so the profile id is supplied by the remote session context.
+    #[cfg(feature = "desktop")]
+    let profile_id = Some(window_registry::get_entry(app.app(), window_id).profile_id);
+    #[cfg(not(feature = "desktop"))]
+    let profile_id: Option<String> = None;
     let workspace_id = options.and_then(|value| string_option(value, "workspaceId"));
     let workspace_name = options.and_then(|value| string_option(value, "workspaceName"));
     let agent_kind = options.and_then(agent_kind_from_options);
@@ -324,13 +332,13 @@ pub fn register_agent_session_from_options(
     );
 }
 
-pub fn unregister_agent_session(app: &AppHandle, session_id: &str) {
+pub fn unregister_agent_session(app: &HostContext, session_id: &str) {
     if let Some(state) = app.try_state::<AgentNotificationState>() {
         state.lock().remove(session_id);
     }
 }
 
-pub fn get_agent_session_cwd(app: &AppHandle, session_id: &str) -> Option<String> {
+pub fn get_agent_session_cwd(app: &HostContext, session_id: &str) -> Option<String> {
     let state = app.try_state::<AgentNotificationState>()?;
     let cwd = state
         .lock()
@@ -340,7 +348,7 @@ pub fn get_agent_session_cwd(app: &AppHandle, session_id: &str) -> Option<String
 }
 
 pub fn get_agent_session_snapshot(
-    app: &AppHandle,
+    app: &HostContext,
     session_id: &str,
 ) -> Option<AgentNotificationSession> {
     let state = app.try_state::<AgentNotificationState>()?;
@@ -348,7 +356,7 @@ pub fn get_agent_session_snapshot(
     session
 }
 
-pub fn add_agent_completion_from_event(app: &AppHandle, topic: &str, payload: &Value) {
+pub fn add_agent_completion_from_event(app: &HostContext, topic: &str, payload: &Value) {
     if topic != "claude:turn-end" {
         return;
     }
@@ -402,7 +410,7 @@ pub fn add_agent_completion_from_event(app: &AppHandle, topic: &str, payload: &V
 // host's WebSocket server. Reuses the notification center so it shows up
 // in the same bell as agent completions; the renderer branches on
 // `kind == "remote-client"` to render the connection headline.
-pub fn add_remote_client_notification(app: &AppHandle, label: &str) {
+pub fn add_remote_client_notification(app: &HostContext, label: &str) {
     let Some(state) = app.try_state::<NotificationState>() else {
         return;
     };
@@ -435,7 +443,7 @@ pub fn add_remote_client_notification(app: &AppHandle, label: &str) {
     );
 }
 
-pub fn update_agent_session_meta_from_event(app: &AppHandle, topic: &str, payload: &Value) {
+pub fn update_agent_session_meta_from_event(app: &HostContext, topic: &str, payload: &Value) {
     if topic != "claude:status" {
         return;
     }
@@ -479,7 +487,7 @@ pub fn update_agent_session_meta_from_event(app: &AppHandle, topic: &str, payloa
     }
 }
 
-pub fn update_agent_session_worktree_from_event(app: &AppHandle, topic: &str, payload: &Value) {
+pub fn update_agent_session_worktree_from_event(app: &HostContext, topic: &str, payload: &Value) {
     if topic != "claude:worktree-info" {
         return;
     }
@@ -499,7 +507,7 @@ pub fn update_agent_session_worktree_from_event(app: &AppHandle, topic: &str, pa
     apply_worktree_payload(session, worktree);
 }
 
-pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
+pub fn clear_agent_session_worktree(app: &HostContext, session_id: &str) {
     let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
         return;
     };
@@ -515,7 +523,7 @@ pub fn clear_agent_session_worktree(app: &AppHandle, session_id: &str) {
 }
 
 pub fn set_agent_session_auto_continue(
-    app: &AppHandle,
+    app: &HostContext,
     session_id: &str,
     opts: &Value,
 ) -> Option<bool> {
@@ -540,7 +548,7 @@ pub fn set_agent_session_auto_continue(
     Some(true)
 }
 
-pub fn get_agent_session_auto_continue(app: &AppHandle, session_id: &str) -> Option<Value> {
+pub fn get_agent_session_auto_continue(app: &HostContext, session_id: &str) -> Option<Value> {
     let agent_state = app.try_state::<AgentNotificationState>()?;
     let sessions = agent_state.lock();
     let session = sessions.get(session_id)?;
@@ -552,7 +560,7 @@ pub fn get_agent_session_auto_continue(app: &AppHandle, session_id: &str) -> Opt
     )
 }
 
-pub fn update_agent_session_permission_mode(app: &AppHandle, session_id: &str, mode: &str) {
+pub fn update_agent_session_permission_mode(app: &HostContext, session_id: &str, mode: &str) {
     update_agent_session_meta_field(
         app,
         session_id,
@@ -562,7 +570,7 @@ pub fn update_agent_session_permission_mode(app: &AppHandle, session_id: &str, m
 }
 
 pub fn update_agent_session_model(
-    app: &AppHandle,
+    app: &HostContext,
     session_id: &str,
     model: &str,
     auto_compact_window: Option<i64>,
@@ -578,11 +586,11 @@ pub fn update_agent_session_model(
     }
 }
 
-pub fn update_agent_session_effort(app: &AppHandle, session_id: &str, effort: &str) {
+pub fn update_agent_session_effort(app: &HostContext, session_id: &str, effort: &str) {
     update_agent_session_meta_field(app, session_id, "effort", Value::String(effort.into()));
 }
 
-pub fn set_agent_session_resting(app: &AppHandle, session_id: &str, resting: bool) {
+pub fn set_agent_session_resting(app: &HostContext, session_id: &str, resting: bool) {
     let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
         return;
     };
@@ -592,7 +600,7 @@ pub fn set_agent_session_resting(app: &AppHandle, session_id: &str, resting: boo
     }
 }
 
-fn update_agent_session_meta_field(app: &AppHandle, session_id: &str, key: &str, value: Value) {
+fn update_agent_session_meta_field(app: &HostContext, session_id: &str, key: &str, value: Value) {
     let Some(agent_state) = app.try_state::<AgentNotificationState>() else {
         return;
     };
@@ -634,6 +642,7 @@ fn apply_worktree_payload(session: &mut AgentNotificationSession, worktree: &Val
     }
 }
 
+#[cfg(feature = "desktop")]
 fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {
     let win = app.get_webview_window(window_id)?;
     let _ = win.show();
@@ -647,6 +656,7 @@ fn focus_notification_window(app: &AppHandle, window_id: &str) -> Option<()> {
 // can live as tabs inside one window, so without this the user lands on
 // whichever workspace happened to be active. Targeted at the owning
 // window so other windows don't react to an id they don't have.
+#[cfg(feature = "desktop")]
 fn activate_notification_workspace(app: &AppHandle, window_id: &str, workspace_id: Option<&str>) {
     if let Some(workspace_id) = workspace_id.filter(|id| !id.is_empty()) {
         let _ = app.emit_to(
@@ -657,6 +667,7 @@ fn activate_notification_workspace(app: &AppHandle, window_id: &str, workspace_i
     }
 }
 
+#[cfg(feature = "desktop")]
 fn mark_entry_read_and_emit(app: &AppHandle, state: &State<'_, NotificationState>, id: &str) {
     let changed = {
         let mut entries = state.lock();
@@ -678,6 +689,7 @@ fn mark_entry_read_and_emit(app: &AppHandle, state: &State<'_, NotificationState
 
 // Internal helper — push the current entry list to all listeners.
 // Renderer subscribes via `listen("notification:update", ...)`.
+#[cfg(feature = "desktop")]
 fn emit_update(app: &AppHandle, state: &State<'_, NotificationState>) {
     let entries = state.lock().clone();
     let _ = app.emit("notification:update", entries);
@@ -687,7 +699,7 @@ fn emit_update(app: &AppHandle, state: &State<'_, NotificationState>) {
 // We expose it on `NotificationState` so the eventual claude/codex/
 // runtime modules can call it directly without re-parsing JSON.
 #[allow(dead_code)]
-pub fn add_entry(app: &AppHandle, state: &NotificationState, entry: NotificationEntry) {
+pub fn add_entry(app: &HostContext, state: &NotificationState, entry: NotificationEntry) {
     {
         let mut entries = state.lock();
         // One entry per workspace: a fresh completion replaces that
@@ -702,7 +714,10 @@ pub fn add_entry(app: &AppHandle, state: &NotificationState, entry: Notification
         }
     }
     let snapshot = state.lock().clone();
-    let _ = app.emit("notification:update", snapshot);
+    app.emit(
+        "notification:update",
+        serde_json::to_value(snapshot).unwrap_or_default(),
+    );
 }
 
 fn next_notification_id() -> String {

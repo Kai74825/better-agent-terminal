@@ -208,8 +208,7 @@ impl RustRemoteServerState {
         let log_bind_interface = bind_interface.clone();
         let log_fingerprint = fingerprint.clone();
         let handle = thread::spawn(move || {
-            remote_debug_log(
-                thread_ctx.app(),
+            remote_debug_log(&thread_ctx,
                 format!(
                     "server started host={} port={} iface={} fingerprint={}",
                     log_bound_host,
@@ -332,7 +331,7 @@ impl RustRemoteServerState {
     // connected client so the old token stops working everywhere. New
     // connections must present the new token at auth. Returns the same
     // shape as start_result so the renderer can rebuild the URL/QR.
-    pub fn rotate_token(&self, app: &AppHandle) -> Result<Value, String> {
+    pub fn rotate_token(&self, app: &HostContext) -> Result<Value, String> {
         let guard = self
             .inner
             .lock()
@@ -348,7 +347,7 @@ impl RustRemoteServerState {
                 .map_err(|_| "remote token lock poisoned".to_string())?;
             *token = new_token.clone();
         }
-        let data_dir = crate::app_data::app_data_dir(app)?;
+        let data_dir = app.data_dir()?;
         persist_token(&data_dir, &new_token);
         let now = unix_ms();
         let mut revoked: Vec<RemoteClientInfo> = Vec::new();
@@ -850,7 +849,7 @@ fn run_accept_loop(
                 let clients = Arc::clone(&clients);
                 let recent = Arc::clone(&recent);
                 let peer = addr.to_string();
-                remote_debug_log(ctx.app(), format!("tcp accepted peer={peer}"));
+                remote_debug_log(&ctx, format!("tcp accepted peer={peer}"));
                 thread::spawn(move || {
                     if let Err(err) = handle_client(
                         stream,
@@ -862,7 +861,7 @@ fn run_accept_loop(
                         recent,
                         peer.clone(),
                     ) {
-                        remote_debug_log(ctx.app(), format!("client closed peer={peer} error={err}"));
+                        remote_debug_log(&ctx, format!("client closed peer={peer} error={err}"));
                     }
                 });
             }
@@ -902,7 +901,7 @@ fn handle_client(
         .sock
         .set_read_timeout(Some(Duration::from_millis(200)))
         .map_err(|err| format!("remote stream polling timeout failed: {err}"))?;
-    remote_debug_log(&app, format!("websocket accepted peer={peer}"));
+    remote_debug_log(&ctx, format!("websocket accepted peer={peer}"));
     let mut authenticated = false;
     let mut client_label = String::from("Remote Client");
     let mut client_id = String::new();
@@ -913,7 +912,7 @@ fn handle_client(
 
     loop {
         if close.load(Ordering::Relaxed) {
-            remote_debug_log(&app, format!("client revoked peer={peer}"));
+            remote_debug_log(&ctx, format!("client revoked peer={peer}"));
             break;
         }
         while let Ok(frame) = out_rx.try_recv() {
@@ -954,8 +953,7 @@ fn handle_client(
         if frame_type == "auth" {
             let current_token = token.lock().map(|token| token.clone()).unwrap_or_default();
             if frame.get("token").and_then(Value::as_str) != Some(current_token.as_str()) {
-                remote_debug_log(
-                    &app,
+                remote_debug_log(&ctx,
                     format!("auth failed peer={peer} reason=invalid-token"),
                 );
                 send_frame(
@@ -983,8 +981,7 @@ fn handle_client(
                 })
                 .unwrap_or_default();
             let Some(protocol) = negotiate_remote_protocol(&offered) else {
-                remote_debug_log(
-                    &app,
+                remote_debug_log(&ctx,
                     format!(
                         "auth failed peer={peer} reason=unsupported-protocol offered={offered:?}"
                     ),
@@ -1064,20 +1061,18 @@ fn handle_client(
                 });
             }
             authenticated = true;
-            remote_debug_log(
-                &app,
+            remote_debug_log(&ctx,
                 format!(
                     "auth ok peer={peer} label={client_label}{device_summary} protocol={protocol_name} compression={}",
                     client_compression.as_str()
                 ),
             );
             if already_known {
-                remote_debug_log(
-                    &app,
+                remote_debug_log(&ctx,
                     format!("known client reconnected; notification skipped label={client_label}"),
                 );
             } else {
-                notification_cmd::add_remote_client_notification(&app, &client_label);
+                notification_cmd::add_remote_client_notification(&ctx, &client_label);
             }
             // Echo the host's app version so the client can detect
             // client/server skew and warn (issue #115 was triggered by a
@@ -1118,9 +1113,9 @@ fn handle_client(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            log_remote_pty_write_frame(&app, "remote-server.recv-frame", &channel, &frame);
-            remote_debug_log(&app, format!("invoke start peer={peer} channel={channel}"));
-            let invoke_app = app.clone();
+            log_remote_pty_write_frame(&ctx, "remote-server.recv-frame", &channel, &frame);
+            remote_debug_log(&ctx, format!("invoke start peer={peer} channel={channel}"));
+            let invoke_app = ctx.clone();
             let invoke_ctx = ctx.clone();
             let invoke_sidecar = sidecar.clone();
             let invoke_peer = peer.clone();
@@ -1226,13 +1221,13 @@ fn remote_debug_enabled() -> bool {
     matches!(std::env::var("BAT_DEBUG").as_deref(), Ok("1") | Ok("true"))
 }
 
-fn remote_debug_log(app: &AppHandle, message: impl AsRef<str>) {
+fn remote_debug_log(app: &HostContext, message: impl AsRef<str>) {
     if remote_debug_enabled() {
         crate::commands::app::log_tauri(app, &format!("[remote-server] {}", message.as_ref()));
     }
 }
 
-fn log_remote_pty_write_data(app: &AppHandle, phase: &str, id: &str, data: &str) {
+fn log_remote_pty_write_data(app: &HostContext, phase: &str, id: &str, data: &str) {
     if !pty_cmd::pty_input_trace_required(data) {
         return;
     }
@@ -1242,7 +1237,7 @@ fn log_remote_pty_write_data(app: &AppHandle, phase: &str, id: &str, data: &str)
     );
 }
 
-fn log_remote_pty_write_args(app: &AppHandle, phase: &str, channel: &str, args: &[Value]) {
+fn log_remote_pty_write_args(app: &HostContext, phase: &str, channel: &str, args: &[Value]) {
     if canonical_remote_channel(channel) != "pty:write" {
         return;
     }
@@ -1255,7 +1250,7 @@ fn log_remote_pty_write_args(app: &AppHandle, phase: &str, channel: &str, args: 
     log_remote_pty_write_data(app, phase, id, data);
 }
 
-fn log_remote_pty_write_params(app: &AppHandle, phase: &str, channel: &str, params: &Value) {
+fn log_remote_pty_write_params(app: &HostContext, phase: &str, channel: &str, params: &Value) {
     if canonical_remote_channel(channel) != "pty:write" {
         return;
     }
@@ -1268,7 +1263,7 @@ fn log_remote_pty_write_params(app: &AppHandle, phase: &str, channel: &str, para
     log_remote_pty_write_data(app, phase, id, data);
 }
 
-fn log_remote_pty_write_frame(app: &AppHandle, phase: &str, channel: &str, frame: &Value) {
+fn log_remote_pty_write_frame(app: &HostContext, phase: &str, channel: &str, frame: &Value) {
     let args = frame
         .get("args")
         .and_then(Value::as_array)
@@ -1408,7 +1403,7 @@ fn invoke_sidecar_for_remote(
             .unwrap_or_else(|| legacy_v1_args_to_params(channel, &args)),
         RemoteProtocol::LegacyV1 => legacy_v1_args_to_params(channel, &args),
     };
-    log_remote_pty_write_params(app, "remote-server.decoded", channel, &params);
+    log_remote_pty_write_params(&ctx, "remote-server.decoded", channel, &params);
     if let Some(result) = invoke_rust_for_remote(ctx, channel, &params) {
         return result;
     }
@@ -1612,7 +1607,7 @@ fn invoke_rust_for_remote(
             string_param(params, "sessionId", channel).and_then(|session_id| {
                 let codex = ctx.state::<CodexAppServerState>();
                 codex
-                    .start_session(app, session_id, maybe_options)
+                    .start_session(&ctx, session_id, maybe_options)
                     .map_err(bridge_error_message)
             })
         }
@@ -1626,7 +1621,7 @@ fn invoke_rust_for_remote(
                 string_param(params, "sdkSessionId", channel).and_then(|sdk_session_id| {
                     let codex = ctx.state::<CodexAppServerState>();
                     codex
-                        .resume_session(app, session_id, sdk_session_id, maybe_options)
+                        .resume_session(&ctx, session_id, sdk_session_id, maybe_options)
                         .map_err(bridge_error_message)
                 })
             })
@@ -1639,7 +1634,7 @@ fn invoke_rust_for_remote(
                 let prompt = string_param(params, "prompt", channel)?;
                 let images = optional_string_vec_param(params, "images");
                 codex
-                    .send_message(app, session_id, prompt, images)
+                    .send_message(&ctx, session_id, prompt, images)
                     .map_err(bridge_error_message)
             })
         }
@@ -1649,7 +1644,7 @@ fn invoke_rust_for_remote(
             };
             route.and_then(|(codex, session_id)| {
                 codex
-                    .abort_session(app, session_id)
+                    .abort_session(&ctx, session_id)
                     .map_err(bridge_error_message)
             })
         }
@@ -1684,7 +1679,7 @@ fn invoke_rust_for_remote(
                 Some(route) => route.map(|_| json!([])),
                 None => string_param(params, "sessionId", channel).and_then(|session_id| {
                     let Some(session) =
-                        notification_cmd::get_agent_session_snapshot(app, &session_id)
+                        notification_cmd::get_agent_session_snapshot(&ctx, &session_id)
                     else {
                         return Ok(json!([]));
                     };
@@ -1705,7 +1700,7 @@ fn invoke_rust_for_remote(
         "claude:get-account-info" => match codex_for_remote_session(ctx, channel, params) {
             Some(route) => route.map(|_| Value::Null),
             None => Ok(claude_cmd::account_info_from_auth_status(
-                &claude_cmd::fetch_auth_status_native(app),
+                &claude_cmd::fetch_auth_status_native(&ctx),
             )),
         },
         "claude:get-session-state" => match codex_for_remote_session(ctx, channel, params) {
@@ -1713,7 +1708,7 @@ fn invoke_rust_for_remote(
                 codex.get_session_state(&session_id).unwrap_or(Value::Null)
             }),
             None => string_param(params, "sessionId", channel).map(|session_id| {
-                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                notification_cmd::get_agent_session_snapshot(&ctx, &session_id)
                     .map(|session| claude_cmd::session_state_from_notification_snapshot(&session))
                     .unwrap_or(Value::Null)
             }),
@@ -1723,7 +1718,7 @@ fn invoke_rust_for_remote(
                 codex.get_session_meta(&session_id).unwrap_or(Value::Null)
             }),
             None => string_param(params, "sessionId", channel).map(|session_id| {
-                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                notification_cmd::get_agent_session_snapshot(&ctx, &session_id)
                     .map(|session| claude_cmd::session_meta_from_notification_snapshot(&session))
                     .unwrap_or(Value::Null)
             }),
@@ -1733,7 +1728,7 @@ fn invoke_rust_for_remote(
                 codex.get_context_usage(&session_id).unwrap_or(Value::Null)
             }),
             None => string_param(params, "sessionId", channel).map(|session_id| {
-                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                notification_cmd::get_agent_session_snapshot(&ctx, &session_id)
                     .and_then(|session| {
                         claude_cmd::context_usage_from_notification_snapshot(&session)
                     })
@@ -1758,9 +1753,9 @@ fn invoke_rust_for_remote(
             };
             route.and_then(|(codex, session_id)| {
                 let mode = string_param(params, "mode", channel)?;
-                let _ = codex.set_sandbox_mode(app, &session_id, mode);
+                let _ = codex.set_sandbox_mode(&ctx, &session_id, mode);
                 codex
-                    .reconfigure_session(app, &session_id)
+                    .reconfigure_session(&ctx, &session_id)
                     .map_err(bridge_error_message)
             })
         }
@@ -1770,9 +1765,9 @@ fn invoke_rust_for_remote(
             };
             route.and_then(|(codex, session_id)| {
                 let policy = string_param(params, "policy", channel)?;
-                let _ = codex.set_approval_policy(app, &session_id, policy);
+                let _ = codex.set_approval_policy(&ctx, &session_id, policy);
                 codex
-                    .reconfigure_session(app, &session_id)
+                    .reconfigure_session(&ctx, &session_id)
                     .map_err(bridge_error_message)
             })
         }
@@ -1783,7 +1778,7 @@ fn invoke_rust_for_remote(
             route.and_then(|(codex, session_id)| {
                 let model = string_param(params, "model", channel)?;
                 Ok(codex
-                    .set_model(app, &session_id, model)
+                    .set_model(&ctx, &session_id, model)
                     .unwrap_or_else(|| json!(false)))
             })
         }
@@ -1794,7 +1789,7 @@ fn invoke_rust_for_remote(
             route.and_then(|(codex, session_id)| {
                 let effort = string_param(params, "effort", channel)?;
                 Ok(codex
-                    .set_effort(app, &session_id, effort)
+                    .set_effort(&ctx, &session_id, effort)
                     .unwrap_or_else(|| json!(false)))
             })
         }
@@ -1804,7 +1799,7 @@ fn invoke_rust_for_remote(
             };
             route.and_then(|(codex, session_id)| {
                 codex
-                    .reset_session(app, session_id)
+                    .reset_session(&ctx, session_id)
                     .map_err(bridge_error_message)
             })
         }
@@ -1813,7 +1808,7 @@ fn invoke_rust_for_remote(
                 return None;
             };
             route.map(|(codex, session_id)| {
-                codex.rest_session(app, &session_id).unwrap_or(Value::Null)
+                codex.rest_session(&ctx, &session_id).unwrap_or(Value::Null)
             })
         }
         "claude:wake-session" => {
@@ -1857,7 +1852,7 @@ fn invoke_rust_for_remote(
                 let tool_use_id = string_param(params, "toolUseId", channel)?;
                 let result = params.get("result").cloned().unwrap_or(Value::Null);
                 codex
-                    .resolve_permission(app, &session_id, &tool_use_id, &result)
+                    .resolve_permission(&ctx, &session_id, &tool_use_id, &result)
                     .map_err(bridge_error_message)
             })
         }
@@ -1867,7 +1862,7 @@ fn invoke_rust_for_remote(
             };
             route.map(|_| json!(false))
         }
-        "claude:auth-status" => Ok(claude_cmd::fetch_auth_status_native(app)),
+        "claude:auth-status" => Ok(claude_cmd::fetch_auth_status_native(&ctx)),
         "claude:account-list" => remote_app_data_dir(ctx, channel).and_then(|data_dir| {
             serde_json::to_value(account_store::read_index(&data_dir))
                 .map_err(|err| format!("{channel} serialization failed: {err}"))
@@ -1890,12 +1885,12 @@ fn invoke_rust_for_remote(
         }
         "codex:account-list" => {
             let codex = ctx.state::<CodexAppServerState>();
-            Ok(codex.account_list(app))
+            Ok(codex.account_list(&ctx))
         }
         "codex:account-switch" => {
             string_param(params, "codexHome", channel).and_then(|codex_home| {
                 let codex = ctx.state::<CodexAppServerState>();
-                codex.switch_account(app, codex_home)
+                codex.switch_account(&ctx, codex_home)
             })
         }
         "claude:account-mark-warning-shown" => {
@@ -1905,7 +1900,7 @@ fn invoke_rust_for_remote(
                     .map_err(|err| err.to_string())
             })
         }
-        "claude:get-cli-path" => Ok(Value::String(claude_cmd::resolve_claude_cli_path(app))),
+        "claude:get-cli-path" => Ok(Value::String(claude_cmd::resolve_claude_cli_path(&ctx))),
         "claude:prepare-cli-session" => {
             string_param(params, "terminalId", channel).and_then(|terminal_id| {
                 string_param(params, "workspaceId", channel).and_then(|workspace_id| {
@@ -1913,8 +1908,7 @@ fn invoke_rust_for_remote(
                         string_param(params, "agentPreset", channel).and_then(|agent_preset| {
                             let current_session_id =
                                 optional_string_param(params, "currentSessionId");
-                            claude_cmd::prepare_cli_session_native(
-                                app,
+                            claude_cmd::prepare_cli_session_native(&ctx,
                                 terminal_id,
                                 workspace_id,
                                 cwd,
@@ -1979,7 +1973,7 @@ fn invoke_rust_for_remote(
         }),
         "claude:get-worktree-status" => {
             string_param(params, "sessionId", channel).map(|session_id| {
-                notification_cmd::get_agent_session_snapshot(app, &session_id)
+                notification_cmd::get_agent_session_snapshot(&ctx, &session_id)
                     .and_then(|session| {
                         claude_cmd::worktree_status_from_notification_snapshot(&session)
                     })
@@ -1988,10 +1982,10 @@ fn invoke_rust_for_remote(
         }
         "claude:cleanup-worktree" => string_param(params, "sessionId", channel).map(|session_id| {
             let delete_branch = bool_param(params, "deleteBranch", true);
-            if let Some(session) = notification_cmd::get_agent_session_snapshot(app, &session_id) {
+            if let Some(session) = notification_cmd::get_agent_session_snapshot(&ctx, &session_id) {
                 if claude_cmd::cleanup_worktree_from_notification_snapshot(&session, delete_branch)
                 {
-                    notification_cmd::clear_agent_session_worktree(app, &session_id);
+                    notification_cmd::clear_agent_session_worktree(&ctx, &session_id);
                     return json!(true);
                 }
             }
@@ -2038,7 +2032,7 @@ fn invoke_rust_for_remote(
                 }
             }
             Ok(
-                profile_cmd::profile_workspace_json_for_remote(app, &profile_id)
+                profile_cmd::profile_workspace_json_for_remote(&ctx, &profile_id)
                     .map(Value::String)
                     .unwrap_or(Value::Null),
             )
@@ -2072,7 +2066,7 @@ fn invoke_rust_for_remote(
                     // profile snapshot only when no live window exists.
                     window_registry::save_workspace_json(app, &target, &data)
                 } else {
-                    profile_cmd::profile_save_workspace_for_remote(app, &profile_id, &data)
+                    profile_cmd::profile_save_workspace_for_remote(&ctx, &profile_id, &data)
                 };
                 if saved {
                     let payload = if let Some(window_id) = window_id.as_deref() {
@@ -2080,7 +2074,7 @@ fn invoke_rust_for_remote(
                             json!({ "profileId": profile_id, "windowId": window_id, "data": data });
                         let _ = ctx.emit_to(window_id, "workspace:reload", payload.clone());
                         remote_debug_log(
-                            app,
+                            &ctx,
                             format!(
                                 "workspace:save targeted profile={} window={}",
                                 profile_id, window_id
@@ -2114,7 +2108,7 @@ fn invoke_rust_for_remote(
                 .unwrap_or_else(|| params.clone());
             deserialize_param::<pty_cmd::CreatePtyOptions>(options_value, channel, "options")
                 .and_then(|options| {
-                    let app_handle = app.clone();
+                    let app_handle = ctx.clone();
                     let pty_handle = app.state::<pty_cmd::PtyState>().handle();
                     let worker_buffer_handle = app.state::<WorkerBufferState>().handle();
                     let id = crate::async_rt::block_on(async move {
@@ -2136,17 +2130,17 @@ fn invoke_rust_for_remote(
         "pty:write" => string_param(params, "id", channel).and_then(|id| {
             string_param(params, "data", channel).and_then(|data| {
                 let state = app.state::<pty_cmd::PtyState>();
-                log_remote_pty_write_data(app, "remote-server.pty-write.enqueue", &id, &data);
+                log_remote_pty_write_data(&ctx, "remote-server.pty-write.enqueue", &id, &data);
                 let result = pty_cmd::write_pty_session(&state, &id, &data);
                 match &result {
                     Ok(()) => log_remote_pty_write_data(
-                        app,
+                        &ctx,
                         "remote-server.pty-write.enqueue-ok",
                         &id,
                         &data,
                     ),
                     Err(_) => log_remote_pty_write_data(
-                        app,
+                        &ctx,
                         "remote-server.pty-write.enqueue-err",
                         &id,
                         &data,
@@ -2167,7 +2161,7 @@ fn invoke_rust_for_remote(
             u16_param(params, "cols", channel).and_then(|cols| {
                 u16_param(params, "rows", channel).and_then(|rows| {
                     let state = app.state::<pty_cmd::PtyState>();
-                    pty_cmd::resize_pty_session_from_mobile_view(app, &state, &id, cols, rows)
+                    pty_cmd::resize_pty_session_from_mobile_view(&ctx, &state, &id, cols, rows)
                         .map(Value::Bool)
                         .map_err(|err| format!("{err:?}"))
                 })
@@ -2193,7 +2187,7 @@ fn invoke_rust_for_remote(
                 )?),
             };
             let state = app.state::<pty_cmd::PtyState>();
-            pty_cmd::set_pty_viewport_mode(app, &state, &id, mode, options)
+            pty_cmd::set_pty_viewport_mode(&ctx, &state, &id, mode, options)
                 .map_err(|err| format!("{err:?}"))
                 .and_then(|state| to_json_value(channel, state))
         }),
@@ -2210,7 +2204,7 @@ fn invoke_rust_for_remote(
                         "source",
                     )?;
                     let state = app.state::<pty_cmd::PtyState>();
-                    pty_cmd::set_pty_viewport_size(app, &state, &id, cols, rows, source)
+                    pty_cmd::set_pty_viewport_size(&ctx, &state, &id, cols, rows, source)
                         .map_err(|err| format!("{err:?}"))
                         .and_then(|state| to_json_value(channel, state))
                 })
@@ -2226,7 +2220,7 @@ fn invoke_rust_for_remote(
             string_param(params, "cwd", channel).and_then(|cwd| {
                 let shell = optional_string_param(params, "shell");
                 crate::async_rt::block_on(pty_cmd::pty_restart_native(
-                    app.clone(),
+                    ctx.clone(),
                     app.state::<pty_cmd::PtyState>(),
                     id,
                     cwd,
@@ -2242,7 +2236,7 @@ fn invoke_rust_for_remote(
                 .map(|cwd| cwd.map(Value::String).unwrap_or(Value::Null))
                 .map_err(|err| format!("{err:?}"))
         }),
-        "fs:home" => to_json_value(channel, fs_cmd::fs_home_native(app)),
+        "fs:home" => to_json_value(channel, fs_cmd::fs_home_native(&ctx)),
         "fs:readdir" => string_param_any(params, &["dirPath", "path"], channel)
             .and_then(|dir_path| to_json_value(channel, fs_cmd::fs_readdir_impl(dir_path))),
         "fs:readFile" => string_param_any(params, &["path", "filePath"], channel)
@@ -2252,7 +2246,7 @@ fn invoke_rust_for_remote(
         "fs:list-dirs" => {
             string_param_any(params, &["dirPath", "path"], channel).and_then(|dir_path| {
                 let include_hidden = bool_param(params, "includeHidden", false);
-                let value = fs_cmd::fs_list_dirs_native(app, dir_path, include_hidden);
+                let value = fs_cmd::fs_list_dirs_native(&ctx, dir_path, include_hidden);
                 to_json_value(channel, value)
             })
         }
@@ -2265,7 +2259,7 @@ fn invoke_rust_for_remote(
                 to_json_value(channel, fs_cmd::fs_delete_path_impl(target_path))
             })
         }
-        "fs:quick-locations" => to_json_value(channel, fs_cmd::fs_quick_locations_native(app)),
+        "fs:quick-locations" => to_json_value(channel, fs_cmd::fs_quick_locations_native(&ctx)),
         "fs:search" => {
             let dir_path = match string_param_any(params, &["dirPath", "path"], channel) {
                 Ok(value) => value,
@@ -2284,7 +2278,7 @@ fn invoke_rust_for_remote(
         }),
         "fs:watch" => string_param_any(params, &["dirPath", "path"], channel).map(|dir_path| {
             Value::Bool(fs_cmd::fs_watch_native(
-                app.clone(),
+                ctx.clone(),
                 app.state::<fs_cmd::FsWatcherState>().inner(),
                 dir_path,
             ))
@@ -2562,7 +2556,7 @@ fn invoke_rust_for_remote(
             string_param(params, "cwd", channel).and_then(|cwd| {
                 let install_pnpm = Some(bool_param(params, "installPnpm", false));
                 crate::async_rt::block_on(worktree_cmd::worktree_create_local(
-                    app.clone(),
+                    ctx.clone(),
                     ctx.state::<worktree_cmd::WorktreeState>(),
                     session_id,
                     cwd,
@@ -2620,15 +2614,15 @@ fn invoke_rust_for_remote(
                 .map_err(|err| format!("remote profile:get-active-ids serialization failed: {err}"))
         }
         "profile:load-snapshot" => profile_id_from_params(channel, params).map(|profile_id| {
-            profile_cmd::profile_load_snapshot_for_remote(app, &profile_id).unwrap_or(Value::Null)
+            profile_cmd::profile_load_snapshot_for_remote(&ctx, &profile_id).unwrap_or(Value::Null)
         }),
         "profile:load" => profile_id_from_params(channel, params).map(|profile_id| {
-            profile_cmd::profile_load_for_remote(app, &profile_id).unwrap_or(Value::Null)
+            profile_cmd::profile_load_for_remote(&ctx, &profile_id).unwrap_or(Value::Null)
         }),
         "profile:activate" => profile_id_from_params(channel, params)
-            .map(|profile_id| Value::Bool(profile_cmd::activate_profile_id(app, &profile_id))),
+            .map(|profile_id| Value::Bool(profile_cmd::activate_profile_id(&ctx, &profile_id))),
         "profile:deactivate" => profile_id_from_params(channel, params)
-            .map(|profile_id| Value::Bool(profile_cmd::deactivate_profile_id(app, &profile_id))),
+            .map(|profile_id| Value::Bool(profile_cmd::deactivate_profile_id(&ctx, &profile_id))),
         _ => return None,
     };
     Some(result)

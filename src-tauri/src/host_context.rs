@@ -78,6 +78,16 @@ impl HostContext {
     }
 
     #[allow(dead_code)]
+    pub fn data_dir_opt(&self) -> Option<PathBuf> {
+        crate::app_data::app_data_dir_opt(&self.app)
+    }
+
+    #[allow(dead_code)]
+    pub fn home_dir(&self) -> Option<PathBuf> {
+        self.app.path().home_dir().ok()
+    }
+
+    #[allow(dead_code)]
     pub fn sidecar(&self) -> SidecarState {
         self.app.state::<SidecarState>().inner().clone()
     }
@@ -174,6 +184,18 @@ impl HostContext {
             .data_dir
             .clone()
             .ok_or_else(|| "headless: app data dir not configured".to_string())
+    }
+
+    #[allow(dead_code)]
+    pub fn data_dir_opt(&self) -> Option<PathBuf> {
+        self.inner.data_dir.clone()
+    }
+
+    #[allow(dead_code)]
+    pub fn home_dir(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
     }
 
     #[allow(dead_code)]

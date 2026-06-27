@@ -26,7 +26,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+// Manager is only needed for the desktop resource-dir escape hatch (app.app()).
+#[cfg(feature = "desktop")]
+use tauri::Manager;
+
+use crate::host_context::HostContext;
 
 const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -140,7 +144,7 @@ impl CodexConnection {
 
     fn request_logged(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
         method: &str,
         params: Value,
@@ -485,8 +489,8 @@ fn codex_runtime_key() -> Option<&'static str> {
     }
 }
 
-fn managed_codex_candidate(app: &AppHandle) -> Option<PathBuf> {
-    let path = app_data::app_data_dir_opt(app)?
+fn managed_codex_candidate(app: &HostContext) -> Option<PathBuf> {
+    let path = app.data_dir_opt()?
         .join("runtimes")
         .join("codex")
         .join(crate::runtime_catalog::codex_version())
@@ -561,7 +565,7 @@ fn find_codex_on_path() -> Option<PathBuf> {
     None
 }
 
-fn resolve_codex_binary(app: &AppHandle) -> CodexBinary {
+fn resolve_codex_binary(app: &HostContext) -> CodexBinary {
     if let Ok(override_path) = std::env::var("BAT_CODEX_BIN") {
         let path = PathBuf::from(&override_path);
         if path.is_file() {
@@ -585,7 +589,10 @@ fn resolve_codex_binary(app: &AppHandle) -> CodexBinary {
         return CodexBinary::Native(path);
     }
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
+    // Bundled-resource lookup is a desktop packaging concept; the headless
+    // server resolves codex from PATH / cwd only.
+    #[cfg(feature = "desktop")]
+    if let Ok(resource_dir) = app.app().path().resource_dir() {
         if let Some(path) = bundled_codex_candidate(&resource_dir) {
             return CodexBinary::Native(path);
         }
@@ -605,21 +612,21 @@ fn resolve_codex_binary(app: &AppHandle) -> CodexBinary {
     CodexBinary::Wrapper("codex".to_string())
 }
 
-fn home_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().home_dir().ok()
+fn home_dir(app: &HostContext) -> Option<PathBuf> {
+    app.home_dir()
 }
 
-fn default_codex_home(app: &AppHandle) -> Option<PathBuf> {
+fn default_codex_home(app: &HostContext) -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| home_dir(app).map(|home| home.join(".codex")))
 }
 
-fn codex_account_state_path(app: &AppHandle) -> Option<PathBuf> {
-    app_data::app_data_dir_opt(app).map(|dir| dir.join(CODEX_ACCOUNT_STATE_FILE))
+fn codex_account_state_path(app: &HostContext) -> Option<PathBuf> {
+    app.data_dir_opt().map(|dir| dir.join(CODEX_ACCOUNT_STATE_FILE))
 }
 
-fn read_codex_account_state(app: &AppHandle) -> CodexAccountState {
+fn read_codex_account_state(app: &HostContext) -> CodexAccountState {
     let Some(path) = codex_account_state_path(app) else {
         return CodexAccountState::default();
     };
@@ -629,7 +636,7 @@ fn read_codex_account_state(app: &AppHandle) -> CodexAccountState {
         .unwrap_or_default()
 }
 
-fn write_codex_account_state(app: &AppHandle, state: &CodexAccountState) -> Result<(), String> {
+fn write_codex_account_state(app: &HostContext, state: &CodexAccountState) -> Result<(), String> {
     let path = codex_account_state_path(app)
         .ok_or_else(|| "could not resolve app data dir for Codex account state".to_string())?;
     if let Some(parent) = path.parent() {
@@ -660,8 +667,8 @@ struct UnifiedSettingsProbe {
     codex_shared_home: Option<String>,
 }
 
-fn read_unified_settings(app: &AppHandle) -> UnifiedSettingsProbe {
-    let Some(dir) = app_data::app_data_dir_opt(app) else {
+fn read_unified_settings(app: &HostContext) -> UnifiedSettingsProbe {
+    let Some(dir) = app.data_dir_opt() else {
         return UnifiedSettingsProbe::default();
     };
     let Ok(raw) = fs::read_to_string(dir.join("settings.json")) else {
@@ -670,7 +677,7 @@ fn read_unified_settings(app: &AppHandle) -> UnifiedSettingsProbe {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
-pub(crate) fn codex_unified_enabled(app: &AppHandle) -> bool {
+pub(crate) fn codex_unified_enabled(app: &HostContext) -> bool {
     read_unified_settings(app)
         .codex_unified_accounts
         .unwrap_or(true)
@@ -678,7 +685,7 @@ pub(crate) fn codex_unified_enabled(app: &AppHandle) -> bool {
 
 /// The single runtime CODEX_HOME used in unified mode. Defaults to `~/.codex`
 /// (mirrors Claude using the real `~/.claude`); overridable via `codexSharedHome`.
-fn shared_home(app: &AppHandle) -> Option<PathBuf> {
+fn shared_home(app: &HostContext) -> Option<PathBuf> {
     let probe = read_unified_settings(app);
     if let Some(custom) = probe.codex_shared_home.filter(|s| !s.trim().is_empty()) {
         let path = PathBuf::from(custom.trim());
@@ -689,7 +696,7 @@ fn shared_home(app: &AppHandle) -> Option<PathBuf> {
     default_codex_home(app)
 }
 
-pub(crate) fn active_codex_home(app: &AppHandle) -> Option<PathBuf> {
+pub(crate) fn active_codex_home(app: &HostContext) -> Option<PathBuf> {
     if codex_unified_enabled(app) {
         return shared_home(app);
     }
@@ -703,11 +710,11 @@ pub(crate) fn active_codex_home(app: &AppHandle) -> Option<PathBuf> {
 /// Persist the live identity in the shared home back to the active account's
 /// store on app exit (captures token refresh / new memory). No-op when the
 /// unified model is OFF. Best-effort — never blocks shutdown.
-pub fn snapshot_active_identity_on_exit(app: &AppHandle) {
+pub fn snapshot_active_identity_on_exit(app: &HostContext) {
     if !codex_unified_enabled(app) {
         return;
     }
-    let (Some(app_data), Some(shared)) = (app_data::app_data_dir_opt(app), shared_home(app)) else {
+    let (Some(app_data), Some(shared)) = (app.data_dir_opt(), shared_home(app)) else {
         return;
     };
     app_cmd::log_tauri(
@@ -753,7 +760,7 @@ fn value_has_email(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn codex_account_info_value(app: &AppHandle, codex_home: PathBuf, active: bool) -> Value {
+fn codex_account_info_value(app: &HostContext, codex_home: PathBuf, active: bool) -> Value {
     let (email, account_id, authenticated) = codex_auth_summary(&codex_home);
     let label = email
         .clone()
@@ -794,7 +801,7 @@ fn unified_account_info_value(
     })
 }
 
-fn discover_codex_homes(app: &AppHandle) -> Vec<PathBuf> {
+fn discover_codex_homes(app: &HostContext) -> Vec<PathBuf> {
     let mut homes = Vec::new();
     let mut push_home = |path: Option<PathBuf>| {
         if let Some(path) = path {
@@ -828,7 +835,7 @@ fn discover_codex_homes(app: &AppHandle) -> Vec<PathBuf> {
 // env var wins, otherwise parse SAKANA_API_KEY from the codex home's `.env`
 // (where the Fugu installer writes it, dotenvy KEY=VALUE). Returns None when
 // Fugu isn't configured, so the default codex path is unaffected.
-fn sakana_api_key_for_runtime(app: &AppHandle) -> Option<String> {
+fn sakana_api_key_for_runtime(app: &HostContext) -> Option<String> {
     if let Ok(key) = std::env::var("SAKANA_API_KEY") {
         if !key.trim().is_empty() {
             return Some(key);
@@ -868,12 +875,12 @@ fn read_env_file_key(path: &Path, key: &str) -> Option<String> {
     None
 }
 
-fn build_codex_command(app: &AppHandle) -> Command {
+fn build_codex_command(app: &HostContext) -> Command {
     build_codex_command_with_args(app, &["app-server"], true)
 }
 
 fn build_codex_command_with_args(
-    app: &AppHandle,
+    app: &HostContext,
     subcommand: &[&str],
     with_api_key_env: bool,
 ) -> Command {
@@ -930,7 +937,7 @@ fn build_codex_command_with_args(
     // Avoid launching codex app-server with cwd `/` (the default when a macOS
     // .app is started from Finder). Per-turn requests still pass an explicit
     // cwd; this only guards against fallbacks that read the process cwd.
-    if let Ok(home) = app.path().home_dir() {
+    if let Some(home) = app.home_dir() {
         if home.is_dir() {
             command.current_dir(home);
         }
@@ -944,7 +951,7 @@ const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Run `codex login` (ChatGPT browser OAuth by default; `--api-key <key>` when
 /// provided). codex opens the browser itself and writes auth.json on success.
 fn run_codex_login(
-    app: &AppHandle,
+    app: &HostContext,
     api_key: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
@@ -1143,7 +1150,7 @@ fn event_payload(session_id: &str, key: &str, value: Value) -> Value {
     json!({ "sessionId": session_id, key: value })
 }
 
-fn emit(app: &AppHandle, name: &str, session_id: &str, key: &str, value: Value) {
+fn emit(app: &HostContext, name: &str, session_id: &str, key: &str, value: Value) {
     publish_runtime_event(
         app,
         name,
@@ -1163,14 +1170,14 @@ fn codex_debug_enabled() -> bool {
     )
 }
 
-fn log_codex_global(app: &AppHandle, message: impl AsRef<str>) {
+fn log_codex_global(app: &HostContext, message: impl AsRef<str>) {
     if !codex_debug_enabled() {
         return;
     }
     app_cmd::log_tauri(app, &format!("[codex-app-server] {}", message.as_ref()));
 }
 
-fn log_codex(app: &AppHandle, session_id: &str, message: impl AsRef<str>) {
+fn log_codex(app: &HostContext, session_id: &str, message: impl AsRef<str>) {
     if !codex_debug_enabled() {
         return;
     }
@@ -1553,7 +1560,7 @@ fn turn_error_message_from_value(value: &Value) -> Option<String> {
         })
 }
 
-fn codex_sessions_root(app: &AppHandle) -> Option<PathBuf> {
+fn codex_sessions_root(app: &HostContext) -> Option<PathBuf> {
     active_codex_home(app).map(|home| home.join("sessions"))
 }
 
@@ -1900,7 +1907,7 @@ fn history_event_result(payload: &Value) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn load_codex_history_items(app: &AppHandle, session_id: &str, thread_id: &str) -> Vec<Value> {
+fn load_codex_history_items(app: &HostContext, session_id: &str, thread_id: &str) -> Vec<Value> {
     let Some(root) = codex_sessions_root(app) else {
         return Vec::new();
     };
@@ -2126,7 +2133,7 @@ impl CodexAppServerState {
         json!(["untrusted", "on-request", "never"])
     }
 
-    pub fn account_info(&self, app: &AppHandle) -> Value {
+    pub fn account_info(&self, app: &HostContext) -> Value {
         if codex_unified_enabled(app) {
             return self.unified_account_info(app);
         }
@@ -2141,7 +2148,7 @@ impl CodexAppServerState {
             })
     }
 
-    pub fn account_list(&self, app: &AppHandle) -> Value {
+    pub fn account_list(&self, app: &HostContext) -> Value {
         if codex_unified_enabled(app) {
             return self.unified_account_list(app);
         }
@@ -2183,11 +2190,11 @@ impl CodexAppServerState {
             || lower.contains("401 unauthorized")
     }
 
-    fn mark_shared_auth_valid(&self, app: &AppHandle, reason: &str) {
+    fn mark_shared_auth_valid(&self, app: &HostContext, reason: &str) {
         if !codex_unified_enabled(app) {
             return;
         }
-        let (Some(app_data), Some(shared)) = (app_data::app_data_dir_opt(app), shared_home(app))
+        let (Some(app_data), Some(shared)) = (app.data_dir_opt(), shared_home(app))
         else {
             return;
         };
@@ -2209,11 +2216,11 @@ impl CodexAppServerState {
         }
     }
 
-    fn mark_shared_auth_needs_login(&self, app: &AppHandle, reason: &str) {
+    fn mark_shared_auth_needs_login(&self, app: &HostContext, reason: &str) {
         if !codex_unified_enabled(app) {
             return;
         }
-        let (Some(app_data), Some(shared)) = (app_data::app_data_dir_opt(app), shared_home(app))
+        let (Some(app_data), Some(shared)) = (app.data_dir_opt(), shared_home(app))
         else {
             return;
         };
@@ -2266,7 +2273,7 @@ impl CodexAppServerState {
 
     fn sync_unified_active_from_shared(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         reason: &str,
     ) -> Result<(bool, Option<String>), String> {
         if !codex_unified_enabled(app) {
@@ -2277,7 +2284,7 @@ impl CodexAppServerState {
             .unified_swap_lock
             .lock()
             .map_err(|_| "codex swap lock poisoned".to_string())?;
-        let app_data = app_data::app_data_dir_opt(app)
+        let app_data = app.data_dir_opt()
             .ok_or_else(|| "could not resolve app data dir".to_string())?;
         let shared =
             shared_home(app).ok_or_else(|| "could not resolve shared Codex home".to_string())?;
@@ -2312,9 +2319,9 @@ impl CodexAppServerState {
         Ok((changed, account.map(|a| a.id).or(after)))
     }
 
-    fn unified_account_info(&self, app: &AppHandle) -> Value {
+    fn unified_account_info(&self, app: &HostContext) -> Value {
         let _ = self.sync_unified_active_from_shared(app, "account-info");
-        let Some(app_data) = app_data::app_data_dir_opt(app) else {
+        let Some(app_data) = app.data_dir_opt() else {
             return json!({ "label": "Codex", "authenticated": false, "active": true, "unified": true });
         };
         let shared = shared_home(app).unwrap_or_else(|| app_data.clone());
@@ -2331,9 +2338,9 @@ impl CodexAppServerState {
         }
     }
 
-    fn unified_account_list(&self, app: &AppHandle) -> Value {
+    fn unified_account_list(&self, app: &HostContext) -> Value {
         let _ = self.sync_unified_active_from_shared(app, "account-list");
-        let Some(app_data) = app_data::app_data_dir_opt(app) else {
+        let Some(app_data) = app.data_dir_opt() else {
             return json!({ "accounts": [], "unified": true });
         };
         let shared = shared_home(app).unwrap_or_else(|| app_data.clone());
@@ -2365,7 +2372,7 @@ impl CodexAppServerState {
             .unwrap_or(false)
     }
 
-    fn drop_connection(&self, app: &AppHandle, reason: &str) {
+    fn drop_connection(&self, app: &HostContext, reason: &str) {
         let old = match self.inner.connection.lock() {
             Ok(mut guard) => guard.take(),
             Err(_) => return,
@@ -2386,13 +2393,13 @@ impl CodexAppServerState {
         }
     }
 
-    fn switch_unified(&self, app: &AppHandle, selector: String) -> Result<Value, String> {
+    fn switch_unified(&self, app: &HostContext, selector: String) -> Result<Value, String> {
         let _swap = self
             .inner
             .unified_swap_lock
             .lock()
             .map_err(|_| "codex swap lock poisoned".to_string())?;
-        let app_data = app_data::app_data_dir_opt(app)
+        let app_data = app.data_dir_opt()
             .ok_or_else(|| "could not resolve app data dir".to_string())?;
         let shared =
             shared_home(app).ok_or_else(|| "could not resolve shared Codex home".to_string())?;
@@ -2528,11 +2535,11 @@ impl CodexAppServerState {
     /// Startup hook: recover from an interrupted swap, then auto-migrate legacy
     /// multi-HOME Codex accounts into the unified model on first run (unified is
     /// the default). Copy-only and idempotent. Intended to run off the UI thread.
-    pub fn init_unified_on_startup(&self, app: &AppHandle) {
+    pub fn init_unified_on_startup(&self, app: &HostContext) {
         if !codex_unified_enabled(app) {
             return;
         }
-        let (Some(app_data), Some(shared)) = (app_data::app_data_dir_opt(app), shared_home(app))
+        let (Some(app_data), Some(shared)) = (app.data_dir_opt(), shared_home(app))
         else {
             return;
         };
@@ -2548,9 +2555,9 @@ impl CodexAppServerState {
         }
     }
 
-    pub fn unified_status(&self, app: &AppHandle) -> Value {
+    pub fn unified_status(&self, app: &HostContext) -> Value {
         let enabled = codex_unified_enabled(app);
-        let index = app_data::app_data_dir_opt(app)
+        let index = app.data_dir_opt()
             .map(|dir| codex_account_store::read_index(&dir))
             .unwrap_or_default();
         json!({
@@ -2561,13 +2568,13 @@ impl CodexAppServerState {
         })
     }
 
-    pub fn unified_migrate(&self, app: &AppHandle) -> Result<Value, String> {
+    pub fn unified_migrate(&self, app: &HostContext) -> Result<Value, String> {
         let _swap = self
             .inner
             .unified_swap_lock
             .lock()
             .map_err(|_| "codex swap lock poisoned".to_string())?;
-        let app_data = app_data::app_data_dir_opt(app)
+        let app_data = app.data_dir_opt()
             .ok_or_else(|| "could not resolve app data dir".to_string())?;
         let shared =
             shared_home(app).ok_or_else(|| "could not resolve shared Codex home".to_string())?;
@@ -2589,13 +2596,13 @@ impl CodexAppServerState {
     /// the active Codex home (the shared `~/.codex` in unified mode). In unified
     /// mode the freshly-authenticated identity is registered as an account and
     /// made active. Blocking — call from `spawn_blocking`.
-    pub fn account_login(&self, app: &AppHandle, api_key: Option<String>) -> Result<Value, String> {
+    pub fn account_login(&self, app: &HostContext, api_key: Option<String>) -> Result<Value, String> {
         let unified = codex_unified_enabled(app);
         // Snapshot the current active identity before login overwrites the home,
         // so the previously-active account keeps its latest tokens.
         if unified {
             if let (Some(app_data), Some(shared)) =
-                (app_data::app_data_dir_opt(app), shared_home(app))
+                (app.data_dir_opt(), shared_home(app))
             {
                 let _swap = self.inner.unified_swap_lock.lock();
                 codex_account_store::snapshot_active_for_exit(&app_data, &shared);
@@ -2611,7 +2618,7 @@ impl CodexAppServerState {
 
         if unified {
             if let (Some(app_data), Some(shared)) =
-                (app_data::app_data_dir_opt(app), shared_home(app))
+                (app.data_dir_opt(), shared_home(app))
             {
                 let _swap = self.inner.unified_swap_lock.lock();
                 match codex_account_store::capture_current(&app_data, &shared, None) {
@@ -2643,7 +2650,7 @@ impl CodexAppServerState {
 
     pub fn account_capture_current(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         label: Option<String>,
     ) -> Result<Value, String> {
         let _swap = self
@@ -2651,7 +2658,7 @@ impl CodexAppServerState {
             .unified_swap_lock
             .lock()
             .map_err(|_| "codex swap lock poisoned".to_string())?;
-        let app_data = app_data::app_data_dir_opt(app)
+        let app_data = app.data_dir_opt()
             .ok_or_else(|| "could not resolve app data dir".to_string())?;
         let shared =
             shared_home(app).ok_or_else(|| "could not resolve shared Codex home".to_string())?;
@@ -2665,7 +2672,7 @@ impl CodexAppServerState {
 
     pub fn account_remove_unified(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         account_id: String,
     ) -> Result<Value, String> {
         let _swap = self
@@ -2673,7 +2680,7 @@ impl CodexAppServerState {
             .unified_swap_lock
             .lock()
             .map_err(|_| "codex swap lock poisoned".to_string())?;
-        let app_data = app_data::app_data_dir_opt(app)
+        let app_data = app.data_dir_opt()
             .ok_or_else(|| "could not resolve app data dir".to_string())?;
         let shared =
             shared_home(app).ok_or_else(|| "could not resolve shared Codex home".to_string())?;
@@ -2685,7 +2692,7 @@ impl CodexAppServerState {
         Ok(json!({ "success": removed }))
     }
 
-    pub fn switch_account(&self, app: &AppHandle, codex_home: String) -> Result<Value, String> {
+    pub fn switch_account(&self, app: &HostContext, codex_home: String) -> Result<Value, String> {
         if codex_unified_enabled(app) {
             return self.switch_unified(app, codex_home);
         }
@@ -2753,7 +2760,7 @@ impl CodexAppServerState {
 
     fn ensure_thread_for_session(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
     ) -> Result<String, BridgeError> {
         let (model, cwd, approval_policy, sandbox_mode, existing_thread) = {
@@ -2872,7 +2879,7 @@ impl CodexAppServerState {
 
     fn take_thread_ownership(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         thread_id: &str,
         owner_session_id: &str,
     ) -> Vec<String> {
@@ -2956,7 +2963,7 @@ impl CodexAppServerState {
 
     fn interrupt_turn_for_replacement(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         connection: &CodexConnection,
         session_id: &str,
         thread_id: &str,
@@ -3037,7 +3044,7 @@ impl CodexAppServerState {
     // shared connection (one app-server process, one active account — so one
     // poll covers every session/window). Returns None when codex isn't in use:
     // we never spawn an app-server just to read usage.
-    pub fn fetch_account_rate_limits(&self, app: &AppHandle) -> Option<Value> {
+    pub fn fetch_account_rate_limits(&self, app: &HostContext) -> Option<Value> {
         let connection = self
             .inner
             .connection
@@ -3070,7 +3077,7 @@ impl CodexAppServerState {
         should_clear
     }
 
-    fn ensure_connection(&self, app: &AppHandle) -> Result<Arc<CodexConnection>, String> {
+    fn ensure_connection(&self, app: &HostContext) -> Result<Arc<CodexConnection>, String> {
         let (active_changed, current_auth_id) =
             self.sync_unified_active_from_shared(app, "ensure-connection")?;
         if active_changed {
@@ -3211,7 +3218,7 @@ impl CodexAppServerState {
                 "clientInfo": {
                     "name": "better_agent_terminal",
                     "title": "Better Agent Terminal",
-                    "version": app.package_info().version.to_string()
+                    "version": app.version()
                 },
                 "capabilities": { "experimentalApi": true }
             }),
@@ -3241,7 +3248,7 @@ impl CodexAppServerState {
 
     pub fn start_session(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: String,
         options: Option<Value>,
     ) -> Result<Value, BridgeError> {
@@ -3377,7 +3384,7 @@ impl CodexAppServerState {
 
     pub fn resume_session(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: String,
         sdk_session_id: String,
         options: Option<Value>,
@@ -3553,7 +3560,7 @@ impl CodexAppServerState {
 
     pub fn send_message(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: String,
         prompt: String,
         images: Vec<String>,
@@ -3913,7 +3920,7 @@ impl CodexAppServerState {
         Ok(json!({ "ok": true }))
     }
 
-    fn fail_turn(&self, app: &AppHandle, session_id: &str, message: String) {
+    fn fail_turn(&self, app: &HostContext, session_id: &str, message: String) {
         log_codex(app, session_id, format!("fail_turn: {message}"));
         self.cancel_pending_approvals(app, session_id);
         if Self::auth_failure_message(&message) {
@@ -3955,7 +3962,7 @@ impl CodexAppServerState {
         );
     }
 
-    pub fn abort_session(&self, app: &AppHandle, session_id: String) -> Result<Value, BridgeError> {
+    pub fn abort_session(&self, app: &HostContext, session_id: String) -> Result<Value, BridgeError> {
         log_codex(app, &session_id, "abort_session requested");
         // Answer any approval prompt with "cancel" first so a pending approval
         // cannot keep the turn (and the interrupt below) blocked.
@@ -4041,7 +4048,7 @@ impl CodexAppServerState {
         }
     }
 
-    pub fn reset_session(&self, app: &AppHandle, session_id: String) -> Result<Value, BridgeError> {
+    pub fn reset_session(&self, app: &HostContext, session_id: String) -> Result<Value, BridgeError> {
         let (model, cwd, approval_policy, sandbox_mode, thread_id) = {
             let sessions = self.inner.sessions.lock().expect("codex sessions lock");
             let session = sessions
@@ -4118,7 +4125,7 @@ impl CodexAppServerState {
         Ok(json!(true))
     }
 
-    pub fn rest_session(&self, app: &AppHandle, session_id: &str) -> Option<Value> {
+    pub fn rest_session(&self, app: &HostContext, session_id: &str) -> Option<Value> {
         let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
         let session = sessions.get_mut(session_id)?;
         session.is_resting = true;
@@ -4210,7 +4217,7 @@ impl CodexAppServerState {
         }))
     }
 
-    pub fn set_model(&self, app: &AppHandle, session_id: &str, model: String) -> Option<Value> {
+    pub fn set_model(&self, app: &HostContext, session_id: &str, model: String) -> Option<Value> {
         let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
         let session = sessions.get_mut(session_id)?;
         if session.model == model {
@@ -4228,7 +4235,7 @@ impl CodexAppServerState {
         Some(json!(true))
     }
 
-    pub fn set_effort(&self, app: &AppHandle, session_id: &str, effort: String) -> Option<Value> {
+    pub fn set_effort(&self, app: &HostContext, session_id: &str, effort: String) -> Option<Value> {
         let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
         let session = sessions.get_mut(session_id)?;
         let next = normalize_effort(Some(&effort));
@@ -4249,7 +4256,7 @@ impl CodexAppServerState {
 
     pub fn set_sandbox_mode(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
         mode: String,
     ) -> Option<Value> {
@@ -4271,7 +4278,7 @@ impl CodexAppServerState {
 
     pub fn set_approval_policy(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
         policy: String,
     ) -> Option<Value> {
@@ -4293,7 +4300,7 @@ impl CodexAppServerState {
 
     pub fn reconfigure_session(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
     ) -> Result<Value, BridgeError> {
         let (thread_id, model, cwd, approval_policy, sandbox_mode, meta) = {
@@ -4341,7 +4348,7 @@ impl CodexAppServerState {
     // request id so resolve_permission() can answer codex later.
     fn handle_approval_request(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         connection: &Weak<CodexConnection>,
         request_id: Value,
         method: &str,
@@ -4459,7 +4466,7 @@ impl CodexAppServerState {
 
     pub fn resolve_permission(
         &self,
-        app: &AppHandle,
+        app: &HostContext,
         session_id: &str,
         tool_use_id: &str,
         result: &Value,
@@ -4534,7 +4541,7 @@ impl CodexAppServerState {
 
     // Cancel any approvals still waiting on a session whose turn ended or was
     // aborted: answer codex with "cancel" and dismiss the renderer prompts.
-    fn cancel_pending_approvals(&self, app: &AppHandle, session_id: &str) {
+    fn cancel_pending_approvals(&self, app: &HostContext, session_id: &str) {
         let drained: Vec<(String, PendingApproval)> = {
             let mut approvals = self
                 .inner
@@ -4572,7 +4579,7 @@ impl CodexAppServerState {
 
     // Dismiss prompts whose connection died (app-server exited): there is no
     // one to answer anymore, just clear the renderer state.
-    fn cancel_dead_pending_approvals(&self, app: &AppHandle) {
+    fn cancel_dead_pending_approvals(&self, app: &HostContext) {
         let drained: Vec<(String, PendingApproval)> = {
             let mut approvals = self
                 .inner
@@ -4601,7 +4608,7 @@ impl CodexAppServerState {
 }
 
 fn handle_server_message(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     pending: &Arc<PendingTable>,
     connection: &Weak<CodexConnection>,
@@ -4658,7 +4665,7 @@ fn handle_server_message(
 }
 
 fn handle_server_request(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     connection: &Weak<CodexConnection>,
     request_id: Value,
@@ -4687,11 +4694,15 @@ fn handle_server_request(
     }
 }
 
-fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &str, params: Value) {
+fn handle_notification(app: &HostContext, state: &CodexAppServerState, method: &str, params: Value) {
     // Account-level notifications carry no thread/session id and must be
     // handled BEFORE the session-mapping requirement below drops them.
     if method == "account/rateLimits/updated" {
-        crate::claude_usage::publish_codex_usage(app, &params);
+        // Usage telemetry surfaces in the desktop status line only.
+        #[cfg(feature = "desktop")]
+        crate::claude_usage::publish_codex_usage(app.app(), &params);
+        #[cfg(not(feature = "desktop"))]
+        let _ = &params;
         return;
     }
     let Some(session_id) = state.session_id_for_notification(&params) else {
@@ -4888,7 +4899,7 @@ fn handle_notification(app: &AppHandle, state: &CodexAppServerState, method: &st
 }
 
 fn handle_error_notification(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     params: &Value,
@@ -4901,7 +4912,7 @@ fn handle_error_notification(
 }
 
 fn append_stream_delta(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     key: &str,
@@ -4934,7 +4945,7 @@ fn append_stream_delta(
 }
 
 fn append_completed_reasoning_if_missing(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     item: &Value,
@@ -4956,7 +4967,7 @@ fn append_completed_reasoning_if_missing(
 }
 
 fn handle_command_execution_output_delta(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     params: &Value,
@@ -5041,7 +5052,7 @@ fn completed_command_execution_result(
 }
 
 fn handle_item_started(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     item: &Value,
@@ -5172,7 +5183,7 @@ fn handle_item_started(
 }
 
 fn handle_item_completed(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     item: &Value,
@@ -5256,7 +5267,7 @@ fn handle_item_completed(
 }
 
 fn handle_usage_updated(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     params: &Value,
@@ -5303,7 +5314,7 @@ fn read_usage_u64(usage: &Value, keys: &[&str]) -> Option<u64> {
 }
 
 fn handle_turn_completed(
-    app: &AppHandle,
+    app: &HostContext,
     state: &CodexAppServerState,
     session_id: &str,
     params: &Value,

@@ -13,9 +13,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tauri::AppHandle;
 
 use crate::app_data;
+use crate::host_context::HostContext;
 
 const OPENAI_KEY_FILE: &str = "openai-api-key.bin";
 const KEYRING_SERVICE: &str = "better-agent-terminal:openai-api-key";
@@ -60,11 +60,11 @@ fn load_legacy_file_key(data_dir: &Path) -> Option<String> {
     }
 }
 
-pub fn configured_openai_key_for_runtime(app: &AppHandle) -> Option<String> {
+pub fn configured_openai_key_for_runtime(app: &HostContext) -> Option<String> {
     if let Some(key) = load_keyring_key() {
         return Some(key);
     }
-    if let Some(data_dir) = app_data::app_data_dir_opt(app) {
+    if let Some(data_dir) = app.data_dir_opt() {
         if let Some(key) = load_legacy_file_key(&data_dir) {
             return Some(key);
         }

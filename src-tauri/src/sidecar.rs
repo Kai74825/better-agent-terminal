@@ -491,8 +491,14 @@ pub type EventSink = Arc<dyn Fn(&str, &Value) + Send + Sync + 'static>;
 
 #[cfg(feature = "desktop")]
 pub fn app_handle_emit_sink(app: AppHandle) -> EventSink {
+    use crate::host_context::HostContext;
     Arc::new(move |name: &str, params: &Value| {
-        publish_runtime_event(&app, name, params.clone(), "node-sidecar");
+        publish_runtime_event(
+            &HostContext::from_app(app.clone()),
+            name,
+            params.clone(),
+            "node-sidecar",
+        );
         app.state::<crate::remote_server::RustRemoteServerState>()
             .broadcast_event(name, params);
     })

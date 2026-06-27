@@ -21,6 +21,8 @@ use crate::commands::settings::resolve_shell_path;
 use crate::commands::worker_buffer::{append_worker_log_lines, WorkerBufferState};
 use crate::log_file::append_line;
 use crate::remote_client::RustRemoteClientState;
+use crate::host_context::HostContext;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -32,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const REMOTE_PTY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +52,7 @@ impl<E: std::fmt::Display> From<E> for CommandError {
     }
 }
 
+#[cfg(feature = "desktop")]
 fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Some(profile_id) = window_registry::profile_id_for_window(app, window.label()) else {
         return false;
@@ -58,6 +62,7 @@ fn is_remote_profile_window(app: &AppHandle, window: &WebviewWindow) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "desktop")]
 fn remote_invoke_for_window(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -89,6 +94,7 @@ where
     })
 }
 
+#[cfg(feature = "desktop")]
 fn remote_unit_for_window(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -354,13 +360,13 @@ pub(crate) fn describe_pty_input(data: &str) -> String {
     describe_pty_bytes(data.as_bytes())
 }
 
-pub(crate) fn pty_input_debug_log(app: &AppHandle, message: impl AsRef<str>) {
+pub(crate) fn pty_input_debug_log(app: &HostContext, message: impl AsRef<str>) {
     if !pty_input_debug_enabled() {
         return;
     }
     let message = format!("[pty-input] {}", message.as_ref());
     eprintln!("{message}");
-    let Some(path) = app_data::app_data_dir_opt(app).map(|dir| dir.join("logs").join("debug.log"))
+    let Some(path) = app.data_dir_opt().map(|dir| dir.join("logs").join("debug.log"))
     else {
         return;
     };
@@ -368,13 +374,13 @@ pub(crate) fn pty_input_debug_log(app: &AppHandle, message: impl AsRef<str>) {
     let _ = append_line(&path, &line);
 }
 
-fn pty_output_debug_log(app: &AppHandle, message: impl AsRef<str>) {
+fn pty_output_debug_log(app: &HostContext, message: impl AsRef<str>) {
     if !pty_output_debug_enabled() {
         return;
     }
     let message = format!("[pty-output] {}", message.as_ref());
     eprintln!("{message}");
-    let Some(path) = app_data::app_data_dir_opt(app).map(|dir| dir.join("logs").join("debug.log"))
+    let Some(path) = app.data_dir_opt().map(|dir| dir.join("logs").join("debug.log"))
     else {
         return;
     };
@@ -383,13 +389,13 @@ fn pty_output_debug_log(app: &AppHandle, message: impl AsRef<str>) {
 }
 
 #[cfg(target_family = "unix")]
-fn pty_termios_debug_log(app: &AppHandle, message: impl AsRef<str>) {
+fn pty_termios_debug_log(app: &HostContext, message: impl AsRef<str>) {
     if !pty_input_debug_enabled() {
         return;
     }
     let message = format!("[pty-termios] {}", message.as_ref());
     eprintln!("{message}");
-    let Some(path) = app_data::app_data_dir_opt(app).map(|dir| dir.join("logs").join("debug.log"))
+    let Some(path) = app.data_dir_opt().map(|dir| dir.join("logs").join("debug.log"))
     else {
         return;
     };
@@ -417,7 +423,7 @@ fn describe_termios(termios: &libc::termios) -> String {
 }
 
 #[cfg(target_family = "unix")]
-fn configure_initial_pty_termios(app: &AppHandle, id: &str, master: &dyn MasterPty) {
+fn configure_initial_pty_termios(app: &HostContext, id: &str, master: &dyn MasterPty) {
     let Some(fd) = master.as_raw_fd() else {
         pty_termios_debug_log(app, format!("id={id} raw-fd=unavailable"));
         return;
@@ -500,7 +506,7 @@ fn resize_session(session: &mut PtySession, cols: u16, rows: u16) -> Result<(), 
     Ok(())
 }
 
-fn emit_viewport_state(app: &AppHandle, id: &str, state: &TerminalViewportState) {
+fn emit_viewport_state(app: &HostContext, id: &str, state: &TerminalViewportState) {
     crate::event_hub::publish_runtime_event(
         app,
         "pty:viewport-state",
@@ -727,7 +733,7 @@ fn append_pty_output_buffer(
 }
 
 fn emit_pty_output(
-    app: &AppHandle,
+    app: &HostContext,
     sessions: &Arc<Mutex<HashMap<String, PtySession>>>,
     worker_buffer: Option<&Arc<Mutex<HashMap<String, String>>>>,
     id: &str,
@@ -749,7 +755,7 @@ fn emit_pty_output(
 }
 
 fn spawn_output_coalescer(
-    app: AppHandle,
+    app: HostContext,
     id: String,
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
     worker_buffer: Option<Arc<Mutex<HashMap<String, String>>>>,
@@ -798,7 +804,7 @@ fn spawn_output_coalescer(
 }
 
 fn spawn_pty_input_writer(
-    app: AppHandle,
+    app: HostContext,
     id: String,
     mut writer: Box<dyn Write + Send>,
 ) -> Sender<String> {
@@ -842,7 +848,7 @@ fn spawn_pty_input_writer(
 }
 
 pub(crate) fn start_pty_session(
-    app: &AppHandle,
+    app: &HostContext,
     map_handle: Arc<Mutex<HashMap<String, PtySession>>>,
     worker_buffer_handle: Option<Arc<Mutex<HashMap<String, String>>>>,
     options: CreatePtyOptions,
@@ -883,7 +889,7 @@ pub(crate) fn start_pty_session(
         })?;
     #[cfg(target_family = "unix")]
     configure_initial_pty_termios(app, &options.id, pair.master.as_ref());
-    let app_data_dir = app_data::app_data_dir_opt(&app);
+    let app_data_dir = app.data_dir_opt();
     let cmd = build_command(&options, app_data_dir.as_deref());
     pty_input_debug_log(
         app,
@@ -1025,7 +1031,7 @@ pub async fn pty_create(
     let handle = state.handle();
     let worker_buffer_handle = worker_buffer.handle();
     crate::async_rt::spawn_blocking(move || {
-        start_pty_session(&app, handle, Some(worker_buffer_handle), options)
+        start_pty_session(&crate::host_context::HostContext::from_app(app.clone()), handle, Some(worker_buffer_handle), options)
     })
     .await
     .map_err(|e| CommandError {
@@ -1051,7 +1057,7 @@ pub fn pty_write(
     ) {
         if trace_input {
             pty_input_debug_log(
-                &app,
+                &crate::host_context::HostContext::from_app(app.clone()),
                 format!("route=remote id={id} {}", describe_pty_input(&data)),
             );
         }
@@ -1059,16 +1065,16 @@ pub fn pty_write(
     }
     if trace_input {
         pty_input_debug_log(
-            &app,
+            &crate::host_context::HostContext::from_app(app.clone()),
             format!("route=local id={id} {}", describe_pty_input(&data)),
         );
     }
     let result = write_pty_session(&state, &id, &data);
     if trace_input {
         match &result {
-            Ok(()) => pty_input_debug_log(&app, format!("route=local id={id} enqueue=ok")),
+            Ok(()) => pty_input_debug_log(&crate::host_context::HostContext::from_app(app.clone()), format!("route=local id={id} enqueue=ok")),
             Err(err) => pty_input_debug_log(
-                &app,
+                &crate::host_context::HostContext::from_app(app.clone()),
                 format!("route=local id={id} enqueue=error {}", err.message),
             ),
         }
@@ -1136,7 +1142,7 @@ pub fn pty_resize(
     ) {
         return result;
     }
-    resize_pty_session_from_desktop(&app, &state, &id, cols, rows).map(|_| ())
+    resize_pty_session_from_desktop(&crate::host_context::HostContext::from_app(app.clone()), &state, &id, cols, rows).map(|_| ())
 }
 
 pub(crate) fn get_pty_viewport_state(
@@ -1154,7 +1160,7 @@ pub(crate) fn get_pty_viewport_state(
 }
 
 fn set_pty_viewport_size_for_source(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
     cols: u16,
@@ -1184,7 +1190,7 @@ fn set_pty_viewport_size_for_source(
 }
 
 pub(crate) fn resize_pty_session_from_desktop(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
     cols: u16,
@@ -1202,7 +1208,7 @@ pub(crate) fn resize_pty_session_from_desktop(
 }
 
 pub(crate) fn resize_pty_session_from_mobile_view(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
     cols: u16,
@@ -1220,7 +1226,7 @@ pub(crate) fn resize_pty_session_from_mobile_view(
 }
 
 pub(crate) fn set_pty_viewport_mode(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
     mode: TerminalViewportMode,
@@ -1279,7 +1285,7 @@ pub(crate) fn set_pty_viewport_mode(
 }
 
 pub(crate) fn set_pty_viewport_size(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
     cols: u16,
@@ -1331,7 +1337,7 @@ pub fn pty_set_viewport_mode(
     ) {
         return result;
     }
-    set_pty_viewport_mode(&app, &state, &id, mode, options)
+    set_pty_viewport_mode(&crate::host_context::HostContext::from_app(app.clone()), &state, &id, mode, options)
 }
 
 #[cfg(feature = "desktop")]
@@ -1358,7 +1364,7 @@ pub fn pty_set_viewport_size(
     ) {
         return result;
     }
-    set_pty_viewport_size(&app, &state, &id, cols, rows, source)
+    set_pty_viewport_size(&crate::host_context::HostContext::from_app(app.clone()), &state, &id, cols, rows, source)
 }
 
 #[cfg(feature = "desktop")]
@@ -1373,7 +1379,7 @@ pub fn pty_kill(
     {
         return result;
     }
-    kill_pty_session_with_exit(&app, &state, &id)
+    kill_pty_session_with_exit(&crate::host_context::HostContext::from_app(app.clone()), &state, &id)
 }
 
 pub(crate) fn kill_pty_session(state: &PtyState, id: &str) -> Result<(), CommandError> {
@@ -1387,7 +1393,7 @@ pub(crate) fn kill_pty_session(state: &PtyState, id: &str) -> Result<(), Command
 }
 
 pub(crate) fn kill_pty_session_with_exit(
-    app: &AppHandle,
+    app: &HostContext,
     state: &PtyState,
     id: &str,
 ) -> Result<(), CommandError> {
@@ -1428,7 +1434,7 @@ pub async fn pty_restart(
         return result;
     }
     let handle = state.handle();
-    crate::async_rt::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
+    crate::async_rt::spawn_blocking(move || pty_restart_impl(crate::host_context::HostContext::from_app(app), handle, id, cwd, shell))
         .await
         .map_err(|e| CommandError {
             message: format!("pty.restart worker failed: {e}"),
@@ -1436,7 +1442,7 @@ pub async fn pty_restart(
 }
 
 pub(crate) async fn pty_restart_native(
-    app: AppHandle,
+    app: HostContext,
     state: State<'_, PtyState>,
     id: String,
     cwd: String,
@@ -1451,7 +1457,7 @@ pub(crate) async fn pty_restart_native(
 }
 
 fn pty_restart_impl(
-    app: AppHandle,
+    app: HostContext,
     handle: Arc<Mutex<HashMap<String, PtySession>>>,
     id: String,
     cwd: String,

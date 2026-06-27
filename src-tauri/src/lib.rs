@@ -114,7 +114,9 @@ pub fn run() {
         if let tauri::RunEvent::ExitRequested { .. } = event {
             // Capture refreshed Codex tokens / memory back to the active
             // account's store before exit (no-op unless unified mode is ON).
-            codex_app_server::snapshot_active_identity_on_exit(app_handle);
+            codex_app_server::snapshot_active_identity_on_exit(
+                &crate::host_context::HostContext::from_app(app_handle.clone()),
+            );
         }
     });
 }
@@ -158,7 +160,7 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
                         .state::<codex_app_server::CodexAppServerState>()
                         .inner()
                         .clone();
-                    let handle = app.handle().clone();
+                    let handle = crate::host_context::HostContext::from_app(app.handle().clone());
                     std::thread::spawn(move || codex_state.init_unified_on_startup(&handle));
                 }
                 if let Some(window) = app.get_webview_window("main") {

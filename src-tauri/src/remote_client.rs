@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::AppHandle;
+use crate::host_context::HostContext;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::WebSocket;
 use tungstenite::Message;
@@ -181,7 +181,7 @@ impl ServerCertVerifier for AllowAnyServerCertificate {
 impl RustRemoteClientState {
     pub fn connect(
         &self,
-        app: AppHandle,
+        app: HostContext,
         host: String,
         port: u16,
         token: String,
@@ -193,7 +193,7 @@ impl RustRemoteClientState {
         // Capture before `app` may be moved into the client_loop thread below;
         // surfaced in the connect return so the renderer can compare against
         // `serverVersion` and flag client/server skew (issue #115).
-        let client_version = tauri::Manager::package_info(&app).version.to_string();
+        let client_version = app.version();
         let label = label
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(default_client_label);
@@ -506,7 +506,7 @@ impl RustRemoteClientState {
 }
 
 fn client_loop(
-    app: AppHandle,
+    app: HostContext,
     mut ws: RemoteWebSocket,
     rx: mpsc::Receiver<ClientCommand>,
     connected: Arc<AtomicBool>,
@@ -592,7 +592,7 @@ fn client_loop(
     drain_pending(&mut pending, "Connection closed");
 }
 
-fn log_remote_pty_write_args(app: &AppHandle, phase: &str, channel: &str, args: &[Value]) {
+fn log_remote_pty_write_args(app: &HostContext, phase: &str, channel: &str, args: &[Value]) {
     if canonical_remote_channel(channel) != "pty:write" {
         return;
     }
@@ -633,7 +633,7 @@ fn tag_remote_workspace_reload(params: Value, remote_origin: &str) -> Value {
 }
 
 fn handle_frame(
-    app: &AppHandle,
+    app: &HostContext,
     pending: &mut HashMap<String, PendingInvoke>,
     frame: Value,
     remote_origin: &str,
@@ -710,8 +710,8 @@ fn generate_client_device_id() -> String {
 // The host uses it to recognize this client on reconnect, so it only shows a
 // "new client connected" notification the first time this install connects.
 // Generated once and persisted under the app data dir.
-fn load_or_create_client_device_id(app: &AppHandle) -> Option<String> {
-    let data_dir = crate::app_data::app_data_dir(app).ok()?;
+fn load_or_create_client_device_id(app: &HostContext) -> Option<String> {
+    let data_dir = app.data_dir().ok()?;
     let path = data_dir.join(CLIENT_DEVICE_ID_FILE);
     if let Ok(raw) = std::fs::read_to_string(&path) {
         if let Some(existing) = serde_json::from_str::<Value>(&raw)
