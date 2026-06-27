@@ -5,8 +5,10 @@ use crate::commands::{
     agent as agent_cmd, app as app_cmd, claude as claude_cmd, fs as fs_cmd, git as git_cmd,
     github as github_cmd, image as image_cmd, notification as notification_cmd,
     profile as profile_cmd, pty as pty_cmd, settings as settings_cmd, snippet as snippet_cmd,
-    update as update_cmd, worker_buffer::WorkerBufferState, worktree as worktree_cmd,
+    worker_buffer::WorkerBufferState, worktree as worktree_cmd,
 };
+#[cfg(feature = "desktop")]
+use crate::commands::update as update_cmd;
 use crate::electron_safe_storage::{
     read_secret_json, read_secret_string, write_secret_json, write_secret_string, SecretJsonRead,
 };
@@ -20,6 +22,7 @@ use crate::remote_core::{
 };
 use crate::host_context::HostContext;
 use crate::sidecar::SidecarState;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rcgen::{generate_simple_self_signed, CertifiedKey};
@@ -38,6 +41,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Manager};
 use tungstenite::handshake::derive_accept_key;
 use tungstenite::protocol::{Role, WebSocket};
@@ -885,6 +889,7 @@ fn handle_client(
 ) -> Result<(), String> {
     // Desktop bridge during the app->ctx migration: most of this function still
     // uses `app` directly; the dispatch entry already takes `&HostContext`.
+    #[cfg(feature = "desktop")]
     let app = ctx.app().clone();
     stream
         .set_nonblocking(false)
@@ -1039,7 +1044,7 @@ fn handle_client(
             // send no device id fall back to the in-memory live/recent dedup.
             let identity_key = (window_id.clone(), label.clone());
             let already_known = match device_id.as_deref() {
-                Some(id) => match app_data::app_data_dir(&app) {
+                Some(id) => match ctx.data_dir() {
                     Ok(dir) => !register_known_remote_device(&dir, id),
                     Err(_) => client_already_recorded(&clients, &recent, &identity_key, unix_ms()),
                 },
@@ -1385,6 +1390,7 @@ fn invoke_sidecar_for_remote(
     channel: &str,
     frame: &Value,
 ) -> Result<Value, String> {
+    #[cfg(feature = "desktop")]
     let app = ctx.app();
     if channel.is_empty() {
         return Err("remote invoke: missing channel".to_string());
@@ -1550,6 +1556,7 @@ fn invoke_rust_for_remote(
     // Desktop bridge during the app->ctx migration: the match arms below still
     // use `app` (and the helpers they call) directly. Arms get migrated to the
     // ctx accessors module-group by module-group.
+    #[cfg(feature = "desktop")]
     let app = ctx.app();
     let result = match channel {
         "app:get-version" => Ok(json!({
@@ -2020,6 +2027,9 @@ fn invoke_rust_for_remote(
             // and an id colliding with one of the host's own windows — both
             // sides label their main window "main" — must not leak another
             // profile's data.
+            // Live-window fast path is desktop-only; the headless host has no
+            // local windows and serves the persisted snapshot below.
+            #[cfg(feature = "desktop")]
             if let Some(window_id) = optional_string_param(params, "windowId")
                 .filter(|value| !value.trim().is_empty())
                 .filter(|value| {
@@ -2048,12 +2058,16 @@ fn invoke_rust_for_remote(
                 // windowId "main" would overwrite the HOST's own main-window
                 // workspace (and its global workspaces.json + profile
                 // snapshot) regardless of the requested target profile.
+                #[cfg(feature = "desktop")]
                 let window_id = optional_string_param(params, "windowId")
                     .filter(|value| !value.trim().is_empty())
                     .filter(|value| {
                         window_registry::profile_id_for_window(app, value).as_deref()
                             == Some(profile_id.as_str())
                     });
+                #[cfg(not(feature = "desktop"))]
+                let window_id: Option<String> = None;
+                #[cfg(feature = "desktop")]
                 let saved = if let Some(window_id) = window_id.as_deref() {
                     window_registry::save_workspace_json(app, window_id, &data)
                 } else if let Some(target) =
@@ -2068,6 +2082,9 @@ fn invoke_rust_for_remote(
                 } else {
                     profile_cmd::profile_save_workspace_for_remote(&ctx, &profile_id, &data)
                 };
+                // Headless has no live windows; persist straight to the snapshot.
+                #[cfg(not(feature = "desktop"))]
+                let saved = profile_cmd::profile_save_workspace_for_remote(&ctx, &profile_id, &data);
                 if saved {
                     let payload = if let Some(window_id) = window_id.as_deref() {
                         let payload =
@@ -2083,6 +2100,7 @@ fn invoke_rust_for_remote(
                         payload
                     } else {
                         let payload = json!({ "profileId": profile_id, "data": data });
+                        #[cfg(feature = "desktop")]
                         for window_id in
                             window_registry::live_window_ids_for_profile(app, &profile_id)
                         {
@@ -2109,8 +2127,8 @@ fn invoke_rust_for_remote(
             deserialize_param::<pty_cmd::CreatePtyOptions>(options_value, channel, "options")
                 .and_then(|options| {
                     let app_handle = ctx.clone();
-                    let pty_handle = app.state::<pty_cmd::PtyState>().handle();
-                    let worker_buffer_handle = app.state::<WorkerBufferState>().handle();
+                    let pty_handle = ctx.state::<pty_cmd::PtyState>().handle();
+                    let worker_buffer_handle = ctx.state::<WorkerBufferState>().handle();
                     let id = crate::async_rt::block_on(async move {
                         crate::async_rt::spawn_blocking(move || {
                             pty_cmd::start_pty_session(
@@ -2129,7 +2147,7 @@ fn invoke_rust_for_remote(
         }
         "pty:write" => string_param(params, "id", channel).and_then(|id| {
             string_param(params, "data", channel).and_then(|data| {
-                let state = app.state::<pty_cmd::PtyState>();
+                let state = ctx.state::<pty_cmd::PtyState>();
                 log_remote_pty_write_data(&ctx, "remote-server.pty-write.enqueue", &id, &data);
                 let result = pty_cmd::write_pty_session(&state, &id, &data);
                 match &result {
@@ -2152,7 +2170,7 @@ fn invoke_rust_for_remote(
             })
         }),
         "pty:read-buffer" => string_param(params, "id", channel).and_then(|id| {
-            let state = app.state::<pty_cmd::PtyState>();
+            let state = ctx.state::<pty_cmd::PtyState>();
             pty_cmd::read_pty_output_buffer(&state, &id)
                 .map(Value::String)
                 .map_err(|err| format!("{err:?}"))
@@ -2160,7 +2178,7 @@ fn invoke_rust_for_remote(
         "pty:resize" => string_param(params, "id", channel).and_then(|id| {
             u16_param(params, "cols", channel).and_then(|cols| {
                 u16_param(params, "rows", channel).and_then(|rows| {
-                    let state = app.state::<pty_cmd::PtyState>();
+                    let state = ctx.state::<pty_cmd::PtyState>();
                     pty_cmd::resize_pty_session_from_mobile_view(&ctx, &state, &id, cols, rows)
                         .map(Value::Bool)
                         .map_err(|err| format!("{err:?}"))
@@ -2168,7 +2186,7 @@ fn invoke_rust_for_remote(
             })
         }),
         "pty:get-viewport-state" => string_param(params, "id", channel).and_then(|id| {
-            let state = app.state::<pty_cmd::PtyState>();
+            let state = ctx.state::<pty_cmd::PtyState>();
             pty_cmd::get_pty_viewport_state(&state, &id)
                 .map_err(|err| format!("{err:?}"))
                 .and_then(|state| to_json_value(channel, state))
@@ -2186,7 +2204,7 @@ fn invoke_rust_for_remote(
                     value, channel, "options",
                 )?),
             };
-            let state = app.state::<pty_cmd::PtyState>();
+            let state = ctx.state::<pty_cmd::PtyState>();
             pty_cmd::set_pty_viewport_mode(&ctx, &state, &id, mode, options)
                 .map_err(|err| format!("{err:?}"))
                 .and_then(|state| to_json_value(channel, state))
@@ -2203,7 +2221,7 @@ fn invoke_rust_for_remote(
                         channel,
                         "source",
                     )?;
-                    let state = app.state::<pty_cmd::PtyState>();
+                    let state = ctx.state::<pty_cmd::PtyState>();
                     pty_cmd::set_pty_viewport_size(&ctx, &state, &id, cols, rows, source)
                         .map_err(|err| format!("{err:?}"))
                         .and_then(|state| to_json_value(channel, state))
@@ -2211,7 +2229,7 @@ fn invoke_rust_for_remote(
             })
         }),
         "pty:kill" => string_param(params, "id", channel).and_then(|id| {
-            let state = app.state::<pty_cmd::PtyState>();
+            let state = ctx.state::<pty_cmd::PtyState>();
             pty_cmd::kill_pty_session(&state, &id)
                 .map(|_| Value::Bool(true))
                 .map_err(|err| format!("{err:?}"))
@@ -2221,7 +2239,7 @@ fn invoke_rust_for_remote(
                 let shell = optional_string_param(params, "shell");
                 crate::async_rt::block_on(pty_cmd::pty_restart_native(
                     ctx.clone(),
-                    app.state::<pty_cmd::PtyState>(),
+                    ctx.state::<pty_cmd::PtyState>(),
                     id,
                     cwd,
                     shell,
@@ -2231,7 +2249,7 @@ fn invoke_rust_for_remote(
             })
         }),
         "pty:get-cwd" => string_param(params, "id", channel).and_then(|id| {
-            let state = app.state::<pty_cmd::PtyState>();
+            let state = ctx.state::<pty_cmd::PtyState>();
             pty_cmd::get_pty_cwd(&state, &id)
                 .map(|cwd| cwd.map(Value::String).unwrap_or(Value::Null))
                 .map_err(|err| format!("{err:?}"))
@@ -2279,13 +2297,13 @@ fn invoke_rust_for_remote(
         "fs:watch" => string_param_any(params, &["dirPath", "path"], channel).map(|dir_path| {
             Value::Bool(fs_cmd::fs_watch_native(
                 ctx.clone(),
-                app.state::<fs_cmd::FsWatcherState>().inner(),
+                &ctx.state::<fs_cmd::FsWatcherState>(),
                 dir_path,
             ))
         }),
         "fs:unwatch" => string_param_any(params, &["dirPath", "path"], channel).map(|dir_path| {
             Value::Bool(fs_cmd::fs_unwatch_native(
-                app.state::<fs_cmd::FsWatcherState>().inner(),
+                &ctx.state::<fs_cmd::FsWatcherState>(),
                 dir_path,
             ))
         }),
@@ -2295,7 +2313,7 @@ fn invoke_rust_for_remote(
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             fs_cmd::fs_upload_begin_impl(
-                app.state::<fs_cmd::FsUploadState>().inner(),
+                &ctx.state::<fs_cmd::FsUploadState>(),
                 name,
                 total_bytes,
             )
@@ -2307,7 +2325,7 @@ fn invoke_rust_for_remote(
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 fs_cmd::fs_upload_begin_in_dir_impl(
-                    app.state::<fs_cmd::FsUploadState>().inner(),
+                    &ctx.state::<fs_cmd::FsUploadState>(),
                     dir,
                     name,
                     total_bytes,
@@ -2321,18 +2339,18 @@ fn invoke_rust_for_remote(
         "fs:upload-tmp-chunk" => string_param(params, "uploadId", channel).and_then(|upload_id| {
             string_param(params, "dataBase64", channel).and_then(|data_base64| {
                 fs_cmd::fs_upload_chunk_impl(
-                    app.state::<fs_cmd::FsUploadState>().inner(),
+                    &ctx.state::<fs_cmd::FsUploadState>(),
                     upload_id,
                     data_base64,
                 )
             })
         }),
         "fs:upload-tmp-end" => string_param(params, "uploadId", channel).and_then(|upload_id| {
-            fs_cmd::fs_upload_end_impl(app.state::<fs_cmd::FsUploadState>().inner(), upload_id)
+            fs_cmd::fs_upload_end_impl(&ctx.state::<fs_cmd::FsUploadState>(), upload_id)
         }),
         "fs:upload-tmp-abort" => string_param(params, "uploadId", channel).map(|upload_id| {
             Value::Bool(fs_cmd::fs_upload_abort_impl(
-                app.state::<fs_cmd::FsUploadState>().inner(),
+                &ctx.state::<fs_cmd::FsUploadState>(),
                 upload_id,
             ))
         }),
@@ -2607,10 +2625,10 @@ fn invoke_rust_for_remote(
                 })
             })
         }),
-        "profile:list" => serde_json::to_value(profile_cmd::profile_list(app.clone()))
+        "profile:list" => serde_json::to_value(profile_cmd::profile_list_core(&ctx))
             .map_err(|err| format!("remote profile:list serialization failed: {err}")),
         "profile:get-active-ids" => {
-            serde_json::to_value(profile_cmd::profile_get_active_ids(app.clone()))
+            serde_json::to_value(profile_cmd::profile_get_active_ids_core(&ctx))
                 .map_err(|err| format!("remote profile:get-active-ids serialization failed: {err}"))
         }
         "profile:load-snapshot" => profile_id_from_params(channel, params).map(|profile_id| {

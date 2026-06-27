@@ -43,6 +43,7 @@ pub mod shell;
 pub mod snippet;
 #[cfg(feature = "desktop")]
 pub mod tunnel;
+#[cfg(feature = "desktop")]
 pub mod update;
 pub mod worker_buffer;
 #[cfg(feature = "desktop")]

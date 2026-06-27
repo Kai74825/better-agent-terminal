@@ -80,6 +80,7 @@ fn remote_invoke_for_window(
     )
 }
 
+#[cfg(feature = "desktop")]
 fn remote_value_for_window<T>(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -1443,7 +1444,7 @@ pub async fn pty_restart(
 
 pub(crate) async fn pty_restart_native(
     app: HostContext,
-    state: State<'_, PtyState>,
+    state: PtyState,
     id: String,
     cwd: String,
     shell: Option<String>,

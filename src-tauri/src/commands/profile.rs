@@ -614,10 +614,8 @@ fn seed_default_snapshot_if_missing(dir: &Path, app: &HostContext, index: &Profi
     let _ = write_snapshot_at(dir, DEFAULT_PROFILE_ID, &snapshot);
 }
 
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub fn profile_list(app: AppHandle) -> ProfileListResponse {
-    profiles_dir(&HostContext::from_app(app.clone()))
+pub fn profile_list_core(app: &HostContext) -> ProfileListResponse {
+    profiles_dir(app)
         .map(|dir| {
             let response = list_response_at(&dir);
             let index = ProfileIndex {
@@ -625,13 +623,19 @@ pub fn profile_list(app: AppHandle) -> ProfileListResponse {
                 active_profile_ids: response.active_profile_ids.clone(),
                 active_profile_id: None,
             };
-            seed_default_snapshot_if_missing(&dir, &HostContext::from_app(app.clone()), &index);
+            seed_default_snapshot_if_missing(&dir, app, &index);
             response
         })
         .unwrap_or_else(|| ProfileListResponse {
             profiles: vec![default_entry()],
             active_profile_ids: vec![DEFAULT_PROFILE_ID.into()],
         })
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub fn profile_list(app: AppHandle) -> ProfileListResponse {
+    profile_list_core(&HostContext::from_app(app))
 }
 
 #[cfg(feature = "desktop")]
@@ -650,12 +654,16 @@ pub fn profile_get(app: AppHandle, profile_id: String) -> Option<ProfileEntry> {
         .find(|profile| profile.id == profile_id)
 }
 
+pub fn profile_get_active_ids_core(app: &HostContext) -> Vec<String> {
+    profiles_dir(app)
+        .map(|dir| read_index_at(&dir).active_profile_ids)
+        .unwrap_or_else(|| vec![DEFAULT_PROFILE_ID.into()])
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_get_active_ids(app: AppHandle) -> Vec<String> {
-    profiles_dir(&HostContext::from_app(app.clone()))
-        .map(|dir| read_index_at(&dir).active_profile_ids)
-        .unwrap_or_else(|| vec![DEFAULT_PROFILE_ID.into()])
+    profile_get_active_ids_core(&HostContext::from_app(app))
 }
 
 pub fn profile_load_snapshot_for_remote(app: &HostContext, profile_id: &str) -> Option<Value> {

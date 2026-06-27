@@ -29,6 +29,7 @@ mod remote_server;
 mod runtime_catalog;
 mod sidecar;
 mod subprocess;
+#[cfg(feature = "desktop")]
 mod window_registry;
 
 // The command aliases, json helpers and tauri re-exports are only used by the

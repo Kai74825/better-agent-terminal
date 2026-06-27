@@ -10,12 +10,14 @@ use crate::app_data;
 use crate::host_context::HostContext;
 use crate::log_file::append_line;
 use crate::remote_client::RustRemoteClientState;
+#[cfg(feature = "desktop")]
 use crate::window_registry;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "desktop")]
 use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
@@ -140,6 +142,7 @@ fn profile_can_auto_restore(profile: &profile_cmd::ProfileEntry) -> bool {
         && has_non_empty(&profile.remote_fingerprint)
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn renderer_url(path: &str) -> WebviewUrl {
     WebviewUrl::App(path.into())
 }
@@ -164,6 +167,7 @@ fn tauri_log_line(message: &str) -> String {
     format!("{millis} [tauri] {message}\n")
 }
 
+#[cfg(feature = "desktop")]
 fn webview_url_debug(url: &WebviewUrl) -> String {
     match url {
         WebviewUrl::App(path) => format!("app:{}", path.to_string_lossy()),
@@ -177,12 +181,14 @@ fn webview_url_debug(url: &WebviewUrl) -> String {
 // staring at the same screen while a banner claims the profile is
 // already open. show()+unminimize()+set_focus() mirrors the order used
 // for notification-driven focus and reliably brings the window forward.
+#[cfg(feature = "desktop")]
 fn raise_window(win: &WebviewWindow) {
     let _ = win.show();
     let _ = win.unminimize();
     let _ = win.set_focus();
 }
 
+#[cfg(feature = "desktop")]
 fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
@@ -212,6 +218,7 @@ fn build_window(app: &AppHandle, window_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(window_id) {
         window_registry::mark_window_active(app, window_id);
@@ -260,6 +267,7 @@ fn build_window_now(app: &AppHandle, window_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 fn active_webview_window(app: &AppHandle) -> Option<WebviewWindow> {
     let windows = app.webview_windows();
     windows
@@ -274,11 +282,13 @@ fn active_webview_window(app: &AppHandle) -> Option<WebviewWindow> {
         .or_else(|| windows.values().next().cloned())
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn app_new_window_for_active(app: &AppHandle) -> Option<String> {
     let window = active_webview_window(app)?;
     Some(app_new_window(app.clone(), window))
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn app_focus_next_window_from_active(app: &AppHandle) -> bool {
     let Some(window) = active_webview_window(app) else {
         return false;
@@ -286,6 +296,7 @@ pub(crate) fn app_focus_next_window_from_active(app: &AppHandle) -> bool {
     app_focus_next_window(app.clone(), window)
 }
 
+#[cfg(feature = "desktop")]
 fn profile_window_close_request(
     app: &AppHandle,
     window_id: &str,
@@ -307,6 +318,7 @@ fn profile_window_close_request(
     })
 }
 
+#[cfg(feature = "desktop")]
 fn request_profile_window_close_decision(app: &AppHandle, window_id: &str) {
     let Some(request) = profile_window_close_request(app, window_id) else {
         return;
@@ -317,6 +329,7 @@ fn request_profile_window_close_decision(app: &AppHandle, window_id: &str) {
     let _ = app.emit_to(window_id, "app:profile-window-close-requested", request);
 }
 
+#[cfg(feature = "desktop")]
 pub fn attach_window_lifecycle(window: &WebviewWindow) {
     let app = window.app_handle().clone();
     let window_id = window.label().to_string();
@@ -453,6 +466,7 @@ pub fn app_new_window(app: AppHandle, window: WebviewWindow) -> String {
     app_new_window_for_profile(&app, &current.profile_id)
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn app_new_window_for_profile(app: &AppHandle, profile_id: &str) -> String {
     let entry = window_registry::create_empty_entry_for_profile(app, profile_id);
     let id = entry.id;
@@ -460,6 +474,7 @@ pub(crate) fn app_new_window_for_profile(app: &AppHandle, profile_id: &str) -> S
     id
 }
 
+#[cfg(feature = "desktop")]
 fn remote_app_new_window(app: &AppHandle, window_label: &str, profile_id: &str) -> Option<String> {
     let profile = profile_cmd::profile_get(app.clone(), profile_id.to_string())?;
     if profile.kind != "remote" {
