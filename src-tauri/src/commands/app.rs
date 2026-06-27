@@ -154,9 +154,10 @@ pub(crate) fn log_tauri(app: &HostContext, message: &str) {
         return;
     };
     let line = tauri_log_line(message);
-    crate::async_rt::spawn_blocking(move || {
-        let _ = append_line(&path, &line);
-    });
+    // Synchronous single-line append (like the pty debug loggers): a fire-and-
+    // forget tokio spawn_blocking would panic on the headless server's plain
+    // OS threads, which run outside any tokio runtime.
+    let _ = append_line(&path, &line);
 }
 
 fn tauri_log_line(message: &str) -> String {

@@ -45,7 +45,6 @@ use commands::{
     shell as shell_cmd, snippet as snippet_cmd, tunnel as tunnel_cmd, update as update_cmd,
     worker_buffer as worker_buffer_cmd, workspace as workspace_cmd, worktree as worktree_cmd,
 };
-#[cfg(feature = "desktop")]
 use serde_json::{json, Value};
 use std::path::PathBuf;
 #[cfg(feature = "desktop")]
@@ -404,13 +403,101 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
         ])
 }
 
-// GUI-free build: the server backend (RemoteServer on a tauri-free
-// HostContext) is being wired up incrementally. Until it lands, this build
-// links no tauri/wry/webkit but cannot yet serve — it exists to keep the
-// headless target compiling and to prove the webkit-free link.
+// GUI-free build: serve the RemoteServer on a tauri-free HostContext backed by
+// a HeadlessHost. Links no tauri/wry/webkit. States are registered up-front so
+// the dispatch's `ctx.state::<T>()` lookups resolve; runtime events are routed
+// straight to connected remote clients via the emit sink (there are no local
+// webviews to receive them).
 #[cfg(not(feature = "desktop"))]
-fn run_headless_server(_args: HeadlessServerArgs) -> Result<(), String> {
-    Err("headless bat-server: GUI-free server backend not yet wired in this build".to_string())
+fn run_headless_server(args: HeadlessServerArgs) -> Result<(), String> {
+    use crate::host_context::{HeadlessHost, HostContext};
+
+    let data_dir = args
+        .data_dir
+        .clone()
+        .or_else(app_data::app_data_dir_opt)
+        .ok_or_else(|| "bat-server: could not resolve app data dir".to_string())?;
+
+    let remote_state = remote_server::RustRemoteServerState::default();
+    let sidecar_state = sidecar::SidecarState::new();
+
+    // ctx.emit() on headless has no local webview; route every runtime event to
+    // the connected remote clients through the RemoteServer broadcast.
+    let emit_sink: crate::sidecar::EventSink = {
+        let broadcast_state = remote_state.clone();
+        std::sync::Arc::new(move |topic: &str, payload: &Value| {
+            broadcast_state.broadcast_event(topic, payload);
+        })
+    };
+
+    let mut host = HeadlessHost::new(Some(data_dir.clone()), emit_sink);
+    host.manage(remote_state.clone());
+    host.manage(sidecar_state.clone());
+    host.manage(crate::commands::pty::PtyState::default());
+    host.manage(crate::commands::notification::NotificationState::default());
+    host.manage(crate::commands::notification::AgentNotificationState::default());
+    host.manage(crate::commands::fs::FsWatcherState::default());
+    host.manage(crate::commands::fs::FsUploadState::default());
+    host.manage(crate::commands::snippet::SnippetState::default());
+    host.manage(crate::commands::worker_buffer::WorkerBufferState::default());
+    host.manage(crate::commands::worktree::WorktreeState::default());
+    host.manage(event_hub::RuntimeEventHubState::default());
+    host.manage(remote_client::RustRemoteClientState::default());
+    host.manage(codex_app_server::CodexAppServerState::default());
+
+    let ctx = HostContext::from_headless(std::sync::Arc::new(host));
+
+    let mut options = json!({
+        "port": args.port,
+        "bindInterface": args.bind_interface,
+    });
+    if let Some(token) = &args.token {
+        options["token"] = Value::String(token.clone());
+    }
+
+    let result = remote_state.start(ctx, sidecar_state, Some(options))?;
+    print_headless_server_banner_headless(&data_dir, &result)?;
+
+    // The accept loop runs on its own thread; keep the process alive.
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn print_headless_server_banner_headless(
+    data_dir: &std::path::Path,
+    result: &Value,
+) -> Result<(), String> {
+    let field = |key: &str| -> Result<String, String> {
+        result
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("remote server result missing {key}"))
+    };
+    let port = result
+        .get("port")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "remote server result missing port".to_string())?;
+    let bound_host = field("boundHost")?;
+    let bind_interface = field("bindInterface")?;
+    let token = field("token")?;
+    let fingerprint = field("fingerprint")?;
+
+    println!();
+    println!("bat-server ready");
+    println!("  url:         wss://{bound_host}:{port}");
+    println!("  bind:        {bind_interface}");
+    println!("  token:       {token}");
+    println!("  fingerprint: {fingerprint}");
+    println!("  data-dir:    {}", data_dir.display());
+    println!(
+        "  connect:     wss://{bound_host}:{port}?token={}&fp={}",
+        encode_query_component(&token),
+        encode_query_component(&fingerprint)
+    );
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
