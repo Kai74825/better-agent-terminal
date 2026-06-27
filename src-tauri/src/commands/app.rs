@@ -400,31 +400,37 @@ where
     None
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_get_window_id(window: WebviewWindow) -> String {
     window.label().to_string()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_get_window_index(app: AppHandle, window: WebviewWindow) -> u32 {
     window_registry::window_index(&app, window.label())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_get_launch_profile() -> Option<String> {
     parse_launch_profile_args(std::env::args())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_get_window_profile(app: AppHandle, window: WebviewWindow) -> Option<String> {
     Some(window_registry::get_entry(&app, window.label()).profile_id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_set_title(window: WebviewWindow, title: String) -> Result<(), String> {
     window.set_title(&title).map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_resolve_profile_window_close(
     app: AppHandle,
@@ -446,6 +452,7 @@ pub fn app_resolve_profile_window_close(
     window.close().is_ok()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_new_window(app: AppHandle, window: WebviewWindow) -> String {
     let current = window_registry::get_entry(&app, window.label());
@@ -508,6 +515,7 @@ fn remote_app_new_window(app: &AppHandle, window_label: &str, profile_id: &str) 
 // app_new_window (Cmd+N). The renderer reads this on init to skip
 // profile.load(), which would otherwise overwrite the empty snapshot
 // with the bound profile's saved workspaces.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_take_fresh_window_flag(app: AppHandle, window: WebviewWindow) -> bool {
     window_registry::take_fresh_window_flag(&app, window.label())
@@ -525,6 +533,7 @@ fn next_window_label(mut labels: Vec<String>, current: &str) -> Option<String> {
         .or_else(|| labels.first().cloned())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_focus_next_window(app: AppHandle, window: WebviewWindow) -> bool {
     let windows = app.webview_windows();
@@ -542,6 +551,7 @@ pub fn app_focus_next_window(app: AppHandle, window: WebviewWindow) -> bool {
     false
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInstanceResult {
     let _ = profile_cmd::activate_profile_id(&app, &profile_id);
@@ -579,6 +589,7 @@ pub fn app_open_new_instance(app: AppHandle, profile_id: String) -> OpenNewInsta
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_restore_active_profiles(
     app: AppHandle,
@@ -614,6 +625,7 @@ fn badge_count_value(count: i64) -> Option<i64> {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn app_set_dock_badge(app: AppHandle, count: i64) {
     let badge = badge_count_value(count);

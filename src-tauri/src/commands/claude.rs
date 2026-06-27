@@ -3006,6 +3006,7 @@ impl ClaudeRuntimeRouter {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn claude_ping(
     app: AppHandle,
@@ -3015,6 +3016,7 @@ pub fn claude_ping(
     call(&app, &state, "ping", payload.unwrap_or(Value::Null))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_auth_status(
     app: AppHandle,
@@ -3041,6 +3043,7 @@ pub async fn claude_auth_status(
     Ok(value)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_list(
     app: AppHandle,
@@ -3064,6 +3067,7 @@ pub async fn claude_account_list(
     Ok(serde_json::to_value(index).unwrap_or(Value::Null))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_start_session(
     app: AppHandle,
@@ -3104,6 +3108,7 @@ pub async fn claude_start_session(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_send_message(
     app: AppHandle,
@@ -3162,6 +3167,7 @@ pub async fn claude_send_message(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_stop_session(
     app: AppHandle,
@@ -3188,6 +3194,7 @@ pub async fn claude_stop_session(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_abort_session(
     app: AppHandle,
@@ -3220,6 +3227,7 @@ pub async fn claude_abort_session(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_interrupt_turn(
     app: AppHandle,
@@ -3249,6 +3257,7 @@ pub async fn claude_interrupt_turn(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_stop_task(
     app: AppHandle,
@@ -3282,6 +3291,7 @@ pub async fn claude_stop_task(
 
 // --- account / auth ops ---------------------------------------------------
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_auth_login(
     app: AppHandle,
@@ -3294,6 +3304,7 @@ pub async fn claude_auth_login(
         })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_auth_logout(
     app: AppHandle,
@@ -3306,6 +3317,7 @@ pub async fn claude_auth_logout(
         })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_import_current(
     app: AppHandle,
@@ -3330,6 +3342,7 @@ pub async fn claude_account_import_current(
     Ok(serde_json::to_value(account).unwrap_or(Value::Null))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_login_new(
     app: AppHandle,
@@ -3387,6 +3400,7 @@ pub async fn claude_account_login_new(
     Ok(json!({ "success": true, "account": account }))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_switch(
     app: AppHandle,
@@ -3411,6 +3425,7 @@ pub async fn claude_account_switch(
     Ok(Value::Bool(ok))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_remove(
     app: AppHandle,
@@ -3435,6 +3450,7 @@ pub async fn claude_account_remove(
     Ok(Value::Bool(ok))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_mark_warning_shown(
     app: AppHandle,
@@ -3458,6 +3474,7 @@ pub async fn claude_account_mark_warning_shown(
     Ok(Value::Bool(true))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_info(
     app: AppHandle,
@@ -3466,6 +3483,7 @@ pub async fn codex_account_info(
     Ok(codex.account_info(&app))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_list(
     app: AppHandle,
@@ -3488,6 +3506,7 @@ pub async fn codex_account_list(
     Ok(codex.account_list(&app))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_switch(
     app: AppHandle,
@@ -3513,6 +3532,7 @@ pub async fn codex_account_switch(
         .map_err(|message| BridgeError { message })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_unified_status(
     app: AppHandle,
@@ -3521,6 +3541,7 @@ pub async fn codex_unified_status(
     Ok(codex.unified_status(&app))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_unified_migrate(
     app: AppHandle,
@@ -3531,6 +3552,7 @@ pub async fn codex_unified_migrate(
         .map_err(|message| BridgeError { message })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_capture_current(
     app: AppHandle,
@@ -3542,6 +3564,7 @@ pub async fn codex_account_capture_current(
         .map_err(|message| BridgeError { message })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_remove_unified(
     app: AppHandle,
@@ -3553,6 +3576,7 @@ pub async fn codex_account_remove_unified(
         .map_err(|message| BridgeError { message })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_login(
     app: AppHandle,
@@ -3570,6 +3594,7 @@ pub async fn codex_account_login(
         .map_err(|message| BridgeError { message })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn codex_account_login_cancel(
     codex: State<'_, CodexAppServerState>,
@@ -3579,6 +3604,7 @@ pub async fn codex_account_login_cancel(
 
 // --- read-only metadata ---------------------------------------------------
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_cli_path(
     app: AppHandle,
@@ -3600,6 +3626,7 @@ pub async fn claude_get_cli_path(
     Ok(Value::String(resolve_claude_cli_path(&app)))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_prepare_cli_session(
     app: AppHandle,
@@ -3639,6 +3666,7 @@ pub async fn claude_prepare_cli_session(
     )
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_list_sessions(
     app: AppHandle,
@@ -3671,6 +3699,7 @@ pub async fn claude_list_sessions(
     )
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_models(
     app: AppHandle,
@@ -3694,6 +3723,7 @@ pub async fn claude_get_supported_models(
     Ok(ClaudeRuntimeRouter::from_states(app, &state, &codex_state).supported_models(&session_id))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_efforts(
     app: AppHandle,
@@ -3717,6 +3747,7 @@ pub async fn claude_get_supported_efforts(
     Ok(ClaudeRuntimeRouter::from_states(app, &state, &codex_state).supported_efforts(&session_id))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_codex_sandbox_modes(
     app: AppHandle,
@@ -3741,6 +3772,7 @@ pub async fn claude_get_supported_codex_sandbox_modes(
         .supported_codex_sandbox_modes(&session_id))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_codex_approval_policies(
     app: AppHandle,
@@ -3765,6 +3797,7 @@ pub async fn claude_get_supported_codex_approval_policies(
         .supported_codex_approval_policies(&session_id))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_commands(
     app: AppHandle,
@@ -3790,6 +3823,7 @@ pub async fn claude_get_supported_commands(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_supported_agents(
     app: AppHandle,
@@ -3815,6 +3849,7 @@ pub async fn claude_get_supported_agents(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_account_info(
     app: AppHandle,
@@ -3840,6 +3875,7 @@ pub async fn claude_get_account_info(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_session_state(
     app: AppHandle,
@@ -3866,6 +3902,7 @@ pub async fn claude_get_session_state(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_session_meta(
     app: AppHandle,
@@ -3892,6 +3929,7 @@ pub async fn claude_get_session_meta(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_context_usage(
     app: AppHandle,
@@ -3917,6 +3955,7 @@ pub async fn claude_get_context_usage(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_worktree_status(
     app: AppHandle,
@@ -3957,6 +3996,7 @@ pub async fn claude_get_worktree_status(
     .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_scan_skills(
     app: AppHandle,
@@ -3980,6 +4020,7 @@ pub async fn claude_scan_skills(
     Ok(serde_json::to_value(entries).unwrap_or_else(|_| json!([])))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_cleanup_worktree(
     app: AppHandle,
@@ -4053,6 +4094,7 @@ pub async fn claude_cleanup_worktree(
 
 // --- per-session state -----------------------------------------------------
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_auto_continue(
     app: AppHandle,
@@ -4079,6 +4121,7 @@ pub async fn claude_set_auto_continue(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_get_auto_continue(
     app: AppHandle,
@@ -4104,6 +4147,7 @@ pub async fn claude_get_auto_continue(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_permission_mode(
     app: AppHandle,
@@ -4130,6 +4174,7 @@ pub async fn claude_set_permission_mode(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_codex_sandbox_mode(
     app: AppHandle,
@@ -4156,6 +4201,7 @@ pub async fn claude_set_codex_sandbox_mode(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_codex_approval_policy(
     app: AppHandle,
@@ -4182,6 +4228,7 @@ pub async fn claude_set_codex_approval_policy(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_model(
     app: AppHandle,
@@ -4231,6 +4278,7 @@ pub async fn claude_set_model(
     Ok(result)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_set_effort(
     app: AppHandle,
@@ -4270,6 +4318,7 @@ pub async fn claude_set_effort(
     Ok(result)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_reset_session(
     app: AppHandle,
@@ -4295,6 +4344,7 @@ pub async fn claude_reset_session(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_fork_session(
     app: AppHandle,
@@ -4320,6 +4370,7 @@ pub async fn claude_fork_session(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_archive_messages(
     app: AppHandle,
@@ -4347,6 +4398,7 @@ pub async fn claude_archive_messages(
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_load_archived(
     app: AppHandle,
@@ -4377,6 +4429,7 @@ pub async fn claude_load_archived(
     ))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_clear_archive(
     app: AppHandle,
@@ -4400,6 +4453,7 @@ pub async fn claude_clear_archive(
     Ok(json!(clear_archive_in_dir(&data_dir, &session_id)))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_rest_session(
     app: AppHandle,
@@ -4436,6 +4490,7 @@ pub async fn claude_rest_session(
     Ok(result)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_wake_session(
     app: AppHandle,
@@ -4472,6 +4527,7 @@ pub async fn claude_wake_session(
     Ok(result)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_is_resting(
     app: AppHandle,
@@ -4507,6 +4563,7 @@ pub async fn claude_is_resting(
     .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_fetch_subagent_messages(
     app: AppHandle,
@@ -4533,6 +4590,7 @@ pub async fn claude_fetch_subagent_messages(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_rewind_to_prompt(
     app: AppHandle,
@@ -4559,6 +4617,7 @@ pub async fn claude_rewind_to_prompt(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_resume_session(
     app: AppHandle,
@@ -4618,6 +4677,7 @@ pub async fn claude_resume_session(
 // history without disturbing a session the host may have live. Routes to the
 // host over `agent:client-resume`; on the host (or for local windows) the
 // runtime re-emits history read-only when the session exists, else resumes.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_client_resume(
     app: AppHandle,
@@ -4673,6 +4733,7 @@ pub async fn claude_client_resume(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_resolve_permission(
     app: AppHandle,
@@ -4704,6 +4765,7 @@ pub async fn claude_resolve_permission(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_resolve_ask_user(
     app: AppHandle,
@@ -4735,6 +4797,7 @@ pub async fn claude_resolve_ask_user(
         .await
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_check_mcp_json_status(
     app: AppHandle,
@@ -4757,6 +4820,7 @@ pub async fn claude_check_mcp_json_status(
     Ok(check_mcp_json_status_native(Path::new(&cwd)))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_enable_all_project_mcp(
     app: AppHandle,

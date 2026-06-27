@@ -202,6 +202,7 @@ pub(crate) fn fs_read_file_impl(path: String) -> FsReadResult {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_read_file(app: AppHandle, window: WebviewWindow, path: String) -> FsReadResult {
     if let Some(result) =
@@ -248,6 +249,7 @@ pub(crate) fn fs_home_native(app: &AppHandle) -> String {
         .unwrap_or_else(|| String::from("/"))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_home(app: AppHandle, window: WebviewWindow) -> String {
     if let Some(result) = remote_invoke_for_window(&app, &window, "fs:home", vec![]).await {
@@ -258,6 +260,7 @@ pub async fn fs_home(app: AppHandle, window: WebviewWindow) -> String {
     fs_home_native(&app)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_readdir(app: AppHandle, window: WebviewWindow, dir_path: String) -> Vec<FsEntry> {
     if let Some(result) =
@@ -270,6 +273,7 @@ pub async fn fs_readdir(app: AppHandle, window: WebviewWindow, dir_path: String)
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_is_directory(app: AppHandle, window: WebviewWindow, path: String) -> bool {
     if let Some(result) =
@@ -358,6 +362,7 @@ pub struct ListDirsResult {
     pub error: Option<String>,
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_list_dirs(
     app: AppHandle,
@@ -486,6 +491,7 @@ fn validate_dir_name(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_mkdir(
     app: AppHandle,
@@ -552,6 +558,7 @@ pub(crate) fn fs_mkdir_impl(parent_path: String, name: String) -> PathOrError {
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_delete_path(
     app: AppHandle,
@@ -650,6 +657,7 @@ fn windows_logical_drive_roots() -> Vec<String> {
     roots
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_quick_locations(app: AppHandle, window: WebviewWindow) -> Vec<QuickLocation> {
     if let Some(result) =
@@ -768,6 +776,7 @@ pub(crate) fn fs_search_impl(dir_path: String, query: String) -> Vec<FsEntry> {
     results
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_search(
     app: AppHandle,
@@ -925,6 +934,7 @@ pub(crate) fn fs_resolve_path_links_impl(
     results
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_resolve_path_links(
     app: AppHandle,
@@ -955,6 +965,7 @@ fn remove_watcher(state: &FsWatcherState, dir_path: &str) -> bool {
     true
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn fs_watch(
     app: AppHandle,
@@ -1043,6 +1054,7 @@ pub(crate) fn fs_watch_native(app: AppHandle, state: &FsWatcherState, dir_path: 
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn fs_unwatch(
     app: AppHandle,
@@ -1503,6 +1515,7 @@ fn stream_local_file_to_host(
 // it to the connected remote host's tmp dir. Only valid in a remote-profile
 // window — in local mode the dropped path is already host-local and callers
 // should use it directly.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn remote_upload_file_to_host(
     app: AppHandle,
@@ -1532,6 +1545,7 @@ pub async fn remote_upload_file_to_host(
 // Local mode copies on disk; remote mode streams the bytes to the host and
 // the host writes into the directory (host applies the mutation, client
 // renders the result). Returns the final path.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_upload_to_dir(
     app: AppHandle,
@@ -1562,6 +1576,7 @@ pub async fn fs_upload_to_dir(
 // File-tab download: save a workspace file to a CLIENT-LOCAL location chosen
 // via the native save dialog. Local mode copies; remote mode pulls the bytes
 // from the host in chunks. Returns the saved path, or None on cancel.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn fs_download_file(
     app: AppHandle,

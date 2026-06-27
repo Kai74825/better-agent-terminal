@@ -1008,6 +1008,7 @@ pub(crate) fn start_pty_session(
     Ok(options.id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn pty_create(
     app: AppHandle,
@@ -1032,6 +1033,7 @@ pub async fn pty_create(
     })?
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_write(
     app: AppHandle,
@@ -1100,6 +1102,7 @@ pub(crate) fn read_pty_output_buffer(state: &PtyState, id: &str) -> Result<Strin
         })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_read_buffer(
     app: AppHandle,
@@ -1115,6 +1118,7 @@ pub fn pty_read_buffer(
     read_pty_output_buffer(&state, &id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_resize(
     app: AppHandle,
@@ -1286,6 +1290,7 @@ pub(crate) fn set_pty_viewport_size(
     Ok(viewport)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_get_viewport_state(
     app: AppHandle,
@@ -1304,6 +1309,7 @@ pub fn pty_get_viewport_state(
     get_pty_viewport_state(&state, &id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_set_viewport_mode(
     app: AppHandle,
@@ -1328,6 +1334,7 @@ pub fn pty_set_viewport_mode(
     set_pty_viewport_mode(&app, &state, &id, mode, options)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_set_viewport_size(
     app: AppHandle,
@@ -1354,6 +1361,7 @@ pub fn pty_set_viewport_size(
     set_pty_viewport_size(&app, &state, &id, cols, rows, source)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_kill(
     app: AppHandle,
@@ -1401,6 +1409,7 @@ pub(crate) fn kill_pty_session_with_exit(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn pty_restart(
     app: AppHandle,
@@ -1498,6 +1507,7 @@ pub(crate) fn get_pty_cwd(state: &PtyState, id: &str) -> Result<Option<String>, 
     Ok(map.get(id).map(|session| session.cwd.clone()))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn pty_get_cwd(
     app: AppHandle,

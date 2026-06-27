@@ -610,6 +610,7 @@ fn seed_default_snapshot_if_missing(dir: &Path, app: &AppHandle, index: &Profile
     let _ = write_snapshot_at(dir, DEFAULT_PROFILE_ID, &snapshot);
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_list(app: AppHandle) -> ProfileListResponse {
     profiles_dir(&app)
@@ -629,11 +630,13 @@ pub fn profile_list(app: AppHandle) -> ProfileListResponse {
         })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_list_local(app: AppHandle) -> ProfileListResponse {
     profile_list(app)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_get(app: AppHandle, profile_id: String) -> Option<ProfileEntry> {
     let dir = profiles_dir(&app)?;
@@ -643,6 +646,7 @@ pub fn profile_get(app: AppHandle, profile_id: String) -> Option<ProfileEntry> {
         .find(|profile| profile.id == profile_id)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_get_active_ids(app: AppHandle) -> Vec<String> {
     profiles_dir(&app)
@@ -702,6 +706,7 @@ pub fn profile_save_workspace_for_remote(app: &AppHandle, profile_id: &str, data
     wrote
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_create(
     app: AppHandle,
@@ -723,6 +728,7 @@ pub fn profile_create(
     entry
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
     let Some(dir) = profiles_dir(&app) else {
@@ -759,6 +765,7 @@ pub fn profile_save(app: AppHandle, profile_id: String) -> bool {
     saved
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_load(app: AppHandle, window: WebviewWindow, profile_id: String) -> Value {
     let Some(dir) = profiles_dir(&app) else {
@@ -836,6 +843,7 @@ pub fn deactivate_profile_id(app: &AppHandle, profile_id: &str) -> bool {
     saved
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     if profile_id == DEFAULT_PROFILE_ID {
@@ -860,6 +868,7 @@ pub fn profile_delete(app: AppHandle, profile_id: String) -> bool {
     saved
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> bool {
     let Some(dir) = profiles_dir(&app) else {
@@ -887,6 +896,7 @@ pub fn profile_rename(app: AppHandle, profile_id: String, new_name: String) -> b
     saved
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_update(
     app: AppHandle,
@@ -936,6 +946,7 @@ pub fn profile_update(
     saved
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_duplicate(
     app: AppHandle,
@@ -968,11 +979,13 @@ pub fn profile_duplicate(
     Some(copy)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_activate(app: AppHandle, profile_id: String) {
     let _ = activate_profile_id(&app, &profile_id);
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn profile_deactivate(app: AppHandle, profile_id: String) {
     let _ = deactivate_profile_id(&app, &profile_id);

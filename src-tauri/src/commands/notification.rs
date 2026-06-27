@@ -117,11 +117,13 @@ pub struct FocusResult {
     pub window_id: String,
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_list(state: State<'_, NotificationState>) -> Vec<NotificationEntry> {
     state.lock().clone()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_mark_read(
     app: AppHandle,
@@ -147,6 +149,7 @@ pub fn notification_mark_read(
     updated
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_mark_all_read(app: AppHandle, state: State<'_, NotificationState>) -> bool {
     let mut changed = false;
@@ -165,6 +168,7 @@ pub fn notification_mark_all_read(app: AppHandle, state: State<'_, NotificationS
     true
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_mark_window_read(
     app: AppHandle,
@@ -188,6 +192,7 @@ pub fn notification_mark_window_read(
     true
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_clear(app: AppHandle, state: State<'_, NotificationState>) -> bool {
     let cleared = {
@@ -205,6 +210,7 @@ pub fn notification_clear(app: AppHandle, state: State<'_, NotificationState>) -
     true
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_focus_latest_unread(
     app: AppHandle,
@@ -229,6 +235,7 @@ pub fn notification_focus_latest_unread(
     Some(FocusResult { id, window_id })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn notification_focus_entry(
     app: AppHandle,

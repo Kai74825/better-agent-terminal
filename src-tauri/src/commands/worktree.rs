@@ -1242,6 +1242,7 @@ pub async fn worktree_create_local(
     })?
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worktree_create(
     app: AppHandle,
@@ -1283,6 +1284,7 @@ pub async fn worktree_remove_local(
     })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worktree_remove(
     app: AppHandle,
@@ -1316,6 +1318,7 @@ pub async fn worktree_status_local(
         })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worktree_status(
     app: AppHandle,
@@ -1351,6 +1354,7 @@ pub async fn worktree_merge_local(
     })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worktree_merge(
     app: AppHandle,
@@ -1389,6 +1393,7 @@ pub async fn worktree_rehydrate_local(
     })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worktree_rehydrate(
     app: AppHandle,

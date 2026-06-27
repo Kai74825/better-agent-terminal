@@ -28,6 +28,7 @@ struct GithubAsset {
     browser_download_url: Option<String>,
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn update_get_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
@@ -37,6 +38,7 @@ pub fn update_get_version(app: tauri::AppHandle) -> String {
 /// Baked at compile time by build.rs from the BAT_BUNDLE_MODE env var so the
 /// auto-updater can fetch the matching update channel ("lightweight 用
 /// lightweight"). Defaults to "all-in-one" for plain dev builds.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn update_get_bundle_mode() -> &'static str {
     let mode = env!("BAT_BUNDLE_MODE");
@@ -80,6 +82,7 @@ fn build_updater(
 
 /// Check the per-channel/per-mode manifest for a newer build. Returns
 /// `{ available, currentVersion, version?, notes? }`. Does not download.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_check_native(
     app: tauri::AppHandle,
@@ -110,6 +113,7 @@ pub async fn update_check_native(
 /// background. Emits `update://download-progress` and `update://download-finished`
 /// events. Intentionally does NOT relaunch — the swapped bundle applies on the
 /// next launch; the UI prompts the user to restart.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_install(
     app: tauri::AppHandle,
@@ -145,6 +149,7 @@ pub async fn update_install(
     Ok(json!({ "installed": true, "version": version }))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn update_check(app: tauri::AppHandle) -> Result<Value, BridgeError> {
     let current_version = app.package_info().version.to_string();
