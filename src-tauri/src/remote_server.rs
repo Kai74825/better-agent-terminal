@@ -1997,22 +1997,24 @@ fn invoke_rust_for_remote(
             }
             json!(false)
         }),
-        "settings:load" => tauri::async_runtime::block_on(settings_cmd::settings_load(app.clone()))
-            .map_err(|err| err.to_string())
-            .and_then(|value| to_json_value(channel, value)),
+        "settings:load" => remote_app_data_dir(ctx, channel).and_then(|dir| {
+            settings_cmd::settings_load_impl(&dir)
+                .map_err(|err| err.to_string())
+                .and_then(|value| to_json_value(channel, value))
+        }),
         "settings:save" => string_param(params, "data", channel).and_then(|data| {
-            tauri::async_runtime::block_on(settings_cmd::settings_save(app.clone(), data))
-                .map_err(|err| err.to_string())?;
+            let dir = remote_app_data_dir(ctx, channel)?;
+            settings_cmd::settings_save_impl(&dir, data).map_err(|err| err.to_string())?;
             Ok(Value::Bool(true))
         }),
         "settings:get-shell-path" => string_param(params, "shellType", channel)
             .map(settings_cmd::settings_get_shell_path)
             .and_then(|value| to_json_value(channel, value)),
-        "settings:detect-cx" => {
-            tauri::async_runtime::block_on(settings_cmd::settings_detect_cx(app.clone()))
+        "settings:detect-cx" => remote_app_data_dir(ctx, channel).and_then(|dir| {
+            settings_cmd::settings_detect_cx_impl(&dir)
                 .map_err(|err| err.to_string())
                 .and_then(|value| to_json_value(channel, value))
-        }
+        }),
         "workspace:load" => {
             let profile_id = optional_string_param(params, "profileId")
                 .filter(|value| !value.trim().is_empty())

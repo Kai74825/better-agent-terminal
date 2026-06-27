@@ -12,6 +12,9 @@
 // "settings.json" so a future Electron→Tauri migration only has to copy
 // the file across the data directory.
 
+// Only the desktop #[tauri::command] wrappers resolve the data dir from an
+// AppHandle; the *_impl cores take a data_dir: &Path and compile headless.
+#[cfg(feature = "desktop")]
 use crate::app_data;
 use serde::Serialize;
 use std::fs;
@@ -51,13 +54,12 @@ impl From<SettingsError> for CommandError {
     }
 }
 
-fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, SettingsError> {
-    let dir = app_data::app_data_dir(app).map_err(SettingsError::AppDataDir)?;
-    Ok(dir.join("settings.json"))
+fn settings_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("settings.json")
 }
 
-fn settings_load_impl(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
-    let path = settings_path(&app)?;
+pub fn settings_load_impl(data_dir: &Path) -> Result<Option<String>, CommandError> {
+    let path = settings_path(data_dir);
     if !path.exists() {
         return Ok(None);
     }
@@ -65,17 +67,21 @@ fn settings_load_impl(app: tauri::AppHandle) -> Result<Option<String>, CommandEr
     Ok(Some(text))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_load(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || settings_load_impl(app))
-        .await
-        .map_err(|err| CommandError {
-            message: format!("settings.load worker failed: {err}"),
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
+        settings_load_impl(&dir)
+    })
+    .await
+    .map_err(|err| CommandError {
+        message: format!("settings.load worker failed: {err}"),
+    })?
 }
 
-fn settings_save_impl(app: tauri::AppHandle, data: String) -> Result<(), CommandError> {
-    let path = settings_path(&app)?;
+pub fn settings_save_impl(data_dir: &Path, data: String) -> Result<(), CommandError> {
+    let path = settings_path(data_dir);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(SettingsError::from)?;
     }
@@ -83,13 +89,17 @@ fn settings_save_impl(app: tauri::AppHandle, data: String) -> Result<(), Command
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_save(app: tauri::AppHandle, data: String) -> Result<(), CommandError> {
-    tauri::async_runtime::spawn_blocking(move || settings_save_impl(app, data))
-        .await
-        .map_err(|err| CommandError {
-            message: format!("settings.save worker failed: {err}"),
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
+        settings_save_impl(&dir, data)
+    })
+    .await
+    .map_err(|err| CommandError {
+        message: format!("settings.save worker failed: {err}"),
+    })?
 }
 
 fn clear_terminal_history_dir(history_dir: &Path) -> bool {
@@ -111,18 +121,21 @@ fn clear_terminal_history_dir(history_dir: &Path) -> bool {
     true
 }
 
-fn settings_clear_terminal_history_impl(app: tauri::AppHandle) -> Result<bool, CommandError> {
-    let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
-    Ok(clear_terminal_history_dir(&dir.join("terminal-history")))
+fn settings_clear_terminal_history_impl(data_dir: &Path) -> Result<bool, CommandError> {
+    Ok(clear_terminal_history_dir(&data_dir.join("terminal-history")))
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_clear_terminal_history(app: tauri::AppHandle) -> Result<bool, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || settings_clear_terminal_history_impl(app))
-        .await
-        .map_err(|err| CommandError {
-            message: format!("settings.clearTerminalHistory worker failed: {err}"),
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
+        settings_clear_terminal_history_impl(&dir)
+    })
+    .await
+    .map_err(|err| CommandError {
+        message: format!("settings.clearTerminalHistory worker failed: {err}"),
+    })?
 }
 
 // settings:get-shell-path — resolve a shell type to a concrete executable.
@@ -218,7 +231,8 @@ fn shell_path_cache() -> &'static Mutex<std::collections::HashMap<String, String
     CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-#[tauri::command]
+// Dispatch-called with pure args; a command on desktop, a plain fn headless.
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn settings_get_shell_path(shell_type: String) -> String {
     if let Some(hit) = shell_path_cache().lock().unwrap().get(&shell_type) {
         return hit.clone();
@@ -262,11 +276,8 @@ pub struct CxDetectionResult {
     pub error: Option<String>,
 }
 
-fn read_cx_settings(app: &tauri::AppHandle) -> CxSettings {
-    let Ok(p) = settings_path(app) else {
-        return CxSettings::default();
-    };
-    let Ok(text) = fs::read_to_string(&p) else {
+fn read_cx_settings(data_dir: &Path) -> CxSettings {
+    let Ok(text) = fs::read_to_string(settings_path(data_dir)) else {
         return CxSettings::default();
     };
     serde_json::from_str::<CxSettings>(&text).unwrap_or_default()
@@ -331,10 +342,9 @@ fn cx_run_version(binary: &str) -> Result<String, String> {
     })
 }
 
-fn settings_detect_cx_impl(app: tauri::AppHandle) -> Result<CxDetectionResult, CommandError> {
-    let settings = read_cx_settings(&app);
-    let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
-    let cache_dir = dir.join("cx-cache").to_string_lossy().to_string();
+pub fn settings_detect_cx_impl(data_dir: &Path) -> Result<CxDetectionResult, CommandError> {
+    let settings = read_cx_settings(data_dir);
+    let cache_dir = data_dir.join("cx-cache").to_string_lossy().to_string();
     let enabled = settings.enabled;
 
     let Some(binary) = cx_resolve_configured(settings.binary_path.as_deref()) else {
@@ -367,13 +377,17 @@ fn settings_detect_cx_impl(app: tauri::AppHandle) -> Result<CxDetectionResult, C
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_detect_cx(app: tauri::AppHandle) -> Result<CxDetectionResult, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || settings_detect_cx_impl(app))
-        .await
-        .map_err(|err| CommandError {
-            message: format!("settings.detectCx worker failed: {err}"),
-        })?
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
+        settings_detect_cx_impl(&dir)
+    })
+    .await
+    .map_err(|err| CommandError {
+        message: format!("settings.detectCx worker failed: {err}"),
+    })?
 }
 
 #[cfg(test)]
