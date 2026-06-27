@@ -170,7 +170,7 @@ pub async fn remote_connect(
 ) -> Result<Value, BridgeError> {
     let state = (*client_state).clone();
     let window_id = Some(window.label().to_string());
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         Ok(state
             .connect(app, host, port, token, fingerprint, label, window_id)
             .unwrap_or_else(|error| json!({ "connected": false, "error": error })))
@@ -206,7 +206,7 @@ pub async fn remote_test_connection(
     fingerprint: String,
 ) -> Result<Value, BridgeError> {
     let state = (*client_state).clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         Ok(state
             .test_connection(host, port, token, fingerprint)
             .unwrap_or_else(|error| json!({ "ok": false, "error": error })))
@@ -226,7 +226,7 @@ pub async fn remote_list_profiles(
     fingerprint: String,
 ) -> Result<Value, BridgeError> {
     let state = (*client_state).clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         Ok(state
             .list_profiles(host, port, token, fingerprint)
             .unwrap_or_else(|error| json!({ "error": error })))

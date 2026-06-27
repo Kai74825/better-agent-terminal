@@ -150,7 +150,7 @@ pub(crate) fn log_tauri(app: &AppHandle, message: &str) {
         return;
     };
     let line = tauri_log_line(message);
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let _ = append_line(&path, &line);
     });
 }

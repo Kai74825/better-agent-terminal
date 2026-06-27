@@ -7,6 +7,7 @@
 
 mod account_store;
 mod app_data;
+mod async_rt;
 #[cfg(feature = "desktop")]
 mod app_menu;
 #[cfg(feature = "desktop")]

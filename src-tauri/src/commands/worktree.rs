@@ -1202,7 +1202,7 @@ async fn remote_invoke_for_window(
     }
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         remote_client
             .invoke(&window_label, channel, args, timeout)
             .map_err(BridgeError::from)
@@ -1227,7 +1227,7 @@ pub async fn worktree_create_local(
     cwd: String,
     install_pnpm: Option<bool>,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         create_worktree_native(
             Some(app),
             &state,
@@ -1275,7 +1275,7 @@ pub async fn worktree_remove_local(
     session_id: String,
     delete_branch: bool,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         remove_worktree_native(&state, session_id, delete_branch)
     })
     .await
@@ -1311,7 +1311,7 @@ pub async fn worktree_status_local(
     state: WorktreeState,
     session_id: String,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || worktree_status_native(&state, session_id))
+    crate::async_rt::spawn_blocking(move || worktree_status_native(&state, session_id))
         .await
         .map_err(|err| BridgeError {
             message: format!("worktree.status worker failed: {err}"),
@@ -1345,7 +1345,7 @@ pub async fn worktree_merge_local(
     session_id: String,
     strategy: String,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         merge_worktree_native(&state, session_id, strategy)
     })
     .await
@@ -1384,7 +1384,7 @@ pub async fn worktree_rehydrate_local(
     worktree_path: String,
     branch_name: String,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         rehydrate_worktree_native(&state, session_id, cwd, worktree_path, branch_name)
     })
     .await

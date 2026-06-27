@@ -70,7 +70,7 @@ pub fn settings_load_impl(data_dir: &Path) -> Result<Option<String>, CommandErro
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_load(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
         settings_load_impl(&dir)
     })
@@ -92,7 +92,7 @@ pub fn settings_save_impl(data_dir: &Path, data: String) -> Result<(), CommandEr
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_save(app: tauri::AppHandle, data: String) -> Result<(), CommandError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
         settings_save_impl(&dir, data)
     })
@@ -128,7 +128,7 @@ fn settings_clear_terminal_history_impl(data_dir: &Path) -> Result<bool, Command
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_clear_terminal_history(app: tauri::AppHandle) -> Result<bool, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
         settings_clear_terminal_history_impl(&dir)
     })
@@ -380,7 +380,7 @@ pub fn settings_detect_cx_impl(data_dir: &Path) -> Result<CxDetectionResult, Com
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn settings_detect_cx(app: tauri::AppHandle) -> Result<CxDetectionResult, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let dir = app_data::app_data_dir(&app).map_err(SettingsError::AppDataDir)?;
         settings_detect_cx_impl(&dir)
     })

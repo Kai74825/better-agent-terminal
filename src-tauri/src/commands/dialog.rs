@@ -32,7 +32,7 @@ pub async fn dialog_confirm(
     // the async runtime. spawn_blocking is the supported way to do this
     // from inside a Tauri command (which itself runs on the async runtime).
     let app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         app.dialog()
             .message(&message)
             .title(&title)
@@ -66,7 +66,7 @@ pub async fn dialog_select_folder(
     app: tauri::AppHandle,
 ) -> Result<Option<Vec<String>>, CommandError> {
     let app_clone = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         let mut builder = app_clone.dialog().file();
         if let Some(home) = home_default(&app_clone) {
             builder = builder.set_directory(home);
@@ -83,7 +83,7 @@ pub async fn dialog_select_folder(
 #[tauri::command]
 pub async fn dialog_select_files(app: tauri::AppHandle) -> Result<Vec<String>, CommandError> {
     let app_clone = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         let mut builder = app_clone.dialog().file();
         if let Some(home) = home_default(&app_clone) {
             builder = builder.set_directory(home);
@@ -100,7 +100,7 @@ pub async fn dialog_select_files(app: tauri::AppHandle) -> Result<Vec<String>, C
 #[tauri::command]
 pub async fn dialog_select_images(app: tauri::AppHandle) -> Result<Vec<String>, CommandError> {
     let app_clone = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         let mut builder = app_clone
             .dialog()
             .file()

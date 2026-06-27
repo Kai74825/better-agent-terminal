@@ -76,7 +76,7 @@ async fn remote_invoke_for_window(
     }
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         remote_client.invoke(&window_label, channel, args, REMOTE_FS_TIMEOUT)
     })
     .await
@@ -215,7 +215,7 @@ pub async fn fs_read_file(app: AppHandle, window: WebviewWindow, path: String) -
                 ..Default::default()
             });
     }
-    tauri::async_runtime::spawn_blocking(move || fs_read_file_impl(path))
+    crate::async_rt::spawn_blocking(move || fs_read_file_impl(path))
         .await
         .unwrap_or_else(|err| FsReadResult {
             error: Some(err.to_string()),
@@ -268,7 +268,7 @@ pub async fn fs_readdir(app: AppHandle, window: WebviewWindow, dir_path: String)
     {
         return result.and_then(from_remote_value).unwrap_or_default();
     }
-    tauri::async_runtime::spawn_blocking(move || fs_readdir_impl(dir_path))
+    crate::async_rt::spawn_blocking(move || fs_readdir_impl(dir_path))
         .await
         .unwrap_or_default()
 }
@@ -281,7 +281,7 @@ pub async fn fs_is_directory(app: AppHandle, window: WebviewWindow, path: String
     {
         return result.and_then(from_remote_value).unwrap_or(false);
     }
-    tauri::async_runtime::spawn_blocking(move || fs_is_directory_impl(path))
+    crate::async_rt::spawn_blocking(move || fs_is_directory_impl(path))
         .await
         .unwrap_or(false)
 }
@@ -386,7 +386,7 @@ pub async fn fs_list_dirs(
             });
     }
     let home = home_string(&app).unwrap_or_else(|| PathBuf::from("/"));
-    tauri::async_runtime::spawn_blocking(move || fs_list_dirs_impl(home, dir_path, include_hidden))
+    crate::async_rt::spawn_blocking(move || fs_list_dirs_impl(home, dir_path, include_hidden))
         .await
         .unwrap_or_else(|e| ListDirsResult {
             error: Some(format!("list dirs task failed: {e}")),
@@ -514,7 +514,7 @@ pub async fn fs_mkdir(
                 ..Default::default()
             });
     }
-    tauri::async_runtime::spawn_blocking(move || fs_mkdir_impl(parent_path, name))
+    crate::async_rt::spawn_blocking(move || fs_mkdir_impl(parent_path, name))
         .await
         .unwrap_or_else(|e| PathOrError {
             error: Some(e.to_string()),
@@ -580,7 +580,7 @@ pub async fn fs_delete_path(
                 ..Default::default()
             });
     }
-    tauri::async_runtime::spawn_blocking(move || fs_delete_path_impl(target_path))
+    crate::async_rt::spawn_blocking(move || fs_delete_path_impl(target_path))
         .await
         .unwrap_or_else(|e| PathOrError {
             error: Some(e.to_string()),
@@ -666,7 +666,7 @@ pub async fn fs_quick_locations(app: AppHandle, window: WebviewWindow) -> Vec<Qu
         return result.and_then(from_remote_value).unwrap_or_default();
     }
     let home = home_string(&app);
-    tauri::async_runtime::spawn_blocking(move || fs_quick_locations_impl(home))
+    crate::async_rt::spawn_blocking(move || fs_quick_locations_impl(home))
         .await
         .unwrap_or_default()
 }
@@ -794,7 +794,7 @@ pub async fn fs_search(
     {
         return result.and_then(from_remote_value).unwrap_or_default();
     }
-    tauri::async_runtime::spawn_blocking(move || fs_search_impl(dir_path, query))
+    crate::async_rt::spawn_blocking(move || fs_search_impl(dir_path, query))
         .await
         .unwrap_or_default()
 }
@@ -952,7 +952,7 @@ pub async fn fs_resolve_path_links(
     {
         return result.and_then(from_remote_value).unwrap_or_default();
     }
-    tauri::async_runtime::spawn_blocking(move || fs_resolve_path_links_impl(cwd, raw_paths))
+    crate::async_rt::spawn_blocking(move || fs_resolve_path_links_impl(cwd, raw_paths))
         .await
         .unwrap_or_default()
 }
@@ -1528,7 +1528,7 @@ pub async fn remote_upload_file_to_host(
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
 
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         stream_local_file_to_host(
             &remote_client,
             &window_label,
@@ -1556,7 +1556,7 @@ pub async fn fs_upload_to_dir(
     if is_remote_profile_window(&app, &window) {
         let remote_client = app.state::<RustRemoteClientState>().inner().clone();
         let window_label = window.label().to_string();
-        return tauri::async_runtime::spawn_blocking(move || {
+        return crate::async_rt::spawn_blocking(move || {
             stream_local_file_to_host(
                 &remote_client,
                 &window_label,
@@ -1568,7 +1568,7 @@ pub async fn fs_upload_to_dir(
         .await
         .map_err(|err| format!("fs_upload_to_dir worker failed: {err}"))?;
     }
-    tauri::async_runtime::spawn_blocking(move || fs_copy_into_dir_impl(local_path, dest_dir))
+    crate::async_rt::spawn_blocking(move || fs_copy_into_dir_impl(local_path, dest_dir))
         .await
         .map_err(|err| format!("fs_upload_to_dir worker failed: {err}"))?
 }
@@ -1599,7 +1599,7 @@ pub async fn fs_download_file(
     };
     let app_for_dialog = app.clone();
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
+    crate::async_rt::spawn_blocking(move || -> Result<Option<String>, String> {
         let picked = app_for_dialog
             .dialog()
             .file()

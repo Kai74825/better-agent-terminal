@@ -39,6 +39,9 @@ tauri-build = { version = "2", features = [] }
 # incrementally; until it lands, every supported build keeps `desktop` on.
 [dependencies]
 tauri = { version = "2", features = [], optional = true }
+# Direct tokio dep backs the headless async runtime (crate::async_rt); on desktop
+# the shim re-exports tauri's bundled runtime, so this is only load-bearing headless.
+tokio = { version = "1", features = ["rt-multi-thread", "rt", "sync", "time", "io-util", "process", "net"] }
 tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }

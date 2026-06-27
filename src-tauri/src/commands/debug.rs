@@ -36,7 +36,7 @@ pub async fn debug_log(app: tauri::AppHandle, args: Vec<Value>) {
     let path = app_data::app_data_dir_opt(&app).map(|dir| dir.join("logs").join("debug.log"));
     if let Some(path) = path {
         let line = debug_log_line(&message);
-        let _ = tauri::async_runtime::spawn_blocking(move || append_line(&path, &line)).await;
+        let _ = crate::async_rt::spawn_blocking(move || append_line(&path, &line)).await;
     }
 }
 

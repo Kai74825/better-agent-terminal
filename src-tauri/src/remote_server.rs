@@ -1571,7 +1571,7 @@ fn invoke_rust_for_remote(
         "app:check-update" => {
             let update_channel =
                 optional_string_param(params, "channel").unwrap_or_else(|| "stable".to_string());
-            tauri::async_runtime::block_on(update_cmd::update_check_native(
+            crate::async_rt::block_on(update_cmd::update_check_native(
                 app.clone(),
                 update_channel,
             ))
@@ -1581,7 +1581,7 @@ fn invoke_rust_for_remote(
         "app:install-update" => {
             let update_channel =
                 optional_string_param(params, "channel").unwrap_or_else(|| "stable".to_string());
-            tauri::async_runtime::block_on(update_cmd::update_install(app.clone(), update_channel))
+            crate::async_rt::block_on(update_cmd::update_install(app.clone(), update_channel))
                 .map_err(bridge_error_message)
         }
         #[cfg(feature = "desktop")]
@@ -2117,8 +2117,8 @@ fn invoke_rust_for_remote(
                     let app_handle = app.clone();
                     let pty_handle = app.state::<pty_cmd::PtyState>().handle();
                     let worker_buffer_handle = app.state::<WorkerBufferState>().handle();
-                    let id = tauri::async_runtime::block_on(async move {
-                        tauri::async_runtime::spawn_blocking(move || {
+                    let id = crate::async_rt::block_on(async move {
+                        crate::async_rt::spawn_blocking(move || {
                             pty_cmd::start_pty_session(
                                 &app_handle,
                                 pty_handle,
@@ -2225,7 +2225,7 @@ fn invoke_rust_for_remote(
         "pty:restart" => string_param(params, "id", channel).and_then(|id| {
             string_param(params, "cwd", channel).and_then(|cwd| {
                 let shell = optional_string_param(params, "shell");
-                tauri::async_runtime::block_on(pty_cmd::pty_restart_native(
+                crate::async_rt::block_on(pty_cmd::pty_restart_native(
                     app.clone(),
                     app.state::<pty_cmd::PtyState>(),
                     id,
@@ -2345,23 +2345,23 @@ fn invoke_rust_for_remote(
         "git:get-github-url" => {
             string_param_any(params, &["folderPath", "cwd"], channel).and_then(|folder_path| {
                 let value =
-                    tauri::async_runtime::block_on(git_cmd::git_get_github_url_native(folder_path));
+                    crate::async_rt::block_on(git_cmd::git_get_github_url_native(folder_path));
                 to_json_value(channel, value)
             })
         }
         "git:branch" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_branch_native(cwd));
+            let value = crate::async_rt::block_on(git_cmd::git_get_branch_native(cwd));
             to_json_value(channel, value)
         }),
         "git:log" => string_param(params, "cwd", channel).and_then(|cwd| {
             let count = params.get("count").and_then(Value::as_i64);
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_log_native(cwd, count));
+            let value = crate::async_rt::block_on(git_cmd::git_get_log_native(cwd, count));
             to_json_value(channel, value)
         }),
         "git:diff" => string_param(params, "cwd", channel).and_then(|cwd| {
             let commit_hash = optional_string_param(params, "commitHash");
             let file_path = optional_string_param(params, "filePath");
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_diff_native(
+            let value = crate::async_rt::block_on(git_cmd::git_get_diff_native(
                 cwd,
                 commit_hash,
                 file_path,
@@ -2370,42 +2370,42 @@ fn invoke_rust_for_remote(
         }),
         "git:diff-files" => string_param(params, "cwd", channel).and_then(|cwd| {
             let commit_hash = optional_string_param(params, "commitHash");
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_diff_files_native(
+            let value = crate::async_rt::block_on(git_cmd::git_get_diff_files_native(
                 cwd,
                 commit_hash,
             ));
             to_json_value(channel, value)
         }),
         "git:getRoot" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_root_native(cwd));
+            let value = crate::async_rt::block_on(git_cmd::git_get_root_native(cwd));
             to_json_value(channel, value)
         }),
         "git:status" => string_param(params, "cwd", channel).and_then(|cwd| {
-            let value = tauri::async_runtime::block_on(git_cmd::git_get_status_native(cwd));
+            let value = crate::async_rt::block_on(git_cmd::git_get_status_native(cwd));
             to_json_value(channel, value)
         }),
         "github:check-cli" => {
-            let value = tauri::async_runtime::block_on(github_cmd::github_check_cli_native());
+            let value = crate::async_rt::block_on(github_cmd::github_check_cli_native());
             to_json_value(channel, value)
         }
         "github:pr-list" => string_param(params, "cwd", channel)
-            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_pr_list_native(cwd))),
+            .map(|cwd| crate::async_rt::block_on(github_cmd::github_pr_list_native(cwd))),
         "github:issue-list" => string_param(params, "cwd", channel)
-            .map(|cwd| tauri::async_runtime::block_on(github_cmd::github_issue_list_native(cwd))),
+            .map(|cwd| crate::async_rt::block_on(github_cmd::github_issue_list_native(cwd))),
         "github:pr-view" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).map(|number| {
-                tauri::async_runtime::block_on(github_cmd::github_pr_view_native(cwd, number))
+                crate::async_rt::block_on(github_cmd::github_pr_view_native(cwd, number))
             })
         }),
         "github:issue-view" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).map(|number| {
-                tauri::async_runtime::block_on(github_cmd::github_issue_view_native(cwd, number))
+                crate::async_rt::block_on(github_cmd::github_issue_view_native(cwd, number))
             })
         }),
         "github:pr-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).and_then(|number| {
                 string_param(params, "body", channel).map(|body| {
-                    tauri::async_runtime::block_on(github_cmd::github_pr_comment_native(
+                    crate::async_rt::block_on(github_cmd::github_pr_comment_native(
                         cwd, number, body,
                     ))
                 })
@@ -2414,7 +2414,7 @@ fn invoke_rust_for_remote(
         "github:issue-comment" => string_param(params, "cwd", channel).and_then(|cwd| {
             i64_param(params, "number", channel).and_then(|number| {
                 string_param(params, "body", channel).map(|body| {
-                    tauri::async_runtime::block_on(github_cmd::github_issue_comment_native(
+                    crate::async_rt::block_on(github_cmd::github_issue_comment_native(
                         cwd, number, body,
                     ))
                 })
@@ -2422,7 +2422,7 @@ fn invoke_rust_for_remote(
         }),
         "image:read-as-data-url" => string_param_any(params, &["path", "filePath"], channel)
             .and_then(|path| {
-                tauri::async_runtime::block_on(image_cmd::image_read_as_data_url(path))
+                crate::async_rt::block_on(image_cmd::image_read_as_data_url(path))
                     .map(Value::String)
                     .map_err(|err| err.to_string())
             }),
@@ -2561,7 +2561,7 @@ fn invoke_rust_for_remote(
         "worktree:create" => string_param(params, "sessionId", channel).and_then(|session_id| {
             string_param(params, "cwd", channel).and_then(|cwd| {
                 let install_pnpm = Some(bool_param(params, "installPnpm", false));
-                tauri::async_runtime::block_on(worktree_cmd::worktree_create_local(
+                crate::async_rt::block_on(worktree_cmd::worktree_create_local(
                     app.clone(),
                     ctx.state::<worktree_cmd::WorktreeState>(),
                     session_id,
@@ -2573,7 +2573,7 @@ fn invoke_rust_for_remote(
         }),
         "worktree:remove" => string_param(params, "sessionId", channel).and_then(|session_id| {
             let delete_branch = bool_param(params, "deleteBranch", true);
-            tauri::async_runtime::block_on(worktree_cmd::worktree_remove_local(
+            crate::async_rt::block_on(worktree_cmd::worktree_remove_local(
                 ctx.state::<worktree_cmd::WorktreeState>(),
                 session_id,
                 delete_branch,
@@ -2581,7 +2581,7 @@ fn invoke_rust_for_remote(
             .map_err(bridge_error_message)
         }),
         "worktree:status" => string_param(params, "sessionId", channel).and_then(|session_id| {
-            tauri::async_runtime::block_on(worktree_cmd::worktree_status_local(
+            crate::async_rt::block_on(worktree_cmd::worktree_status_local(
                 ctx.state::<worktree_cmd::WorktreeState>(),
                 session_id,
             ))
@@ -2590,7 +2590,7 @@ fn invoke_rust_for_remote(
         "worktree:merge" => string_param(params, "sessionId", channel).and_then(|session_id| {
             let strategy =
                 optional_string_param(params, "strategy").unwrap_or_else(|| "merge".into());
-            tauri::async_runtime::block_on(worktree_cmd::worktree_merge_local(
+            crate::async_rt::block_on(worktree_cmd::worktree_merge_local(
                 ctx.state::<worktree_cmd::WorktreeState>(),
                 session_id,
                 strategy,
@@ -2601,7 +2601,7 @@ fn invoke_rust_for_remote(
             string_param(params, "cwd", channel).and_then(|cwd| {
                 string_param(params, "worktreePath", channel).and_then(|worktree_path| {
                     string_param(params, "branchName", channel).and_then(|branch_name| {
-                        tauri::async_runtime::block_on(worktree_cmd::worktree_rehydrate_local(
+                        crate::async_rt::block_on(worktree_cmd::worktree_rehydrate_local(
                             ctx.state::<worktree_cmd::WorktreeState>(),
                             session_id,
                             cwd,

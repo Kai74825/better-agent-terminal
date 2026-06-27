@@ -53,14 +53,14 @@ pub struct RuntimeInstallResult {
 
 #[tauri::command]
 pub async fn runtime_get_status(app: AppHandle) -> Result<RuntimeStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || runtime_status_impl(&app))
+    crate::async_rt::spawn_blocking(move || runtime_status_impl(&app))
         .await
         .map_err(|err| format!("runtime.getStatus worker failed: {err}"))?
 }
 
 #[tauri::command]
 pub async fn runtime_install(app: AppHandle, tool: String) -> Result<RuntimeInstallResult, String> {
-    tauri::async_runtime::spawn_blocking(move || runtime_install_impl(&app, &tool))
+    crate::async_rt::spawn_blocking(move || runtime_install_impl(&app, &tool))
         .await
         .map_err(|err| format!("runtime.install worker failed: {err}"))?
 }
@@ -76,7 +76,7 @@ pub async fn runtime_open_runtime_folder(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn runtime_clear_managed(app: AppHandle, tool: Option<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || runtime_clear_managed_impl(&app, tool.as_deref()))
+    crate::async_rt::spawn_blocking(move || runtime_clear_managed_impl(&app, tool.as_deref()))
         .await
         .map_err(|err| format!("runtime.clearManaged worker failed: {err}"))?
 }

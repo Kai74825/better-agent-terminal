@@ -67,7 +67,7 @@ async fn remote_supported_session_types(
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
     Some(
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::async_rt::spawn_blocking(move || {
             remote_client.invoke(
                 &window_label,
                 "agent:get-supported-session-types",
@@ -94,7 +94,7 @@ async fn remote_agent_presets(
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
     Some(
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::async_rt::spawn_blocking(move || {
             remote_client.invoke(
                 &window_label,
                 "agent:list-presets",

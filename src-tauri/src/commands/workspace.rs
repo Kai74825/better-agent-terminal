@@ -156,7 +156,7 @@ async fn remote_workspace_invoke(
     let mut invoke_args = Vec::with_capacity(args.len() + 1);
     invoke_args.push(json!(target_profile_id));
     invoke_args.extend(args);
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         remote_client.invoke(&routing_label, channel, invoke_args, Duration::from_secs(30))
     })
     .await
@@ -184,7 +184,7 @@ pub async fn workspace_load(
             other => Some(other.to_string()),
         });
     }
-    tauri::async_runtime::spawn_blocking(move || workspace_load_impl(app, window_label))
+    crate::async_rt::spawn_blocking(move || workspace_load_impl(app, window_label))
         .await
         .map_err(|err| CommandError {
             message: format!("workspace.load worker failed: {err}"),
@@ -259,7 +259,7 @@ pub async fn workspace_save(
     let event_window_label = window_label.clone();
     let event_data = data.clone();
     let result =
-        tauri::async_runtime::spawn_blocking(move || workspace_save_impl(app, window_label, data))
+        crate::async_rt::spawn_blocking(move || workspace_save_impl(app, window_label, data))
             .await
             .map_err(|err| CommandError {
                 message: format!("workspace.save worker failed: {err}"),
@@ -317,7 +317,7 @@ pub async fn workspace_move_to_window(
     let worker_workspace_id = workspace_id.clone();
     let emit_source_window_id = source_window_id.clone();
     let emit_target_window_id = target_window_id.clone();
-    let moved = tauri::async_runtime::spawn_blocking(move || {
+    let moved = crate::async_rt::spawn_blocking(move || {
         window_registry::move_workspace(
             &worker_app,
             &source_window_id,

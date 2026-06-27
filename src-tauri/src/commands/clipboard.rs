@@ -64,7 +64,7 @@ pub async fn clipboard_save_image(app: tauri::AppHandle) -> Result<Option<String
     let app_clone = app.clone();
     let app_for_log = app.clone();
     let result: Result<Option<String>, CommandError> =
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::async_rt::spawn_blocking(move || {
             let image = match app_clone.clipboard().read_image() {
                 Ok(image) => image,
                 Err(err) => {

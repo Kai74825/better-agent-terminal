@@ -1024,7 +1024,7 @@ pub async fn pty_create(
     }
     let handle = state.handle();
     let worker_buffer_handle = worker_buffer.handle();
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         start_pty_session(&app, handle, Some(worker_buffer_handle), options)
     })
     .await
@@ -1428,7 +1428,7 @@ pub async fn pty_restart(
         return result;
     }
     let handle = state.handle();
-    tauri::async_runtime::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
+    crate::async_rt::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
         .await
         .map_err(|e| CommandError {
             message: format!("pty.restart worker failed: {e}"),
@@ -1443,7 +1443,7 @@ pub(crate) async fn pty_restart_native(
     shell: Option<String>,
 ) -> Result<bool, CommandError> {
     let handle = state.handle();
-    tauri::async_runtime::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
+    crate::async_rt::spawn_blocking(move || pty_restart_impl(app, handle, id, cwd, shell))
         .await
         .map_err(|e| CommandError {
             message: format!("pty.restart worker failed: {e}"),

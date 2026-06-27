@@ -153,7 +153,7 @@ pub async fn update_install(
 #[tauri::command]
 pub async fn update_check(app: tauri::AppHandle) -> Result<Value, BridgeError> {
     let current_version = app.package_info().version.to_string();
-    tauri::async_runtime::spawn_blocking(move || check_update_native(&current_version))
+    crate::async_rt::spawn_blocking(move || check_update_native(&current_version))
         .await
         .map_err(|err| BridgeError {
             message: format!("update.check worker failed: {err}"),

@@ -159,7 +159,7 @@ async fn remote_invoke_for_window(
     let window_label = window.label().to_string();
     let remote_channel = remote_agent_channel(channel);
     let error_channel = remote_channel.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         remote_client
             .invoke(&window_label, &remote_channel, args, timeout)
             .map_err(BridgeError::from)
@@ -2119,7 +2119,7 @@ async fn call_sidecar_with_timeout_blocking(
     params: Value,
     timeout: Duration,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         call_with_timeout(&app, &state, method, params, timeout)
     })
     .await
@@ -2218,7 +2218,7 @@ async fn prepare_codex_worktree_options(
         .and_then(Value::as_str)
         .filter(|branch| !branch.trim().is_empty())
         .map(str::to_string);
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         worktree_cmd::ensure_worktree_for_session_native(
             &worktree_state,
             session_id,
@@ -2308,7 +2308,7 @@ impl ClaudeRuntimeRouter {
             let codex_session_id = session_id.clone();
             let codex_options = options.clone();
             let started = Instant::now();
-            let result = tauri::async_runtime::spawn_blocking(move || {
+            let result = crate::async_rt::spawn_blocking(move || {
                 codex.start_session(&codex_app, codex_session_id, codex_options)
             })
             .await
@@ -2375,7 +2375,7 @@ impl ClaudeRuntimeRouter {
             let codex_session_id = session_id.clone();
             let codex_prompt = prompt.clone();
             let codex_images = images.clone().unwrap_or_default();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 codex.send_message(&codex_app, codex_session_id, codex_prompt, codex_images)
             })
             .await
@@ -2423,7 +2423,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 codex.abort_session(&codex_app, codex_session_id)
             })
             .await
@@ -2448,7 +2448,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 codex.abort_session(&codex_app, codex_session_id)
             })
             .await
@@ -2469,7 +2469,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            let value = tauri::async_runtime::spawn_blocking(move || {
+            let value = crate::async_rt::spawn_blocking(move || {
                 codex.abort_session(&codex_app, codex_session_id)
             })
             .await
@@ -2496,7 +2496,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 codex.reset_session(&codex_app, codex_session_id)
             })
             .await
@@ -2526,7 +2526,7 @@ impl ClaudeRuntimeRouter {
             let codex_sdk_session_id = sdk_session_id.clone();
             let codex_options = options.clone();
             let resume_started = Instant::now();
-            let result = tauri::async_runtime::spawn_blocking(move || {
+            let result = crate::async_rt::spawn_blocking(move || {
                 codex.resume_session(
                     &codex_app,
                     codex_session_id,
@@ -2571,7 +2571,7 @@ impl ClaudeRuntimeRouter {
                     let codex_session_id = session_id.clone();
                     let codex_options = options.clone();
                     let fresh_started = Instant::now();
-                    let fresh_result = tauri::async_runtime::spawn_blocking(move || {
+                    let fresh_result = crate::async_rt::spawn_blocking(move || {
                         codex.start_session(&codex_app, codex_session_id, codex_options)
                     })
                     .await
@@ -2732,7 +2732,7 @@ impl ClaudeRuntimeRouter {
             return Ok(Value::Null);
         }
         let app = self.app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::async_rt::spawn_blocking(move || {
             account_info_from_auth_status(&fetch_auth_status_native(&app))
         })
         .await
@@ -2876,7 +2876,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 let _ = codex.set_sandbox_mode(&codex_app, &codex_session_id, mode);
                 codex.reconfigure_session(&codex_app, &codex_session_id)
             })
@@ -2902,7 +2902,7 @@ impl ClaudeRuntimeRouter {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
             let codex_session_id = session_id.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 let _ = codex.set_approval_policy(&codex_app, &codex_session_id, policy);
                 codex.reconfigure_session(&codex_app, &codex_session_id)
             })
@@ -2972,7 +2972,7 @@ impl ClaudeRuntimeRouter {
         if self.codex.is_owned(&session_id) {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
-            return tauri::async_runtime::spawn_blocking(move || {
+            return crate::async_rt::spawn_blocking(move || {
                 codex.resolve_permission(&codex_app, &session_id, &tool_use_id, &result)
             })
             .await
@@ -3035,7 +3035,7 @@ pub async fn claude_auth_status(
     {
         return result;
     }
-    let value = tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&app))
+    let value = crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&app))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authStatus worker failed: {err}"),
@@ -3297,7 +3297,7 @@ pub async fn claude_auth_login(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || auth_login_native(&app))
+    crate::async_rt::spawn_blocking(move || auth_login_native(&app))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authLogin worker failed: {err}"),
@@ -3310,7 +3310,7 @@ pub async fn claude_auth_logout(
     app: AppHandle,
     _state: State<'_, SidecarState>,
 ) -> Result<Value, BridgeError> {
-    tauri::async_runtime::spawn_blocking(move || auth_logout_native(&app))
+    crate::async_rt::spawn_blocking(move || auth_logout_native(&app))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.authLogout worker failed: {err}"),
@@ -3326,7 +3326,7 @@ pub async fn claude_account_import_current(
     let app_data_dir = app_data_dir(&app)?;
     let status_app = app.clone();
     let status_value =
-        tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&status_app))
+        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&status_app))
             .await
             .map_err(|err| BridgeError {
                 message: format!("claude.accountImportCurrent authStatus worker failed: {err}"),
@@ -3353,7 +3353,7 @@ pub async fn claude_account_login_new(
     let active_account_id = index.active_account_id.clone();
     let backup_credential = account_store::read_cli_credentials();
     let login_app = app.clone();
-    let login_result = tauri::async_runtime::spawn_blocking(move || auth_login_native(&login_app))
+    let login_result = crate::async_rt::spawn_blocking(move || auth_login_native(&login_app))
         .await
         .map_err(|err| BridgeError {
             message: format!("claude.accountLoginNew authLogin worker failed: {err}"),
@@ -3363,7 +3363,7 @@ pub async fn claude_account_login_new(
     }
     let status_app = app.clone();
     let status_value =
-        tauri::async_runtime::spawn_blocking(move || fetch_auth_status_native(&status_app))
+        crate::async_rt::spawn_blocking(move || fetch_auth_status_native(&status_app))
             .await
             .map_err(|err| BridgeError {
                 message: format!("claude.accountLoginNew authStatus worker failed: {err}"),
@@ -3586,7 +3586,7 @@ pub async fn codex_account_login(
     // codex login is interactive (browser OAuth) and can take a while — run it
     // off the async runtime so it doesn't stall other commands.
     let codex = codex.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || codex.account_login(&app, api_key))
+    crate::async_rt::spawn_blocking(move || codex.account_login(&app, api_key))
         .await
         .map_err(|err| BridgeError {
             message: format!("codex login worker failed: {err}"),
@@ -3976,7 +3976,7 @@ pub async fn claude_get_worktree_status(
         return result;
     }
     if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
-        let status = tauri::async_runtime::spawn_blocking(move || {
+        let status = crate::async_rt::spawn_blocking(move || {
             worktree_status_from_notification_snapshot(&session)
         })
         .await
@@ -4044,7 +4044,7 @@ pub async fn claude_cleanup_worktree(
     if let Some(session) = notification_cmd::get_agent_session_snapshot(&app, &session_id) {
         if session.worktree_path.is_some() {
             let native_session = session.clone();
-            let cleaned = tauri::async_runtime::spawn_blocking(move || {
+            let cleaned = crate::async_rt::spawn_blocking(move || {
                 cleanup_worktree_from_notification_snapshot(&native_session, delete_branch)
             })
             .await

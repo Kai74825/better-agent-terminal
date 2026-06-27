@@ -31,7 +31,7 @@ async fn call_cli_blocking(
     timeout: Duration,
 ) -> Result<Value, BridgeError> {
     let sidecar = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || call_cli(&app, &sidecar, method, params, timeout))
+    crate::async_rt::spawn_blocking(move || call_cli(&app, &sidecar, method, params, timeout))
         .await
         .map_err(|err| BridgeError {
             message: format!("{method} worker failed: {err}"),

@@ -228,7 +228,7 @@ pub fn worker_buffer_clear(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn worker_procfile_load(file_path: String) -> Result<Vec<ProcfileEntry>, CommandError> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let content = fs::read_to_string(file_path)?;
         Ok(parse_procfile_content(&content))
     })
@@ -264,7 +264,7 @@ pub async fn worker_procfile_start(
         per_terminal_history: None,
         history_key: None,
     };
-    let started_id = tauri::async_runtime::spawn_blocking(move || {
+    let started_id = crate::async_rt::spawn_blocking(move || {
         start_pty_session(&app, pty_handle, Some(worker_handle), create_options)
     })
     .await

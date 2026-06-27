@@ -64,7 +64,7 @@ async fn remote_invoke_for_window(
     }
     let remote_client = app.state::<RustRemoteClientState>().inner().clone();
     let window_label = window.label().to_string();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         remote_client.invoke(&window_label, channel, args, REMOTE_GITHUB_TIMEOUT)
     })
     .await
@@ -179,7 +179,7 @@ async fn run_gh_blocking(
     args: Vec<String>,
     timeout: Duration,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::async_rt::spawn_blocking(move || {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         run_gh(cwd.as_deref(), &refs, timeout)
     })

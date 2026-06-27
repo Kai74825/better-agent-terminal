@@ -161,7 +161,7 @@ pub async fn image_save_data_url(
     let filter_name = format!("{} Image", ext.to_ascii_uppercase());
 
     let app_clone = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = crate::async_rt::spawn_blocking(move || {
         app_clone
             .dialog()
             .file()
@@ -218,7 +218,7 @@ mod tests {
             f.write_all(&bytes).unwrap();
         }
         let url =
-            tauri::async_runtime::block_on(image_read_as_data_url(path.to_string_lossy().into()))
+            crate::async_rt::block_on(image_read_as_data_url(path.to_string_lossy().into()))
                 .unwrap();
         assert!(url.starts_with("data:image/png;base64,"));
         // Round-trip check: payload after the prefix should decode back to
@@ -280,7 +280,7 @@ mod tests {
             f.write_all(&[0u8]).unwrap();
         }
         let err =
-            tauri::async_runtime::block_on(image_read_as_data_url(path.to_string_lossy().into()))
+            crate::async_rt::block_on(image_read_as_data_url(path.to_string_lossy().into()))
                 .err()
                 .unwrap();
         assert!(err.message.starts_with("Image too large"));

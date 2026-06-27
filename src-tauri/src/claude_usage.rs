@@ -255,7 +255,7 @@ pub async fn agent_usage_peek(account_id: String) -> Value {
         }
     }
     let id_for_task = account_id.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Value {
+    let result = crate::async_rt::spawn_blocking(move || -> Value {
         let Some(raw) = crate::account_store::peek_account_credential(&id_for_task) else {
             return Value::Null;
         };
