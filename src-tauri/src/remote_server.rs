@@ -406,7 +406,18 @@ impl RustRemoteServerState {
 
 impl Drop for RustRemoteServerState {
     fn drop(&mut self) {
-        let _ = self.stop();
+        // Only the final owner tears the running server down. `HostContext`'s
+        // `state()`/`try_state()` hand out *clones of the value* (the desktop
+        // backing does `.inner().clone()`, the headless backing clones out of
+        // its type map). Each such clone shares the one `inner` Arc, so a naive
+        // `self.stop()` here would let any transient `ctx.try_state::<…>()`
+        // lookup kill the shared server the moment that temporary clone drops —
+        // which froze remote PTY output mid-session on the headless build.
+        // Guarding on the last strong reference keeps the graceful
+        // stop-on-shutdown behaviour while making clone-out lookups safe.
+        if Arc::strong_count(&self.inner) == 1 {
+            let _ = self.stop();
+        }
     }
 }
 
