@@ -262,6 +262,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
             isActive={isActive}
             onClose={onClose}
             agentPreset={terminal.agentPreset}
+            remoteHydrate={isRemoteConnected}
           />
         )}
       </div>
