@@ -480,6 +480,22 @@ Environment variables mirror the flags: `BAT_DATA_DIR`, `BAT_TAURI_DATA_DIR`, `B
 
 On startup, the server prints the `wss://` URL, token, certificate fingerprint, data directory, and a one-shot `connect` URL that can be pasted into a Remote Profile.
 
+#### Self-contained Linux bundle (no display, no manual setup)
+
+Each release also publishes a **self-contained `bat-server` bundle** for Linux — the binary plus a bundled Node runtime, the node-sidecar, and the native Claude SDK, laid out so everything resolves with **zero system dependencies** (no system Node/Claude/pnpm) and **no `xvfb`** (unlike the WebKitGTK AppImage above). It mirrors the AppImage install-and-go flow:
+
+```bash
+# tarball + systemd installer
+tar -xzf bat-server-linux-x86_64.tar.gz
+sudo ./bat-server-linux-x86_64/install.sh     # writes a systemd unit + generates a token
+
+# …or the single-file AppImage (same flags as the binary)
+chmod +x bat-server-x86_64.AppImage
+./bat-server-x86_64.AppImage --port=9876 --bind=localhost
+```
+
+Both set `IS_SANDBOX=1` so Claude Code's `bypassPermissions` is allowed when the service runs as root on a single-purpose box. Agent credentials (a logged-in `claude`/`codex` or an API key) are still provided once, the same as any host.
+
 ## Configuration
 
 Workspaces, settings, and session data are saved to:

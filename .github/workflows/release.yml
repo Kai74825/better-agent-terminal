@@ -812,3 +812,100 @@ jobs:
             Write-Warning "Chocolatey push failed with exit code $LASTEXITCODE; release artifacts were already published."
             exit 0
           }
+
+  # Self-contained, install-and-go Linux server bundle for the tauri-free
+  # `bat-server` (no WebKit, no xvfb, no manual sidecar provisioning). Runs AFTER
+  # the release is published and uploads to it via `gh release upload`, so nothing
+  # depends on this job — a failure here can never block the desktop release.
+  bat-server-bundle:
+    needs: release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            node-sidecar/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libfuse2 (appimagetool runtime)
+        run: |
+          sudo apt-get update
+          if apt-cache show libfuse2t64 >/dev/null 2>&1; then
+            sudo apt-get install -y libfuse2t64
+          else
+            sudo apt-get install -y libfuse2
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Update version metadata
+        run: pnpm run update:release-version
+
+      - name: Prepare bundle resources (linux-x86_64, all-in-one)
+        run: |
+          node scripts/fetch-node-runtime.mjs --target=linux-x86_64
+          pnpm --dir node-sidecar install --frozen-lockfile --prefer-offline
+          pnpm run build:tauri-sidecar
+          pnpm run prune:tauri-sidecar
+          pnpm run prepare:tauri-sidecar-node-modules
+          # Codex is optional; a failure here just yields a Claude-only bundle.
+          pnpm run prepare:tauri-codex-runtime || echo "codex runtime prep failed; bundle will be Claude-only"
+
+      - name: Build bat-server (headless, no WebKit)
+        run: cargo build --release --bin bat-server --no-default-features --features headless --manifest-path src-tauri/Cargo.toml
+
+      - name: Fetch appimagetool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+
+      - name: Assemble self-contained bundle (tar.gz + AppImage)
+        run: |
+          node scripts/build-bat-server-bundle.mjs \
+            --bin src-tauri/target/release/bat-server \
+            --target linux-x86_64 \
+            --appimage \
+            --out dist-bat-server
+
+      - name: Upload bat-server bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bat-server-linux-x86_64
+          path: |
+            dist-bat-server/bat-server-linux-x86_64.tar.gz
+            dist-bat-server/bat-server-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Publish bat-server bundle to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" dist-bat-server/bat-server-linux-x86_64.tar.gz --clobber
+          if [ -f dist-bat-server/bat-server-x86_64.AppImage ]; then
+            gh release upload "$RELEASE_TAG" dist-bat-server/bat-server-x86_64.AppImage --clobber
+          else
+            echo "AppImage not produced (appimagetool unavailable); published tarball only."
+          fi
