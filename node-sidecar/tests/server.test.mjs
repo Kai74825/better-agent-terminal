@@ -2606,8 +2606,10 @@ async function inProcess() {
     assert.deepEqual(opts.settingSources, ['user', 'project', 'local'])
     assert.equal(opts.agentProgressSummaries, true)
     assert.deepEqual(opts.toolConfig, { askUserQuestion: { previewFormat: 'html' } })
-    // Effort + permission + bypass mapping.
-    assert.equal(opts.effort, 'xhigh')
+    // Effort + permission + bypass mapping. ultracode runs at the CLI's top
+    // effort level 'max' (the legacy 'xhigh' value was dropped in Claude Code
+    // CLI >= 2.1.175 and is aliased to 'max').
+    assert.equal(opts.effort, 'max')
     assert.deepEqual(opts.settings, { ultracode: true, enableWorkflows: true })
     assert.equal(opts.permissionMode, 'bypassPermissions')
     assert.equal(opts.allowDangerouslySkipPermissions, true)

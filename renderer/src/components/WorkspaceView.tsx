@@ -7,6 +7,7 @@ import { workspaceStore } from '../stores/workspace-store'
 import { settingsStore } from '../stores/settings-store'
 import { ThumbnailBar } from './ThumbnailBar'
 import { CloseConfirmDialog } from './CloseConfirmDialog'
+import { RemoteLoginDialog } from './RemoteLoginDialog'
 import { ResizeHandle } from './ResizeHandle'
 import { FolderPicker } from './FolderPicker'
 import { NewTerminalQuickPick, type QuickPickChoice } from './NewTerminalQuickPick'
@@ -314,6 +315,8 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
     pct >= 80 ? '#e05252' : pct >= 50 ? '#e6a700' : '#89ca78'
   const [cliVersions, setCliVersions] = useState<CliVersions | null>(null)
   const [loginPending, setLoginPending] = useState(false)
+  // Non-null while the remote URL ("paste code") login dialog is open.
+  const [remoteLoginKind, setRemoteLoginKind] = useState<'claude' | 'codex' | null>(null)
   const [accountMenuError, setAccountMenuError] = useState<string | null>(null)
   // Id of the account row currently being switched to, so the menu can show a
   // spinner immediately (the backend switch is fast, but the agent then respawns).
@@ -594,11 +597,13 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
   // Start a login flow from the chip. Claude has a real CLI login; for Codex
   // (unified mode) we register the account currently authenticated in ~/.codex.
   const handleLogin = useCallback(async (kind: 'claude' | 'codex') => {
-    // Remote client: the login flow (browser/CLI) runs on the host, not here —
-    // ask the user to log in from a terminal instead.
+    // Remote client: the CLI login runs on the host, surfaced through a sign-in
+    // dialog. Claude uses a URL ("paste code") flow; codex uses a device-code
+    // flow (display URL + one-time code, poll for approval). Both authenticate
+    // the host with no browser on the host.
     if (isRemoteConnected) {
-      setAccountMenuOpen(true)
-      setAccountMenuError('Log in from a terminal on the host.')
+      setAccountMenuOpen(false)
+      setRemoteLoginKind(kind)
       return
     }
     if (loginPending) return
@@ -1406,6 +1411,20 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
           supportedPresetIds={supportedPresetIds}
           onSelect={handleQuickPickSelect}
           onClose={() => setShowQuickPick(false)}
+        />
+      )}
+      {remoteLoginKind && (
+        <RemoteLoginDialog
+          kind={remoteLoginKind}
+          onClose={() => setRemoteLoginKind(null)}
+          onSuccess={() => {
+            setRemoteLoginKind(null)
+            void refreshAccountChip()
+            window.dispatchEvent(new CustomEvent(
+              remoteLoginKind === 'codex' ? 'codex-account-switched' : 'claude-account-switched',
+              { detail: {} },
+            ))
+          }}
         />
       )}
     </div>

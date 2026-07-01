@@ -43,6 +43,7 @@ import { scanSkills, parseSkillFrontmatter } from './lib/skills.mjs'
 
 const CLAUDE_HANDLER_MODULES = [
   './handlers/claude-auth.mjs',
+  './handlers/claude-auth-login.mjs',
   './handlers/claude-session.mjs',
   './handlers/claude-permission.mjs',
   './handlers/claude-history.mjs',
@@ -59,6 +60,7 @@ const CLAUDE_HANDLER_MODULES = [
 // node-sidecar/dist/handlers/*.mjs.
 const CLAUDE_HANDLER_LOADERS = new Map([
   ['./handlers/claude-auth.mjs', () => import('./handlers/claude-auth.mjs')],
+  ['./handlers/claude-auth-login.mjs', () => import('./handlers/claude-auth-login.mjs')],
   ['./handlers/claude-session.mjs', () => import('./handlers/claude-session.mjs')],
   ['./handlers/claude-permission.mjs', () => import('./handlers/claude-permission.mjs')],
   ['./handlers/claude-history.mjs', () => import('./handlers/claude-history.mjs')],

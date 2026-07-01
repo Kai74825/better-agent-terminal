@@ -57,6 +57,51 @@ function preview(value, max = 160) {
   return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized
 }
 
+// --- claude subprocess stderr capture -------------------------------------
+//
+// The SDK pipes the `claude` process's stderr only when an `options.stderr`
+// callback is set (otherwise stdio[2] is 'ignore' and the output is lost).
+// We install a callback that keeps a rolling tail so that when the SDK
+// surfaces an opaque "Claude Code process exited with code N", we can attach
+// the real reason (auth / org-policy / missing-binary messages claude prints
+// to stderr) instead of an inscrutable exit code.
+const CLAUDE_STDERR_TAIL_MAX = 8192
+
+function appendClaudeStderr(s, chunk) {
+  if (!s || chunk == null) return
+  const text = typeof chunk === 'string' ? chunk : String(chunk)
+  if (!text) return
+  const combined = (s.claudeStderrTail || '') + text
+  s.claudeStderrTail = combined.length > CLAUDE_STDERR_TAIL_MAX
+    ? combined.slice(combined.length - CLAUDE_STDERR_TAIL_MAX)
+    : combined
+}
+
+function cleanStderrText(text) {
+  return String(text || '')
+    // strip ANSI escape / CSI sequences
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    // drop remaining control chars except \n and \t
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+// enrichExitErrorMessage: when the SDK error is an opaque process-exit/spawn
+// failure, append the captured stderr tail so the renderer shows the actual
+// cause (e.g. "Your organization has disabled Claude subscription access").
+function enrichExitErrorMessage(errMsg, s) {
+  const base = typeof errMsg === 'string' ? errMsg : String(errMsg ?? '')
+  const tail = cleanStderrText(s?.claudeStderrTail)
+  if (!tail) return base
+  const looksOpaque = /exited with code|terminated by signal|Failed to spawn|exited with error|failed to launch/i.test(base)
+  if (!looksOpaque) return base
+  if (base.includes(tail)) return base
+  return `${base}\n\n${tail}`
+}
+
 function contentLength(content) {
   if (typeof content === 'string') return content.length
   if (Array.isArray(content)) {
@@ -619,6 +664,11 @@ async function buildQueryOptions(s, sessionId, prompt) {
   }
   if (sdkModel) queryOptions.model = sdkModel
   if (claudeCodePath) queryOptions.pathToClaudeCodeExecutable = claudeCodePath
+  // Capture the claude subprocess stderr so an opaque non-zero exit can be
+  // explained with the message claude actually printed (see appendClaudeStderr).
+  queryOptions.stderr = (chunk) => {
+    try { appendClaudeStderr(s, chunk) } catch { /* ignore */ }
+  }
   const installedPlugins = await loadInstalledPlugins()
   if (installedPlugins.length > 0) queryOptions.plugins = installedPlugins
   queryOptions.canUseTool = (toolName, input, opts) => buildCanUseTool(s, sessionId, toolName, input, opts)
@@ -755,7 +805,8 @@ async function performSendMessage(params) {
   try {
     live = await ensureLiveQuery(s, sessionId, sdk, prompt)
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err)
+    const rawMsg = err instanceof Error ? err.message : String(err)
+    const errMsg = enrichExitErrorMessage(rawMsg, s)
     logWarn(`claude.sendMessage(${sid}): ensureLiveQuery failed: ${errMsg}`)
     clearRuntimeStatus(s, sessionId)
     clearSessionStream(s)
@@ -776,6 +827,8 @@ async function performSendMessage(params) {
     images: Array.isArray(params?.images) ? params.images.length : 0,
     liveClosed: live.isClosed,
   })
+  // Fresh stderr tail per turn so an error is explained by THIS turn's output.
+  s.claudeStderrTail = ''
   try {
     const result = await live.push(userMessage)
     // Give SDK builds that end the generator immediately after a result a
@@ -822,9 +875,10 @@ async function performSendMessage(params) {
     const aborted = s.abortController?.signal.aborted
       || /aborted/i.test(errMsg)
     if (!aborted) {
-      logWarn(`claude.sendMessage(${sid}): push failed: ${errMsg}`)
+      const enriched = enrichExitErrorMessage(errMsg, s)
+      logWarn(`claude.sendMessage(${sid}): push failed: ${enriched}`)
       clearSessionStream(s)
-      sendEvent('claude:error', { sessionId, error: errMsg })
+      sendEvent('claude:error', { sessionId, error: enriched })
     } else {
       logInfo(`claude.sendMessage(${sid}): aborted`)
     }

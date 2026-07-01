@@ -117,6 +117,11 @@ PREFIX="\${PREFIX:-/opt/bat-server}"
 DATA_DIR="\${BAT_DATA_DIR:-/root/.bat-server}"
 PORT="\${BAT_PORT:-9876}"
 BIND="\${BAT_BIND:-localhost}"
+# systemd does not export HOME for system services, but the Rust host resolves
+# the Codex/Claude home (~/.codex, ~/.claude) from \$HOME. Without it, Codex
+# fails with "could not resolve shared Codex home". Default to the installing
+# user's home, falling back to root's.
+HOME_DIR="\${BAT_HOME:-\${HOME:-/root}}"
 UNIT=/etc/systemd/system/bat-server.service
 
 SRC="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
@@ -142,6 +147,7 @@ After=network.target
 Type=simple
 WorkingDirectory=$PREFIX
 Environment=IS_SANDBOX=1
+Environment=HOME=$HOME_DIR
 ExecStart=$PREFIX/bat-server --bind=$BIND --port=$PORT --token=$TOKEN --data-dir=$DATA_DIR
 Restart=on-failure
 RestartSec=2

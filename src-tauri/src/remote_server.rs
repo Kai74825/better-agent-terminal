@@ -1909,6 +1909,18 @@ fn invoke_rust_for_remote(
                 codex.switch_account(&ctx, codex_home)
             })
         }
+        "codex:auth-login-device-start" => {
+            let codex = ctx.state::<CodexAppServerState>();
+            codex.account_login_device_start(&ctx)
+        }
+        "codex:auth-login-device-poll" => {
+            let codex = ctx.state::<CodexAppServerState>();
+            codex.account_login_device_poll(&ctx)
+        }
+        "codex:auth-login-device-cancel" => {
+            let codex = ctx.state::<CodexAppServerState>();
+            Ok(codex.account_login_cancel())
+        }
         "claude:account-mark-warning-shown" => {
             remote_app_data_dir(ctx, channel).and_then(|data_dir| {
                 account_store::mark_warning_shown(&data_dir)
@@ -2662,6 +2674,13 @@ fn remote_invoke_timeout(channel: &str) -> Duration {
         | "claude:resume-session"
         | "claude:client-resume"
         | "claude:send-message"
+        | "claude:auth-login-start"
+        | "claude:auth-login-submit-code"
+        | "claude:auth-login-cancel"
+        // codex device login start blocks on the host while codex prints the
+        // sign-in URL + code (up to ~45s); poll waits for the user to approve.
+        | "codex:auth-login-device-start"
+        | "codex:auth-login-device-poll"
         | "claude:fork-session" => SESSION_INVOKE_TIMEOUT,
         _ => INVOKE_TIMEOUT,
     }

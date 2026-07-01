@@ -592,6 +592,9 @@
   color: var(--text-secondary);
   font-style: italic;
   padding: 2px 0;
+  /* Preserve newlines so multi-line system notices (e.g. an error followed by
+     the claude subprocess stderr reason) render on separate lines. */
+  white-space: pre-wrap;
 }
 
 .claude-message-auto-continue {

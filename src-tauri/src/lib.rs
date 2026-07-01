@@ -27,6 +27,11 @@ mod remote_client;
 pub mod remote_core;
 mod remote_server;
 mod runtime_catalog;
+// Headless-only: the desktop Setup UI provisions managed runtimes through
+// commands/runtime.rs (AppHandle-bound). The bat-server has no Setup UI, so it
+// self-provisions codex from this tauri-free installer on startup.
+#[cfg(not(feature = "desktop"))]
+mod runtime_install;
 mod sidecar;
 mod subprocess;
 #[cfg(feature = "desktop")]
@@ -312,6 +317,9 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             claude_cmd::claude_stop_task,
             claude_cmd::claude_auth_login,
             claude_cmd::claude_auth_logout,
+            claude_cmd::claude_auth_login_start,
+            claude_cmd::claude_auth_login_submit_code,
+            claude_cmd::claude_auth_login_cancel,
             claude_cmd::claude_account_import_current,
             claude_cmd::claude_account_login_new,
             claude_cmd::claude_account_switch,
@@ -326,6 +334,9 @@ fn app_builder(headless: bool) -> tauri::Builder<tauri::Wry> {
             claude_cmd::codex_account_remove_unified,
             claude_cmd::codex_account_login,
             claude_cmd::codex_account_login_cancel,
+            claude_cmd::codex_account_login_device_start,
+            claude_cmd::codex_account_login_device_poll,
+            claude_cmd::codex_account_login_device_cancel,
             claude_cmd::claude_get_cli_path,
             claude_cmd::claude_prepare_cli_session,
             claude_cmd::claude_list_sessions,
@@ -458,10 +469,31 @@ fn run_headless_server(args: HeadlessServerArgs) -> Result<(), String> {
     let result = remote_state.start(ctx, sidecar_state, Some(options))?;
     print_headless_server_banner_headless(&data_dir, &result)?;
 
+    // Self-provision the codex runtime so remote clients can start codex
+    // sessions against this host. Runs off-thread: the ~100MB download must not
+    // block the accept loop, and a failure (offline, unsupported arch) leaves
+    // the server fully usable for claude. Idempotent — a no-op once installed.
+    ensure_codex_runtime_async(data_dir.join("runtimes"));
+
     // The accept loop runs on its own thread; keep the process alive.
     loop {
         std::thread::park();
     }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn ensure_codex_runtime_async(runtimes_dir: std::path::PathBuf) {
+    if crate::runtime_install::codex_is_installed(&runtimes_dir) {
+        eprintln!("[bat-server] codex runtime already present");
+        return;
+    }
+    std::thread::spawn(move || {
+        eprintln!("[bat-server] codex runtime missing; installing in background…");
+        match crate::runtime_install::install_codex(&runtimes_dir) {
+            Ok(path) => eprintln!("[bat-server] codex runtime ready at {}", path.display()),
+            Err(err) => eprintln!("[bat-server] codex runtime install failed: {err}"),
+        }
+    });
 }
 
 #[cfg(not(feature = "desktop"))]

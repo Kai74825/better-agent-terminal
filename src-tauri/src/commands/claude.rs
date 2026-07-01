@@ -3345,6 +3345,86 @@ pub async fn claude_auth_logout(
         })
 }
 
+// Interactive URL ("paste code") login. Unlike claude_auth_login (which
+// opens a browser locally), these drive the CLI on the host and surface its
+// sign-in URL, so a remote client can authenticate the host. The renderer
+// uses these only when connected to a remote host; desktop keeps the browser
+// flow. The sidecar (claude-auth-login.mjs) holds the in-flight login between
+// the start and submit-code calls.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn claude_auth_login_start(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "agent:auth-login-start",
+        vec![],
+        AUTH_LOGIN_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    call_with_timeout_blocking(app, state, "claude.authLoginStart", Value::Null, AUTH_LOGIN_TIMEOUT).await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn claude_auth_login_submit_code(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    code: String,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "agent:auth-login-submit-code",
+        vec![json!(code.clone())],
+        AUTH_LOGIN_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    call_with_timeout_blocking(
+        app,
+        state,
+        "claude.authLoginSubmitCode",
+        json!({ "code": code }),
+        AUTH_LOGIN_TIMEOUT,
+    )
+    .await
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn claude_auth_login_cancel(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "agent:auth-login-cancel",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    call_with_timeout_blocking(app, state, "claude.authLoginCancel", Value::Null, DEFAULT_TIMEOUT).await
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn claude_account_import_current(
@@ -3627,6 +3707,98 @@ pub async fn codex_account_login(
 pub async fn codex_account_login_cancel(
     codex: State<'_, CodexAppServerState>,
 ) -> Result<Value, BridgeError> {
+    Ok(codex.account_login_cancel())
+}
+
+// Device-code login for remote hosts: `codex login --device-auth` prints a
+// sign-in URL + one-time code, then polls until the user approves in their own
+// browser and exits on its own. Unlike codex_account_login (local browser
+// OAuth), these route to the host when connected to a remote, so a client can
+// authenticate the host's codex with no browser on the host. The host keeps the
+// login child between the start (returns url+code) and poll (waits for exit)
+// calls. See codex_app_server::account_login_device_start / _poll.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn codex_account_login_device_start(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "codex:auth-login-device-start",
+        vec![],
+        AUTH_LOGIN_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    let codex = codex.inner().clone();
+    crate::async_rt::spawn_blocking(move || {
+        codex.account_login_device_start(&HostContext::from_app(app.clone()))
+    })
+    .await
+    .map_err(|err| BridgeError {
+        message: format!("codex device login worker failed: {err}"),
+    })?
+    .map_err(|message| BridgeError { message })
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn codex_account_login_device_poll(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "codex:auth-login-device-poll",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
+    let codex = codex.inner().clone();
+    crate::async_rt::spawn_blocking(move || {
+        codex.account_login_device_poll(&HostContext::from_app(app.clone()))
+    })
+    .await
+    .map_err(|err| BridgeError {
+        message: format!("codex device login poll worker failed: {err}"),
+    })?
+    .map_err(|message| BridgeError { message })
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn codex_account_login_device_cancel(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, SidecarState>,
+    codex: State<'_, CodexAppServerState>,
+) -> Result<Value, BridgeError> {
+    if let Some(result) = remote_invoke_for_window(
+        &HostContext::from_app(app.clone()),
+        &state,
+        &window,
+        "codex:auth-login-device-cancel",
+        vec![],
+        DEFAULT_TIMEOUT,
+    )
+    .await
+    {
+        return result;
+    }
     Ok(codex.account_login_cancel())
 }
 

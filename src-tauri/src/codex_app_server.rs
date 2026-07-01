@@ -213,6 +213,31 @@ struct CodexInner {
     // Set by account_login_cancel() to abort an in-flight `codex login` child;
     // the run_codex_login poll loop kills the process when it sees this.
     login_cancel: AtomicBool,
+    // Remote device-code login child, kept alive between the device-login start
+    // RPC (returns the sign-in URL + one-time code) and the poll RPC (waits for
+    // the user to approve in their browser). None when no device login is in
+    // flight. See account_login_device_start / account_login_device_poll.
+    device_login: Mutex<Option<DeviceLoginSession>>,
+}
+
+/// Output captured from a running `codex login --device-auth` child while we
+/// wait for it to print the sign-in URL and one-time code.
+#[derive(Default)]
+struct DeviceCapture {
+    text: String,
+    url: Option<String>,
+    code: Option<String>,
+    saw_code_marker: bool,
+}
+
+/// An in-flight `codex login --device-auth`. The child keeps polling OpenAI
+/// until the user approves (or it times out / is cancelled); we reap it in the
+/// poll RPC. Output is drained off-thread into `capture` so the pipe never
+/// blocks the child.
+struct DeviceLoginSession {
+    child: Child,
+    capture: Arc<Mutex<DeviceCapture>>,
+    started: Instant,
 }
 
 #[derive(Clone, Default)]
@@ -503,40 +528,40 @@ fn bundled_codex_candidate(base: &Path) -> Option<PathBuf> {
     let triple = codex_target_triple()?;
     let platform_pkg = codex_platform_package()?;
     let exe = codex_exe_name();
-    let candidates = [
-        base.join("codex-runtime").join(exe),
+    // The @openai/codex native package lays the binary out under
+    // vendor/<triple>/bin/<exe>; older layouts used vendor/<triple>/codex/<exe>.
+    // Probe both for every node_modules location.
+    let vendor_roots = [
         base.join("node-sidecar")
             .join("node_modules")
             .join("@openai")
             .join(platform_pkg)
             .join("vendor")
-            .join(triple)
-            .join("codex")
-            .join(exe),
+            .join(triple),
         base.join("node-sidecar")
             .join("node_modules")
             .join("@openai")
             .join("codex")
             .join("vendor")
-            .join(triple)
-            .join("codex")
-            .join(exe),
+            .join(triple),
         base.join("node_modules")
             .join("@openai")
             .join(platform_pkg)
             .join("vendor")
-            .join(triple)
-            .join("codex")
-            .join(exe),
+            .join(triple),
         base.join("node_modules")
             .join("@openai")
             .join("codex")
             .join("vendor")
-            .join(triple)
-            .join("codex")
-            .join(exe),
+            .join(triple),
     ];
-    candidates.into_iter().find(|path| path.is_file())
+    std::iter::once(base.join("codex-runtime").join(exe))
+        .chain(
+            vendor_roots
+                .iter()
+                .flat_map(|root| [root.join("bin").join(exe), root.join("codex").join(exe)]),
+        )
+        .find(|path| path.is_file())
 }
 
 fn find_codex_on_path() -> Option<PathBuf> {
@@ -947,6 +972,114 @@ fn build_codex_command_with_args(
 }
 
 const CODEX_LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+
+// How long to wait for `codex login --device-auth` to print the sign-in URL +
+// one-time code before giving up on the start RPC.
+const DEVICE_PROMPT_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Drain a child stdout/stderr pipe line-by-line into the shared capture so the
+/// pipe never fills (codex keeps printing while it polls for approval), parsing
+/// out the sign-in URL and one-time code as they appear.
+fn spawn_device_drain<R: std::io::Read + Send + 'static>(
+    reader: R,
+    capture: Arc<Mutex<DeviceCapture>>,
+) {
+    std::thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines() {
+            match line {
+                Ok(line) => {
+                    if let Ok(mut cap) = capture.lock() {
+                        ingest_device_line(&mut cap, &line);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Parse one output line from `codex login --device-auth`. The CLI prints (with
+/// ANSI colour) a numbered list whose URL line holds `https://auth.openai.com/
+/// codex/device` and whose code line holds a bare one-time code like
+/// `G0GT-244PL` right after an "Enter this one-time code" marker.
+fn ingest_device_line(cap: &mut DeviceCapture, raw: &str) {
+    let line = strip_ansi(raw);
+    let trimmed = line.trim();
+    cap.text.push_str(trimmed);
+    cap.text.push('\n');
+
+    if cap.url.is_none() {
+        if let Some(idx) = trimmed.find("https://") {
+            let url: String = trimmed[idx..]
+                .chars()
+                .take_while(|c| !c.is_whitespace())
+                .collect();
+            if url.len() > "https://".len() {
+                cap.url = Some(url);
+            }
+        }
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("one-time code") {
+        cap.saw_code_marker = true;
+        return;
+    }
+    if cap.code.is_none() && cap.saw_code_marker && is_device_code(trimmed) {
+        cap.code = Some(trimmed.to_string());
+    }
+}
+
+/// Recognise a codex device code: two alphanumeric segments joined by a single
+/// dash, e.g. `G0GT-244PL`. Deliberately strict so prose lines never match.
+fn is_device_code(token: &str) -> bool {
+    let mut parts = token.split('-');
+    let (Some(first), Some(second), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let ok = |segment: &str| {
+        segment.len() >= 3
+            && segment.len() <= 8
+            && segment.chars().all(|c| c.is_ascii_alphanumeric())
+    };
+    ok(first) && ok(second)
+}
+
+/// Strip ANSI/VT escape sequences (`\x1b[...m` and friends) from a line.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // Skip a CSI sequence: ESC [ ... <final byte 0x40..=0x7e>.
+            if chars.next() == Some('[') {
+                for next in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Last few non-empty lines of captured output, for surfacing in error text.
+fn device_tail(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
 
 /// Run `codex login` (ChatGPT browser OAuth by default; `--api-key <key>` when
 /// provided). codex opens the browser itself and writes auth.json on success.
@@ -2616,10 +2749,17 @@ impl CodexAppServerState {
         self.inner.login_cancel.store(false, Ordering::SeqCst);
         login_result?;
 
-        if unified {
-            if let (Some(app_data), Some(shared)) =
-                (app.data_dir_opt(), shared_home(app))
-            {
+        self.finalize_codex_login(app);
+        Ok(json!({ "success": true, "account": self.account_info(app) }))
+    }
+
+    /// Post-login bookkeeping shared by the browser-OAuth (`account_login`) and
+    /// device-code (`account_login_device_poll`) flows: in unified mode register
+    /// the freshly-authenticated identity as the active account, then drop the
+    /// app-server connection so the next request respawns it with the new auth.
+    fn finalize_codex_login(&self, app: &HostContext) {
+        if codex_unified_enabled(app) {
+            if let (Some(app_data), Some(shared)) = (app.data_dir_opt(), shared_home(app)) {
                 let _swap = self.inner.unified_swap_lock.lock();
                 match codex_account_store::capture_current(&app_data, &shared, None) {
                     Ok(account) => {
@@ -2634,17 +2774,158 @@ impl CodexAppServerState {
                 }
             }
         }
-
-        // Next request respawns the app-server with the new auth.
         self.drop_connection(app, "account-login");
-        Ok(json!({ "success": true, "account": self.account_info(app) }))
+    }
+
+    /// Start a device-code login on the host: spawn `codex login --device-auth`,
+    /// drain its output off-thread, and return the sign-in URL + one-time code
+    /// once codex prints them. The child keeps running (polling for approval)
+    /// and is reaped by `account_login_device_poll`. Used for remote hosts where
+    /// the local browser flow can't run. Blocking — call from spawn_blocking.
+    pub fn account_login_device_start(&self, app: &HostContext) -> Result<Value, String> {
+        // Drop any prior in-flight device login before starting a new one.
+        self.clear_device_login();
+        self.inner.login_cancel.store(false, Ordering::SeqCst);
+
+        let mut child = build_codex_command_with_args(app, &["login", "--device-auth"], false)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|err| format!("failed to start codex device login: {err}"))?;
+
+        let capture = Arc::new(Mutex::new(DeviceCapture::default()));
+        if let Some(out) = child.stdout.take() {
+            spawn_device_drain(out, capture.clone());
+        }
+        if let Some(err) = child.stderr.take() {
+            spawn_device_drain(err, capture.clone());
+        }
+
+        // Wait for codex to print the sign-in URL + code (or exit early).
+        let deadline = Instant::now() + DEVICE_PROMPT_TIMEOUT;
+        loop {
+            if self.inner.login_cancel.load(Ordering::SeqCst) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("codex device login cancelled".to_string());
+            }
+            if let Ok(cap) = capture.lock() {
+                if let (Some(url), Some(code)) = (cap.url.clone(), cap.code.clone()) {
+                    drop(cap);
+                    if let Ok(mut slot) = self.inner.device_login.lock() {
+                        *slot = Some(DeviceLoginSession {
+                            child,
+                            capture: capture.clone(),
+                            started: Instant::now(),
+                        });
+                    }
+                    return Ok(json!({ "ok": true, "url": url, "code": code }));
+                }
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let tail = capture
+                        .lock()
+                        .map(|cap| device_tail(&cap.text))
+                        .unwrap_or_default();
+                    return Err(format!(
+                        "codex device login exited before prompting ({status}){}",
+                        if tail.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {tail}")
+                        }
+                    ));
+                }
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("codex device login: no sign-in code received".to_string());
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(err) => return Err(err.to_string()),
+            }
+        }
+    }
+
+    /// Poll an in-flight device-code login. Returns `{status:"pending"}` while
+    /// the user has not yet approved, `{status:"success", account}` once codex
+    /// exits 0 (auth.json written), or `{status:"error", error}` on failure /
+    /// timeout. Clears the session on a terminal result.
+    pub fn account_login_device_poll(&self, app: &HostContext) -> Result<Value, String> {
+        enum Outcome {
+            Pending,
+            Success,
+            Error(String),
+        }
+        let outcome = {
+            let mut slot = self
+                .inner
+                .device_login
+                .lock()
+                .map_err(|_| "codex device login lock poisoned".to_string())?;
+            let Some(session) = slot.as_mut() else {
+                return Ok(json!({ "status": "error", "error": "no codex login in progress" }));
+            };
+            match session.child.try_wait() {
+                Ok(Some(status)) => {
+                    let outcome = if status.success() {
+                        Outcome::Success
+                    } else {
+                        let tail = session
+                            .capture
+                            .lock()
+                            .map(|cap| device_tail(&cap.text))
+                            .unwrap_or_default();
+                        Outcome::Error(if tail.is_empty() {
+                            format!("codex login failed ({status})")
+                        } else {
+                            format!("codex login failed: {tail}")
+                        })
+                    };
+                    *slot = None;
+                    outcome
+                }
+                Ok(None) if session.started.elapsed() >= CODEX_LOGIN_TIMEOUT => {
+                    let _ = session.child.kill();
+                    let _ = session.child.wait();
+                    *slot = None;
+                    Outcome::Error("codex login timed out".to_string())
+                }
+                Ok(None) => Outcome::Pending,
+                Err(err) => {
+                    *slot = None;
+                    Outcome::Error(err.to_string())
+                }
+            }
+        };
+        match outcome {
+            Outcome::Pending => Ok(json!({ "status": "pending" })),
+            Outcome::Success => {
+                self.finalize_codex_login(app);
+                Ok(json!({ "status": "success", "account": self.account_info(app) }))
+            }
+            Outcome::Error(error) => Ok(json!({ "status": "error", "error": error })),
+        }
+    }
+
+    /// Kill and clear any in-flight device-code login child. Best-effort.
+    fn clear_device_login(&self) {
+        if let Ok(mut slot) = self.inner.device_login.lock() {
+            if let Some(mut session) = slot.take() {
+                let _ = session.child.kill();
+                let _ = session.child.wait();
+            }
+        }
     }
 
     /// Request cancellation of an in-flight `codex login`. Best-effort: sets a
     /// flag the run_codex_login poll loop checks (within ~50ms) to kill the
-    /// child. A no-op if no login is running.
+    /// child, and kills any device-code login child. A no-op if none running.
     pub fn account_login_cancel(&self) -> Value {
         self.inner.login_cancel.store(true, Ordering::SeqCst);
+        self.clear_device_login();
         json!({ "success": true })
     }
 
@@ -5424,6 +5705,42 @@ fn handle_turn_completed(
 mod tests {
     use super::*;
     use std::env;
+
+    #[test]
+    fn device_login_parser_extracts_url_and_code() {
+        // Exact ANSI-coloured lines emitted by `codex login --device-auth`
+        // (captured from codex 0.142.4): blue (94m) URL + code, gray (90m) hints.
+        let lines = [
+            "\u{1b}[90mOpenAI's command-line coding agent\u{1b}[0m",
+            "Follow these steps to sign in with ChatGPT using device code authorization:",
+            "1. Open this link in your browser and sign in to your account",
+            "   \u{1b}[94mhttps://auth.openai.com/codex/device\u{1b}[0m",
+            "2. Enter this one-time code \u{1b}[90m(expires in 15 minutes)\u{1b}[0m",
+            "   \u{1b}[94mG0GT-244PL\u{1b}[0m",
+        ];
+        let mut cap = DeviceCapture::default();
+        for line in lines {
+            ingest_device_line(&mut cap, line);
+        }
+        assert_eq!(cap.url.as_deref(), Some("https://auth.openai.com/codex/device"));
+        assert_eq!(cap.code.as_deref(), Some("G0GT-244PL"));
+    }
+
+    #[test]
+    fn device_code_pattern_is_strict() {
+        assert!(is_device_code("G0GT-244PL"));
+        assert!(is_device_code("ABCD-EFGHI"));
+        assert!(!is_device_code("expires in 15 minutes"));
+        assert!(!is_device_code("https://auth.openai.com/codex/device"));
+        assert!(!is_device_code("one-time-code"));
+        assert!(!is_device_code("plain"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(strip_ansi("\u{1b}[94mhello\u{1b}[0m"), "hello");
+        assert_eq!(strip_ansi("no codes"), "no codes");
+    }
 
     #[test]
     fn app_server_sandbox_uses_protocol_values() {

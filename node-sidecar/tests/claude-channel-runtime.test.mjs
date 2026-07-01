@@ -440,7 +440,9 @@ setInterval(() => {}, 1000)
       assert.equal(started.status, 'ready')
       assert.equal(started.channelStatus, 'connected')
       const startedArgs = JSON.parse(readFileSync(argsOut, 'utf8'))
-      assert.equal(startedArgs[startedArgs.indexOf('--effort') + 1], 'xhigh')
+      // ultracode runs at the CLI's top effort level; the legacy 'xhigh' value
+      // is folded into 'max' (Claude Code CLI >= 2.1.175 dropped 'xhigh').
+      assert.equal(startedArgs[startedArgs.indexOf('--effort') + 1], 'max')
       const settingsPath = startedArgs[startedArgs.indexOf('--settings') + 1]
       assert.ok(settingsPath && settingsPath.endsWith('settings.json'), `expected --settings to be a path, got ${settingsPath}`)
       const settingsJson = JSON.parse(readFileSync(settingsPath, 'utf8'))

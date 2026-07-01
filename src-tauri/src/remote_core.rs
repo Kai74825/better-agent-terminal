@@ -175,7 +175,10 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "claude:auth-status"
         | "claude:account-list"
         | "claude:account-mark-warning-shown"
+        | "claude:auth-login-start"
+        | "claude:auth-login-cancel"
         | "claude:get-cli-path" => Some(&[]),
+        "claude:auth-login-submit-code" => Some(&["code"]),
         "claude:prepare-cli-session" => Some(&[
             "terminalId",
             "workspaceId",
@@ -232,6 +235,9 @@ fn legacy_v1_param_keys(channel: &str) -> Option<&'static [&'static str]> {
         "claude:account-switch" | "claude:account-remove" => Some(&["accountId"]),
         "codex:account-list" => Some(&[]),
         "codex:account-switch" => Some(&["codexHome"]),
+        "codex:auth-login-device-start"
+        | "codex:auth-login-device-poll"
+        | "codex:auth-login-device-cancel" => Some(&[]),
         "claude:check-mcp-json-status" | "claude:enable-all-project-mcp" => Some(&["cwd"]),
         "worktree:create" => Some(&["sessionId", "cwd", "installPnpm"]),
         "worktree:remove" => Some(&["sessionId", "deleteBranch"]),
