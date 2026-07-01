@@ -1429,6 +1429,13 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
           }
         }
         if (m.model) setCurrentModel(prev => prev || m.model!)
+        // The sidecar downgrades effort server-side when the CLI rejects the
+        // current level for the account's plan (e.g. 'max' needs API billing).
+        // Reflect that here so the dropdown does not keep showing a level the
+        // session no longer uses.
+        if (typeof m.effort === 'string' && (CLAUDE_EFFORT_MODES as readonly string[]).includes(m.effort)) {
+          setEffortLevel(prev => (prev === m.effort ? prev : m.effort!))
+        }
         // Persist session metadata for status line restoration on next app launch
         if (m.contextWindow > 0 || m.totalCost > 0 || m.inputTokens > 0) {
           workspaceStore.setTerminalSessionMeta(sessionId, {

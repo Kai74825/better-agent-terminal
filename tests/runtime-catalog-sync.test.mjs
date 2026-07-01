@@ -8,6 +8,13 @@
 // to regenerate the catalog is caught without needing network access. Integrity
 // fetching is intentionally NOT exercised here — that happens during
 // prepare:tauri-bundle:* via scripts/sync-runtime-catalog.mjs.
+//
+// node-sidecar/package.json pins its OWN copy of @anthropic-ai/claude-agent-sdk
+// (node-linker=hoisted needs a real, non-workspace install there) that is
+// independent of the root dependency this catalog is generated from. The two
+// have drifted before (root bumped twice without node-sidecar following),
+// silently leaving the bundled/shipped sidecar — both the desktop app and the
+// bat-server release — on a stale CLI version. Guard against that here too.
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -17,6 +24,9 @@ import { expectedVersions, PLATFORMS } from '../scripts/sync-runtime-catalog.mjs
 const catalog = JSON.parse(
   await readFile(new URL('../runtime-catalog.json', import.meta.url), 'utf8'),
 )
+const nodeSidecarPkg = JSON.parse(
+  await readFile(new URL('../node-sidecar/package.json', import.meta.url), 'utf8'),
+)
 
 const expected = expectedVersions()
 const keys = PLATFORMS.map((p) => p.key)
@@ -25,6 +35,11 @@ assert.equal(
   catalog.claude.version,
   expected.claude,
   `runtime-catalog claude.version (${catalog.claude.version}) must match installed @anthropic-ai/claude-agent-sdk (${expected.claude}); run \`pnpm run sync:runtime-catalog\``,
+)
+assert.equal(
+  nodeSidecarPkg.dependencies['@anthropic-ai/claude-agent-sdk'],
+  expected.claude,
+  `node-sidecar/package.json's @anthropic-ai/claude-agent-sdk pin (${nodeSidecarPkg.dependencies['@anthropic-ai/claude-agent-sdk']}) must match the root-installed version (${expected.claude}); bump it and run \`pnpm --dir node-sidecar install\``,
 )
 assert.equal(
   catalog.codex.version,

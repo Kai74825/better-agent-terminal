@@ -33,7 +33,7 @@ import {
 } from '../lib/state.mjs'
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { info as logInfo, warn as logWarn } from '../lib/logger.mjs'
-import { runtimeEffortForMode, isUltracodeMode } from '../lib/claude-effort.mjs'
+import { runtimeEffortForMode, isUltracodeMode, parseEffortRejection, fallbackEffortFrom } from '../lib/claude-effort.mjs'
 import { sdkModelForClaudeSelection } from '../lib/models.mjs'
 import { loadInstalledPlugins, dataUrlToContentBlock } from '../lib/plugins.mjs'
 import { resolveClaudeCliBinaryWithInstall } from './claude-auth.mjs'
@@ -100,6 +100,24 @@ function enrichExitErrorMessage(errMsg, s) {
   if (!looksOpaque) return base
   if (base.includes(tail)) return base
   return `${base}\n\n${tail}`
+}
+
+// downgradeEffortOnRejection: when the CLI rejects the session's current
+// effort for the account's actual plan (e.g. 'max' requires API billing),
+// persist a supported fallback so the NEXT send succeeds instead of
+// repeating the same failure forever, and replace the opaque message with
+// one that explains what happened. Returns the original message unchanged
+// when it isn't this specific rejection.
+function downgradeEffortOnRejection(s, sessionId, message) {
+  const rejection = parseEffortRejection(message)
+  if (!rejection) return message
+  const fallback = fallbackEffortFrom(rejection.allowed)
+  s.effort = fallback
+  s.ultracode = false
+  saveSessionConfig(sessionId, s)
+  sendEvent('claude:status', { sessionId, meta: buildSessionMeta(s) })
+  logWarn(`claude.sendMessage(${shortSessionId(sessionId)}): effort "${rejection.rejected}" rejected by CLI; session downgraded to "${fallback}"`)
+  return `Effort level "${rejection.rejected}" isn't available on your Claude.ai plan. This session has been switched to "${fallback}" — please resend your message.`
 }
 
 function contentLength(content) {
@@ -806,7 +824,7 @@ async function performSendMessage(params) {
     live = await ensureLiveQuery(s, sessionId, sdk, prompt)
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err)
-    const errMsg = enrichExitErrorMessage(rawMsg, s)
+    const errMsg = downgradeEffortOnRejection(s, sessionId, enrichExitErrorMessage(rawMsg, s))
     logWarn(`claude.sendMessage(${sid}): ensureLiveQuery failed: ${errMsg}`)
     clearRuntimeStatus(s, sessionId)
     clearSessionStream(s)
@@ -874,8 +892,9 @@ async function performSendMessage(params) {
     }
     const aborted = s.abortController?.signal.aborted
       || /aborted/i.test(errMsg)
+    let enriched = errMsg
     if (!aborted) {
-      const enriched = enrichExitErrorMessage(errMsg, s)
+      enriched = downgradeEffortOnRejection(s, sessionId, enrichExitErrorMessage(errMsg, s))
       logWarn(`claude.sendMessage(${sid}): push failed: ${enriched}`)
       clearSessionStream(s)
       sendEvent('claude:error', { sessionId, error: enriched })
@@ -888,7 +907,7 @@ async function performSendMessage(params) {
       s.currentQuery = null
     }
     clearRuntimeStatus(s, sessionId)
-    return { ok: !aborted, error: aborted ? undefined : errMsg }
+    return { ok: !aborted, error: aborted ? undefined : enriched }
   } finally {
     s.streaming = false
   }

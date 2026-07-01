@@ -1218,6 +1218,43 @@ async function inProcess() {
     restoreErrorSend()
   }
 
+  // The CLI can reject a session's persisted effort level for the account's
+  // plan (e.g. "max" needs API billing on some Claude.ai subscriptions).
+  // sendMessage must downgrade the session instead of repeating the same
+  // failure forever, and tell the caller which level it fell back to.
+  const effortCaptured = []
+  const restoreEffortSend = mod.__setSendEventForTests((name, payload) => effortCaptured.push({ name, payload }))
+  const fakeSdkEffortRejected = {
+    query() {
+      return (async function*() {
+        yield { type: 'system', subtype: 'init', session_id: 'sdk-effort-1', cwd: '/x' }
+        throw new Error(
+          'Claude Code process exited with code 1\n' +
+          'Error: Effort level "max" is not available for Claude.ai subscribers. ' +
+          'Please use "low", "medium", or "high".',
+        )
+      })()
+    },
+  }
+  __setSdkOverrideForTests(fakeSdkEffortRejected)
+  try {
+    await dispatch({ jsonrpc: '2.0', id: 2250, method: 'claude.startSession',
+      params: { sessionId: 'send-effort-1', options: { cwd: '/x' } } })
+    await dispatch({ jsonrpc: '2.0', id: 2251, method: 'claude.setEffort',
+      params: { sessionId: 'send-effort-1', effort: 'max' } })
+    const effortReply = await dispatch({ jsonrpc: '2.0', id: 2252, method: 'claude.sendMessage',
+      params: { sessionId: 'send-effort-1', prompt: 'hi' } })
+    assert.match(effortReply.result.error, /switched to "high"/)
+    const effortState = await dispatch({ jsonrpc: '2.0', id: 2253, method: 'claude.getSessionState',
+      params: { sessionId: 'send-effort-1' } })
+    assert.equal(effortState.result.effort, 'high', 'session must downgrade off the rejected level')
+    const statusEvent = effortCaptured.find(e => e.name === 'claude:status' && e.payload?.meta?.effort === 'high')
+    assert.ok(statusEvent, 'downgrade must emit claude:status with the new effort so clients resync')
+  } finally {
+    __setSdkOverrideForTests(undefined)
+    restoreEffortSend()
+  }
+
   // Consecutive sends reuse the same LiveQuery when the SDK keeps the
   // streaming-input generator alive.
   const persistentCaptured = []

@@ -28,3 +28,26 @@ export function runtimeEffortForMode(mode) {
 export function isUltracodeMode(mode) {
   return mode === 'ultracode'
 }
+
+// Anthropic gates some effort levels (e.g. 'max') behind API/console billing.
+// A Claude.ai subscription (OAuth) account gets this exact CLI rejection when
+// the persisted/default effort exceeds what its plan allows — parse it so the
+// caller can downgrade the session instead of repeating the same failure on
+// every subsequent send.
+const EFFORT_REJECTION_RE = /Effort level "([a-z]+)" is not available for Claude\.ai subscribers\./i
+
+export function parseEffortRejection(text) {
+  const str = String(text || '')
+  const match = str.match(EFFORT_REJECTION_RE)
+  if (!match) return null
+  const rejected = match[1].toLowerCase()
+  const allowed = [...str.matchAll(/"([a-z]+)"/gi)]
+    .map(m => m[1].toLowerCase())
+    .filter(v => v !== rejected && CLAUDE_CLI_EFFORTS.has(v))
+  return { rejected, allowed: allowed.length > 0 ? allowed : ['low', 'medium', 'high'] }
+}
+
+export function fallbackEffortFrom(allowed) {
+  if (Array.isArray(allowed) && allowed.includes('high')) return 'high'
+  return (Array.isArray(allowed) && allowed[allowed.length - 1]) || 'high'
+}
