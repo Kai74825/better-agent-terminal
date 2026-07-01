@@ -1430,6 +1430,24 @@ pub(crate) fn claude_builtin_models_native() -> Value {
             "source": "builtin"
         },
         {
+            "value": "claude-sonnet-5:auto-compact-200k",
+            "displayName": "Sonnet 5 · 200K Auto-Compact",
+            "description": "claude-sonnet-5 · compact at 200K tokens",
+            "source": "builtin"
+        },
+        {
+            "value": "claude-sonnet-5:auto-compact-300k",
+            "displayName": "Sonnet 5 · 300K Auto-Compact",
+            "description": "claude-sonnet-5 · compact at 300K tokens",
+            "source": "builtin"
+        },
+        {
+            "value": "claude-sonnet-5:1m",
+            "displayName": "Sonnet 5 · 1M",
+            "description": "claude-sonnet-5 · no early auto-compact",
+            "source": "builtin"
+        },
+        {
             "value": "claude-sonnet-4-6",
             "displayName": "Sonnet 4.6 (1M)",
             "description": "claude-sonnet-4-6 · 1M context",
@@ -1457,6 +1475,9 @@ fn claude_context_window_for_model(model: Option<&str>) -> u64 {
         | "claude-opus-4-7:1m"
         | "claude-opus-4-6"
         | "claude-opus-4-6[1m]"
+        | "claude-sonnet-5"
+        | "claude-sonnet-5[1m]"
+        | "claude-sonnet-5:1m"
         | "claude-sonnet-4-6"
         | "claude-sonnet-4-6[1m]" => 1_000_000,
         "claude-haiku-4-5-20251001" => 200_000,
@@ -1467,6 +1488,8 @@ fn claude_context_window_for_model(model: Option<&str>) -> u64 {
         "claude-opus-4-7:auto-compact-200k" => 200_000,
         "claude-opus-4-7:auto-compact-300k" => 300_000,
         "claude-opus-4-7:auto-compact-400k" => 400_000,
+        "claude-sonnet-5:auto-compact-200k" => 200_000,
+        "claude-sonnet-5:auto-compact-300k" => 300_000,
         value if value.ends_with("[1m]") => {
             claude_context_window_for_model(Some(value.trim_end_matches("[1m]")))
         }
