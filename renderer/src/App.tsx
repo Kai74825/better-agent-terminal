@@ -558,6 +558,42 @@ export default function App() {
           dlog(`[init] profile selection windowId=${initWindowId || 'none'} launch=${launchProfileId || 'none'} effectiveLaunch=${effectiveLaunchProfileId || 'none'} window=${windowProfileId || 'none'} windowPriority=${windowProfileTakesPriority} freshEmpty=${freshEmptyWindow} firstActive=${result.activeProfileIds[0] || 'none'} selected=${profileId || 'none'} active=${active ? `${active.id}/${active.name}/${active.type}` : 'none'}`)
         }
 
+        // Startup guarantees for the main/startup window. Run BEFORE this window
+        // attempts its own remote connect, so they still take effect even if this
+        // window closes on a connect failure (see the remote branches below).
+        if (initWindowId === 'main') {
+          // Ensure at least one local (non-remote) window exists. Only needed when
+          // every window that will open is remote — otherwise a local window is
+          // already covered (this window, or one restored below).
+          try {
+            const startupProfiles = Array.isArray(result.profiles) ? result.profiles : []
+            const isRemoteAlias = (id: string) =>
+              startupProfiles.find((p: { id: string; type?: string }) => p.id === id)?.type === 'remote'
+            const plannedWindowProfileIds: string[] = effectiveLaunchProfileId
+              ? [effectiveLaunchProfileId]
+              : (Array.isArray(result.activeProfileIds) ? result.activeProfileIds : [])
+            if (plannedWindowProfileIds.length > 0 && plannedWindowProfileIds.every(isRemoteAlias)) {
+              const firstLocal = startupProfiles.find((p: { type?: string }) => p.type !== 'remote')
+              if (firstLocal) {
+                dlog(`[init] startup set is all-remote; opening local anchor window profile=${firstLocal.id}`)
+                await host.app.openNewInstance(firstLocal.id).catch(() => { /* best effort */ })
+              }
+            }
+          } catch { /* best effort — never block startup */ }
+
+          // Restore the other active profiles' windows now (globally once), early
+          // enough that they still come up even if THIS window closes on a remote
+          // connect failure below.
+          if (isTauri() && !effectiveLaunchProfileId) {
+            const currentProfileId = (await host.app.getWindowProfile()) || active?.id || profileId || null
+            const tRestore = performance.now()
+            const restored = await host.app.restoreActiveProfiles(currentProfileId)
+            if (restored.length > 0) {
+              dlog(`[init] app.restoreActiveProfiles: ${(performance.now() - tRestore).toFixed(0)}ms (${restored.length} windows)`)
+            }
+          }
+        }
+
         if (active?.type === 'remote' && active.remoteHost && active.remoteToken && active.remoteFingerprint) {
           // Try connecting to remote
           const tRemote = performance.now()
@@ -574,27 +610,13 @@ export default function App() {
             // leaving only an unrelated "not connected" unhandledrejection in
             // the log). Logged for every path, including the local fallback.
             dlog(`[init] remote.connect failed host=${active.remoteHost}:${active.remotePort || 9876} error=${String((connectResult as { error?: unknown }).error)}`)
-            if (effectiveLaunchProfileId || windowProfileTakesPriority) {
-              // A window dedicated to this remote profile (a --profile launch, or
-              // a restored profile-bound window) has no business silently becoming
-              // a local window when the host is unreachable — that's the "blank
-              // bat window" symptom. Surface why and close, leaving shared local
-              // state untouched. Only the main window falls back to local below.
-              setAppNotification(t('app.remoteConnectionFailed', { error: connectResult.error }))
-              setTimeout(() => window.close(), 3000)
-              return
-            }
-            // Main window: fall back to first local profile
-            const localProfile = result.profiles.find(p => p.type !== 'remote')
-            if (localProfile) {
-              await host.profile.load(localProfile.id)
-              const winIdx = await host.app.getWindowIndex()
-              setActiveProfileName(`${localProfile.name}:${winIdx}`)
-              setActiveProfileIsRemote(false)
-              setActiveProfileId(localProfile.id)
-              setActiveRemoteProfileId(null)
-              setActiveRemoteOrigin(null)
-            }
+            // A remote connection that fails to dial should not silently become a
+            // local window (the "blank bat window" symptom) — surface why, then
+            // close this window. The startup safety-net (above) guarantees a local
+            // window remains, so this never leaves the app with zero windows.
+            setAppNotification(t('app.remoteConnectionFailed', { error: connectResult.error }))
+            setTimeout(() => { try { window.close() } catch { /* window already gone */ } }, 2000)
+            return
           } else {
             // Scope host workspace:reload broadcasts to the profile we're viewing.
             // Set synchronously here — BEFORE any await below — so a reload that
@@ -637,23 +659,12 @@ export default function App() {
             reconnectRef.current = { inFlight: false, backoff: RECONNECT_BACKOFF_MIN, nextAt: 0 }
           }
         } else if (active?.type === 'remote') {
-          // Remote profile missing connection info — close dedicated profile
-          // windows (launch or restored) instead of silently degrading to local.
-          if (effectiveLaunchProfileId || windowProfileTakesPriority) {
-            setAppNotification(t('app.remoteMissingInfo'))
-            setTimeout(() => window.close(), 3000)
-            return
-          }
-          const localProfile = result.profiles.find(p => p.type !== 'remote')
-          if (localProfile) {
-            await host.profile.load(localProfile.id)
-            const winIdx = await host.app.getWindowIndex()
-            setActiveProfileName(`${localProfile.name}:${winIdx}`)
-            setActiveProfileIsRemote(false)
-            setActiveProfileId(localProfile.id)
-            setActiveRemoteProfileId(null)
-            setActiveRemoteOrigin(null)
-          }
+          // Remote profile missing connection info — close this window instead of
+          // silently degrading to local. The startup safety-net keeps a local
+          // window around.
+          setAppNotification(t('app.remoteMissingInfo'))
+          setTimeout(() => { try { window.close() } catch { /* window already gone */ } }, 2000)
+          return
         } else if (active) {
           // For local profiles opened in a new window, load the profile snapshot
           // so workspaces.json reflects this profile's data (not the previous profile's).
@@ -701,14 +712,9 @@ export default function App() {
           workspaceStore.setWindowId(winId)
         }
 
-        if (isTauri() && !effectiveLaunchProfileId) {
-          const currentProfileId = (await host.app.getWindowProfile()) || active?.id || profileId || null
-          const tRestore = performance.now()
-          const restored = await host.app.restoreActiveProfiles(currentProfileId)
-          if (restored.length > 0) {
-            dlog(`[init] app.restoreActiveProfiles: ${(performance.now() - tRestore).toFixed(0)}ms (${restored.length} windows)`)
-          }
-        }
+        // Active-profile window restore now runs earlier (right after profile
+        // selection, from the main window) so it survives a remote connect
+        // failure that closes this window.
 
         const tLoad = performance.now()
         // Load settings first (lightweight, no re-render), then workspaces (triggers heavy re-render)
