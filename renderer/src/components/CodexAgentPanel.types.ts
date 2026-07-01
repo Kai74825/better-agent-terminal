@@ -76,6 +76,18 @@ export interface SessionSummary {
   summary?: string
 }
 
+export interface CodexAccountEntry {
+  id: string
+  label?: string
+  email?: string
+  codexHome: string
+  authenticated?: boolean
+  active?: boolean
+  unified?: boolean
+  needsLogin?: boolean
+  lastAuthError?: string
+}
+
 export interface CodexAgentPanelProps {
   sessionId: string
   cwd: string
@@ -87,6 +99,7 @@ export interface CodexAgentPanelProps {
   showToolMsg?: boolean
   showThinkingMsg?: boolean
   isRemoteConnected?: boolean
+  onRequestLogin?: (kind: 'claude' | 'codex') => void
 }
 
 export interface AttachedImage {

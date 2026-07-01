@@ -24,9 +24,10 @@ interface MainPanelProps {
   onSwitchApiVersion?: (id: string) => void
   workspaceId?: string
   isRemoteConnected?: boolean
+  onRequestLogin?: (kind: 'claude' | 'codex') => void
 }
 
-export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, onRestart, onSwitchApiVersion, workspaceId, isRemoteConnected = false }: Readonly<MainPanelProps>) {
+export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, onRestart, onSwitchApiVersion, workspaceId, isRemoteConnected = false, onRequestLogin }: Readonly<MainPanelProps>) {
   const isWorker = !!terminal.procfilePath
   const isAgent = terminal.agentPreset && terminal.agentPreset !== 'none'
   const isClaudeChannelAgent = terminal.agentPreset === 'claude-channel'
@@ -231,6 +232,7 @@ export const MainPanel = memo(function MainPanel({ terminal, isActive, onClose, 
                 showToolMsg={showToolMsg}
                 showThinkingMsg={showThinkingMsg}
                 isRemoteConnected={isRemoteConnected}
+                onRequestLogin={onRequestLogin}
               />
             ) : (
               <ClaudeAgentPanel

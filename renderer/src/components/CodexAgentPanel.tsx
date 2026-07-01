@@ -32,7 +32,7 @@ import { translateRuntimeMessage } from '../utils/runtime-status-message'
 import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { normalizePendingAskUser, wrapPreviewHtml } from './AskUserQuestion.helpers'
 import { autoContinueTurnEndKey, buildCollapsedOutputPreview, formatContentSize, formatElapsed, formatFullTimestamp, formatTimestamp, parseContentBlocks, parseShellInvocation, shouldAutoContinueAfterTurnEnd, shouldShowTimeDivider, splitSystemReminders, stringifyToolResult, summarizeToolSearchResult, toolDescription, toolInputContent, toolInputSummary, truncateMiddle } from './CodexAgentPanel.helpers'
-import type { AttachedFile, AttachedImage, CodexAgentPanelProps, MessageItem, ModelInfo, PendingAskUser, PendingPermission, SessionMeta, SessionSummary, SlashCommandInfo } from './CodexAgentPanel.types'
+import type { AttachedFile, AttachedImage, CodexAccountEntry, CodexAgentPanelProps, MessageItem, ModelInfo, PendingAskUser, PendingPermission, SessionMeta, SessionSummary, SlashCommandInfo } from './CodexAgentPanel.types'
 import { CodexTodoChecklist } from './CodexTodoChecklist'
 
 function clearRuntimeStatusMeta(meta: SessionMeta | null): SessionMeta | null {
@@ -261,7 +261,7 @@ function isCodexDiffChangeLine(line: string): boolean {
     || (line.startsWith('-') && !line.startsWith('---'))
 }
 
-export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose, showUserMsg = true, showAssistantMsg = true, showToolMsg = true, showThinkingMsg = true, isRemoteConnected = false }: Readonly<CodexAgentPanelProps>) {
+export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose, showUserMsg = true, showAssistantMsg = true, showToolMsg = true, showThinkingMsg = true, isRemoteConnected = false, onRequestLogin }: Readonly<CodexAgentPanelProps>) {
   const { t, i18n } = useTranslation()
   const terminal = workspaceStore.getState().terminals.find(t => t.id === sessionId)
   const isCodexSession = true
@@ -2380,68 +2380,77 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
       return
     }
 
-    // Intercept /login command — open Claude auth login flow
-    if (!isCodexSession && trimmed === '/login') {
+    // Intercept /login command — open Codex auth login flow. Delegates to the
+    // same handler as the account chip so remote hosts get the device-code
+    // dialog instead of a no-op that falls through to the Codex API as text.
+    if (trimmed === '/login') {
       clearInput()
-      setMessages(prev => [...prev, {
-        id: `sys-login-${Date.now()}`, sessionId, role: 'system' as const,
-        content: 'Opening Claude login...', timestamp: Date.now(),
-      }])
-      const result = await host.claude.authLogin()
-      if (result.success) {
-        const status = await host.claude.authStatus()
+      if (onRequestLogin) {
         setMessages(prev => [...prev, {
-          id: `sys-login-ok-${Date.now()}`, sessionId, role: 'system' as const,
-          content: status?.email
-            ? `Logged in as ${status.email} (${status.subscriptionType || 'unknown'}). Use /switch to manage accounts.`
-            : 'Login successful. Use /switch to manage accounts.',
-          timestamp: Date.now(),
+          id: `sys-login-${Date.now()}`, sessionId, role: 'system' as const,
+          content: 'Opening Codex login...', timestamp: Date.now(),
         }])
-        // Auto-register account when account switching is enabled
-        try {
-          await host.claude.accountImportCurrent()
-        } catch { /* ignore if not available */ }
+        onRequestLogin('codex')
       } else {
         setMessages(prev => [...prev, {
           id: `sys-login-err-${Date.now()}`, sessionId, role: 'system' as const,
-          content: `Login failed: ${result.error || 'unknown error'}`, timestamp: Date.now(),
+          content: 'Login is not available from this view — use the account chip in the top bar.',
+          timestamp: Date.now(),
         }])
       }
       return
     }
 
-    // Intercept /logout command
-    if (!isCodexSession && trimmed === '/logout') {
+    // Codex accounts have no single "log out" (no backend or account-chip
+    // equivalent) — point at /switch instead of letting the raw command fall
+    // through to the Codex API as a literal prompt.
+    if (trimmed === '/logout') {
       clearInput()
-      const result = await host.claude.authLogout()
       setMessages(prev => [...prev, {
         id: `sys-logout-${Date.now()}`, sessionId, role: 'system' as const,
-        content: result.success ? 'Logged out.' : `Logout failed: ${result.error || 'unknown error'}`,
+        content: 'Codex accounts don’t support /logout directly. Use /switch to change accounts, or manage them from the account chip in the top bar.',
         timestamp: Date.now(),
       }])
       return
     }
 
-    // Intercept /whoami command — show current auth status
-    if (!isCodexSession && trimmed === '/whoami') {
+    // Intercept /whoami command — show the active Codex account
+    if (trimmed === '/whoami') {
       clearInput()
-      const status = await host.claude.authStatus()
-      setMessages(prev => [...prev, {
-        id: `sys-whoami-${Date.now()}`, sessionId, role: 'system' as const,
-        content: status?.loggedIn
-          ? `${status.email || 'unknown'} (${status.authMethod || ''}, ${status.subscriptionType || ''})`
-          : 'Not logged in.',
-        timestamp: Date.now(),
-      }])
+      try {
+        const result = await host.codex.accountList() as {
+          accounts?: CodexAccountEntry[]
+          activeCodexHome?: string
+        }
+        const accounts = (result.accounts || []).filter(a => a.email && a.email.trim())
+        const active = accounts.find(a => a.active)
+          || accounts.find(a => !a.unified && a.codexHome === result.activeCodexHome)
+        setMessages(prev => [...prev, {
+          id: `sys-whoami-${Date.now()}`, sessionId, role: 'system' as const,
+          content: active
+            ? `${active.email}${active.unified ? '' : active.codexHome ? ` (${active.codexHome})` : ''}`
+            : 'Not logged in.',
+          timestamp: Date.now(),
+        }])
+      } catch (err: unknown) {
+        setMessages(prev => [...prev, {
+          id: `sys-whoami-err-${Date.now()}`, sessionId, role: 'system' as const,
+          content: `whoami error: ${err instanceof Error ? err.message : 'unknown error'}`, timestamp: Date.now(),
+        }])
+      }
       return
     }
 
-    // Intercept /switch command — list accounts or switch to a specific one
-    if (!isCodexSession && (trimmed === '/switch' || trimmed.startsWith('/switch '))) {
+    // Intercept /switch command — list Codex accounts or switch to a specific one
+    if (trimmed === '/switch' || trimmed.startsWith('/switch ')) {
       const arg = trimmed.slice('/switch'.length).trim()
       clearInput()
       try {
-        const { accounts, activeAccountId } = await host.claude.accountList()
+        const result = await host.codex.accountList() as {
+          accounts?: CodexAccountEntry[]
+          activeCodexHome?: string
+        }
+        const accounts = (result.accounts || []).filter(a => a.email && a.email.trim())
         if (accounts.length === 0) {
           setMessages(prev => [...prev, {
             id: `sys-switch-${Date.now()}`, sessionId, role: 'system' as const,
@@ -2450,11 +2459,12 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }])
           return
         }
+        const active = accounts.find(a => a.active)
+          || accounts.find(a => !a.unified && a.codexHome === result.activeCodexHome)
         if (!arg) {
           const lines = accounts.map((a, i) => {
-            const active = a.id === activeAccountId ? ' ← active' : ''
-            const sub = a.subscriptionType ? ` (${a.subscriptionType})` : ''
-            return `  ${i + 1}. ${a.email}${sub}${active}`
+            const isActive = a.id === active?.id ? ' ← active' : ''
+            return `  ${i + 1}. ${a.email}${isActive}`
           })
           setMessages(prev => [...prev, {
             id: `sys-switch-list-${Date.now()}`, sessionId, role: 'system' as const,
@@ -2466,7 +2476,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         const idx = parseInt(arg, 10)
         const target = !isNaN(idx) && idx >= 1 && idx <= accounts.length
           ? accounts[idx - 1]
-          : accounts.find(a => a.email.toLowerCase().includes(arg.toLowerCase()))
+          : accounts.find(a => (a.email || '').toLowerCase().includes(arg.toLowerCase()))
         if (!target) {
           setMessages(prev => [...prev, {
             id: `sys-switch-notfound-${Date.now()}`, sessionId, role: 'system' as const,
@@ -2475,7 +2485,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }])
           return
         }
-        if (target.id === activeAccountId) {
+        if (target.id === active?.id) {
           setMessages(prev => [...prev, {
             id: `sys-switch-already-${Date.now()}`, sessionId, role: 'system' as const,
             content: `Already using ${target.email}.`,
@@ -2483,9 +2493,9 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           }])
           return
         }
-        const success = await host.claude.accountSwitch(target.id)
-        if (success) {
-          window.dispatchEvent(new CustomEvent('claude-account-switched'))
+        const switchResult = await host.codex.accountSwitch(target.id) as { success?: boolean }
+        if (switchResult?.success !== false) {
+          window.dispatchEvent(new CustomEvent('codex-account-switched'))
           setMessages(prev => [...prev, {
             id: `sys-switch-ok-${Date.now()}`, sessionId, role: 'system' as const,
             content: `Switched to ${target.email}. New sessions will use this account.`,
@@ -2656,7 +2666,7 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
         timestamp: Date.now(),
       }])
     }
-  }, [isRemoteConnected, isStreaming, isInterrupted, sessionId, attachedImages, attachedFiles, clearInput, setInputValue, clearPendingAutoContinue, sendClaudeMessage])
+  }, [isRemoteConnected, isStreaming, isInterrupted, sessionId, attachedImages, attachedFiles, clearInput, setInputValue, clearPendingAutoContinue, sendClaudeMessage, onRequestLogin])
 
   const handleInterrupt = useCallback(() => {
     if (!isStreaming) return
@@ -2739,6 +2749,9 @@ export function CodexAgentPanel({ sessionId, cwd, isActive, workspaceId, onClose
           { name: 'new', description: 'Reset session (clear conversation)', argumentHint: '' },
           { name: 'clear', description: 'Reset session (same as /new)', argumentHint: '' },
           { name: 'model', description: 'Select model', argumentHint: '' },
+          { name: 'login', description: 'Sign in to Codex (switch account)', argumentHint: '' },
+          { name: 'whoami', description: 'Show current account info', argumentHint: '' },
+          { name: 'switch', description: 'Switch between registered accounts', argumentHint: '<number|email>' },
           { name: 'abort', description: 'Force stop current operation immediately', argumentHint: '' },
           { name: 'worker', description: 'Inspect or control worker processes', argumentHint: '<name|all> [status|start|stop|restart|reload|clear]' },
         ]

@@ -1311,6 +1311,7 @@ export function WorkspaceView({ workspace, terminals, focusedTerminalId, isActiv
                 onSwitchApiVersion={handleSwitchApiVersion}
                 workspaceId={workspace.id}
                 isRemoteConnected={isRemoteConnected}
+                onRequestLogin={handleLogin}
               />
             </div>
           ))}
