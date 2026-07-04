@@ -1367,10 +1367,16 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
       api.onStream((sid: string, data: unknown) => {
         if (sid !== sessionId) return
-        noteAgentEvent()
+        const d = data as { text?: string; thinking?: string; parentToolUseId?: string }
+        // Extended-thinking heartbeats arrive as empty-content stream events
+        // every ~1-1.5s even when the model is producing nothing visible for
+        // minutes at a stretch. Only count real text/thinking content as
+        // "activity" so the quiet-turn timer (turnQuietSec/turnStalled below)
+        // can actually detect a long silent-thinking stretch instead of being
+        // reset by heartbeat noise.
+        if (d.text || d.thinking) noteAgentEvent()
         workspaceStore.updateTerminalActivity(sessionId)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
-        const d = data as { text?: string; thinking?: string; parentToolUseId?: string }
         if (d.parentToolUseId) {
           // Route to per-subagent streaming state
           if (d.text) {
