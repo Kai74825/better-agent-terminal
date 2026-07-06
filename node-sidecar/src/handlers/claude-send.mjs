@@ -937,10 +937,22 @@ registerHandler('claude.sendMessage', async (params) => {
   if (wasQueued) {
     logInfo(`claude.sendMessage(${sid}): queued behind active turn`)
   }
+  // Esc (interruptTurn/abortSession) marks this token cancelled so a send
+  // still waiting in line here — not yet the live turn — is skipped instead
+  // of silently firing once the interrupted/aborted turn it was queued
+  // behind clears. Only ever read by THIS call's own .then() below, so a
+  // later sendMessage overwriting s.pendingSendCancel with its own fresh
+  // token can't affect an already-queued one.
+  const cancelToken = { cancelled: false }
+  s.pendingSendCancel = cancelToken
   const previous = s.sendQueue || Promise.resolve()
   const run = previous.catch(() => {}).then(async () => {
     if (sessions.get(sessionId) !== s) {
       return { ok: false, error: 'session stopped' }
+    }
+    if (cancelToken.cancelled) {
+      logInfo(`claude.sendMessage(${sid}): cancelled before it became the active turn`)
+      return { ok: false, cancelled: true }
     }
     return performSendMessage(params)
   })
@@ -964,6 +976,10 @@ registerHandler('claude.interruptTurn', async (params) => {
   // Codex sessions never reach here — the Rust router maps them to the
   // codex app-server's turn interrupt before calling the sidecar.
   const s = sessions.get(sessionId)
+  // Esc always cancels whatever is still waiting in the send queue, even if
+  // there's no live turn to interrupt below (it may have just finished) —
+  // otherwise a message queued behind it fires right after despite the stop.
+  if (s?.pendingSendCancel) s.pendingSendCancel.cancelled = true
   if (!s || !s.liveQuery || !s.streaming) {
     return { ok: false, error: 'no active turn to interrupt' }
   }

@@ -2697,12 +2697,29 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
 
     const __sendT1 = performance.now()
     try {
-      await sendClaudeMessage(
+      const sendResult = await sendClaudeMessage(
         promptToSend,
         imageDataUrls.length > 0 ? imageDataUrls : undefined,
         getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow),
         { id: userMsgId, displayContent },
-      )
+      ) as { cancelled?: boolean } | undefined
+      if (sendResult?.cancelled) {
+        // Queued behind a turn that got interrupted/stopped before this
+        // message's turn came up — Esc cancels it too instead of letting it
+        // silently fire once the stopped turn clears. Restore the text so
+        // it isn't lost.
+        if (trimmed && !inputValueRef.current.trim()) setInputValue(trimmed)
+        setIsStreaming(false)
+        setIsInterrupted(false)
+        setMessages(prev => [...prev, {
+          id: `sys-cancelled-${Date.now()}`,
+          sessionId,
+          role: 'system' as const,
+          content: 'Message cancelled — the turn it was waiting behind was stopped. Your text has been restored to the input box.',
+          timestamp: Date.now(),
+        }])
+        return
+      }
       if (isRemoteConnected) {
         // Host acked receipt (invoke-result) → solidify the ghosted message.
         setMessages(prev => prev.map(m => (!isToolCall(m) && m.id === userMsgId) ? { ...m, status: 'sent' as const } : m))

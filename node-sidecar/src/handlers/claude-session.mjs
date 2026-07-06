@@ -317,6 +317,9 @@ registerHandler('claude.abortSession', async (params) => {
   }
   if (isCodexSession(sessionId)) return abortCodexSession(params)
   const session = sessions.get(sessionId)
+  // Esc always cancels whatever is still waiting in the send queue — see
+  // claude.interruptTurn (claude-send.mjs) for why.
+  if (session?.pendingSendCancel) session.pendingSendCancel.cancelled = true
   if (session?.abortController) {
     try { session.abortController.abort() } catch { /* already aborted */ }
   }
