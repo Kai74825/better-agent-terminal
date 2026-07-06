@@ -994,6 +994,21 @@ async function inProcess() {
       `getSessionMeta.${numKey} must be a number`)
   }
 
+  // A preset id alone re-derives the window (remote clients may omit the
+  // number) — this is what keeps display == actual across clients.
+  await dispatch({ jsonrpc: '2.0', id: 2082, method: 'claude.setModel',
+    params: { sessionId: 'state-1', model: 'claude-haiku-4-5-20251001:auto-compact-300k' } })
+  const metaDerived = await dispatch({ jsonrpc: '2.0', id: 2083, method: 'claude.getSessionMeta', params: { sessionId: 'state-1' } })
+  assert.equal(metaDerived.result.autoCompactWindow, 300000,
+    'setModel must derive the window from an auto-compact preset id')
+  // Explicit null (context-only presets like `<base>:1m`) clears it — a
+  // previously-set window must not keep compacting under the new selection.
+  await dispatch({ jsonrpc: '2.0', id: 2084, method: 'claude.setModel',
+    params: { sessionId: 'state-1', model: 'claude-haiku-4-5-20251001', autoCompactWindow: null } })
+  const metaCleared = await dispatch({ jsonrpc: '2.0', id: 2085, method: 'claude.getSessionMeta', params: { sessionId: 'state-1' } })
+  assert.equal(metaCleared.result.autoCompactWindow, null,
+    'setModel with autoCompactWindow: null must clear the window')
+
   // resetSession drops the entry; subsequent getSessionState returns null.
   // Wrap with sendEvent override so we can assert the claude:session-reset
   // notification fires for an existing session but NOT for an unknown id —
@@ -1928,6 +1943,31 @@ async function inProcess() {
       params: { sessionId: 'resume-1', prompt: 'continue' } })
     assert.equal(resumeQueryCaptured.length, 1)
     assert.equal(resumeQueryCaptured[0].options.resume, 'sdk-historic-xyz')
+
+    // Resume must re-derive the auto-compact window from a preset id even
+    // when the renderer didn't send the numeric option — app restarts resume
+    // without it, and this is what keeps the 300k cap alive across restarts
+    // instead of silently running uncapped to the full model window.
+    const resumeCapReply = await dispatch({ jsonrpc: '2.0', id: 29511, method: 'claude.resumeSession',
+      params: { sessionId: 'resume-cap', sdkSessionId: 'sdk-historic-xyz',
+        options: { cwd: resumeCwd, model: 'claude-sonnet-4-6:auto-compact-300k' } } })
+    assert.equal(resumeCapReply.result.ok, true)
+    assert.equal(mod.sessions.get('resume-cap').autoCompactWindow, 300000,
+      'resume must derive the window from the preset id')
+    await dispatch({ jsonrpc: '2.0', id: 29512, method: 'claude.sendMessage',
+      params: { sessionId: 'resume-cap', prompt: 'continue capped' } })
+    const cappedOpts = resumeQueryCaptured[resumeQueryCaptured.length - 1].options
+    assert.equal(cappedOpts.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW, '300000',
+      'resumed session must spawn the CLI with the derived window env')
+    assert.equal(cappedOpts.model, 'claude-sonnet-4-6',
+      'preset id must still map to the base SDK model id')
+
+    // An explicit numeric option on resume wins over the preset suffix.
+    await dispatch({ jsonrpc: '2.0', id: 29513, method: 'claude.resumeSession',
+      params: { sessionId: 'resume-cap2', sdkSessionId: 'sdk-historic-xyz',
+        options: { cwd: resumeCwd, model: 'claude-sonnet-4-6:auto-compact-300k', autoCompactWindow: 250000 } } })
+    assert.equal(mod.sessions.get('resume-cap2').autoCompactWindow, 250000,
+      'explicit resume option must win over the preset suffix')
 
     // If the persisted terminal cwd no longer matches Claude's project dir,
     // do not globally borrow a transcript from a different cwd. The UI may

@@ -110,7 +110,16 @@ registerHandler('claude.startSession', async (params) => {
     if (typeof s.options.model === 'string') s.model = s.options.model
     if (typeof s.options.permissionMode === 'string') s.permissionMode = s.options.permissionMode
     applyEffortOptions(s, s.options)
-    if (typeof s.options.autoCompactWindow === 'number') s.autoCompactWindow = s.options.autoCompactWindow
+    if (typeof s.options.autoCompactWindow === 'number' || s.options.autoCompactWindow === null) {
+      s.autoCompactWindow = s.options.autoCompactWindow
+    } else if (typeof s.options.model === 'string') {
+      // Renderer restarts resume without re-sending the numeric window (it
+      // was only pushed on model selection), so derive it from the preset id
+      // — otherwise the cap silently drops to the CLI default (full model
+      // window) after every app restart.
+      const derived = autoCompactWindowForClaudeSelection(s.options.model)
+      if (derived !== undefined) s.autoCompactWindow = derived
+    }
     if (typeof s.options.codexSandboxMode === 'string') s.codexSandboxMode = s.options.codexSandboxMode
     if (typeof s.options.codexApprovalPolicy === 'string') s.codexApprovalPolicy = s.options.codexApprovalPolicy
     // startSession can also pre-populate sdkSessionId for the resume
@@ -184,7 +193,16 @@ async function resumeClaudeSession(params) {
     if (typeof s.options.model === 'string') s.model = s.options.model
     if (typeof s.options.permissionMode === 'string') s.permissionMode = s.options.permissionMode
     applyEffortOptions(s, s.options)
-    if (typeof s.options.autoCompactWindow === 'number') s.autoCompactWindow = s.options.autoCompactWindow
+    if (typeof s.options.autoCompactWindow === 'number' || s.options.autoCompactWindow === null) {
+      s.autoCompactWindow = s.options.autoCompactWindow
+    } else if (typeof s.options.model === 'string') {
+      // Renderer restarts resume without re-sending the numeric window (it
+      // was only pushed on model selection), so derive it from the preset id
+      // — otherwise the cap silently drops to the CLI default (full model
+      // window) after every app restart.
+      const derived = autoCompactWindowForClaudeSelection(s.options.model)
+      if (derived !== undefined) s.autoCompactWindow = derived
+    }
     if (typeof s.options.codexSandboxMode === 'string') s.codexSandboxMode = s.options.codexSandboxMode
     if (typeof s.options.codexApprovalPolicy === 'string') s.codexApprovalPolicy = s.options.codexApprovalPolicy
     applyWorktreeOptions(sessionId, s)
@@ -432,6 +450,13 @@ registerHandler('claude.setModel', async (params) => {
   if (typeof params?.autoCompactWindow === 'number') {
     s.autoCompactWindow = params.autoCompactWindow
     windowChanged = true
+  } else if (params?.autoCompactWindow === null) {
+    // Explicit clear: context-only presets (`<base>:<N>m`) send null so a
+    // previously-set window doesn't keep compacting under the new selection.
+    if ((s.autoCompactWindow ?? null) !== null) {
+      s.autoCompactWindow = null
+      windowChanged = true
+    }
   } else if (typeof params?.model === 'string') {
     // Remote clients may send a bare preset id without the window it
     // encodes — derive it so the preset behaves like an explicit window.

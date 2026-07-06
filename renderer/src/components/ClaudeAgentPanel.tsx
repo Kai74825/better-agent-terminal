@@ -426,6 +426,20 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       : `${Math.round(contextWindow / 1000)}k`
     return currentModelLabel.toLowerCase().includes(label.toLowerCase()) ? '' : ` (${label})`
   }, [currentModelLabel, sessionMeta?.contextWindow])
+  // Tripwire for the display==actual invariant: the selected preset implies
+  // an auto-compact window; if the live session reports a different one
+  // (e.g. a resume path dropped it), surface it instead of silently running
+  // uncapped to the full model window.
+  const compactWindowMismatch = useMemo(() => {
+    if (isCodexSession) return null
+    if (!sessionMeta || !sessionMeta.contextWindow || sessionMeta.contextWindow <= 0) return null
+    const expected = getAutoCompactWindowForModel(currentModel, settingsStore.getSettings().autoCompactWindow)
+    if (typeof expected !== 'number' || expected <= 0) return null
+    const actual = typeof sessionMeta.autoCompactWindow === 'number' && sessionMeta.autoCompactWindow > 0
+      ? sessionMeta.autoCompactWindow
+      : null
+    return actual === expected ? null : { expected, actual }
+  }, [isCodexSession, sessionMeta, currentModel])
   // Subagent message storage (keyed by parent Task tool_use_id)
   const subagentMessagesRef = useRef<Map<string, MessageItem[]>>(new Map())
   const [subagentStreamingText, setSubagentStreamingText] = useState<Map<string, string>>(new Map())
@@ -1820,6 +1834,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
             permissionMode,
             effectiveEffort,
             effectiveUltracode ? true : undefined,
+            getAutoCompactWindowForModel(effectiveModel || savedModel, settingsStore.getSettings().autoCompactWindow),
           ) as ResumeSessionResult | null
           if (!resumeResult?.stale) return
           dlog(`${stag} ensureSessionStarted: stale sdkSessionId=${savedSdkSessionId.slice(0, 8)}; starting fresh session`)
@@ -2187,6 +2202,7 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
       permissionMode,
       resumeEffort,
       isUltracodeEffortMode(effortLevel) ? true : undefined,
+      getAutoCompactWindowForModel(resumeModel, settingsStore.getSettings().autoCompactWindow),
     ) as ResumeSessionResult | null
     if (result?.stale) {
       workspaceStore.setTerminalSdkSessionId(sessionId, undefined)
@@ -5040,6 +5056,14 @@ export function ClaudeAgentPanel({ sessionId, cwd, isActive, workspaceId, onClos
                 title={`Model: ${currentModelLabel}${currentSdkModel !== currentModel ? ` (${currentSdkModel})` : ''} (click to select)`}
               >
                 {'</>'} {currentModelLabel}{currentModelContextSuffix}
+                {compactWindowMismatch && (
+                  <span
+                    style={{ color: 'var(--warning, #e5c07b)', marginLeft: 4 }}
+                    title={`Auto-compact mismatch: selection expects ${Math.round(compactWindowMismatch.expected / 1000)}k, session is ${compactWindowMismatch.actual ? `${Math.round(compactWindowMismatch.actual / 1000)}k` : 'uncapped'} — reselect the model to reapply`}
+                  >
+                    {'⚠'}
+                  </span>
+                )}
               </span>
             )}
             {!isCodexSession && !isV2Session && (

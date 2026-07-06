@@ -990,6 +990,7 @@ function createTauriHost(): BatAppAPI {
             permissionMode?: string,
             effort?: string,
             ultracode?: boolean,
+            autoCompactWindow?: number | null,
           ) => getInvoke()<unknown>('claude_resume_session', {
             sessionId,
             sdkSessionId,
@@ -1004,6 +1005,10 @@ function createTauriHost(): BatAppAPI {
               ...(permissionMode ? { permissionMode } : {}),
               ...(effort ? { effort } : {}),
               ...(ultracode ? { ultracode } : {}),
+              // number = enforce this auto-compact window; null = explicitly
+              // uncapped (context-only preset); undefined = let the sidecar
+              // derive it from the model preset id.
+              ...(typeof autoCompactWindow === 'number' || autoCompactWindow === null ? { autoCompactWindow } : {}),
             }),
           })
         }

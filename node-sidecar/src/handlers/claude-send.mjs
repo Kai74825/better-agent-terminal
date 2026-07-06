@@ -34,7 +34,7 @@ import {
 import { loadAnthropicSdk } from '../lib/sdk-loader.mjs'
 import { info as logInfo, warn as logWarn } from '../lib/logger.mjs'
 import { runtimeEffortForMode, isUltracodeMode, parseEffortRejection, fallbackEffortFrom } from '../lib/claude-effort.mjs'
-import { sdkModelForClaudeSelection } from '../lib/models.mjs'
+import { autoCompactWindowForClaudeSelection, sdkModelForClaudeSelection } from '../lib/models.mjs'
 import { loadInstalledPlugins, dataUrlToContentBlock } from '../lib/plugins.mjs'
 import { resolveClaudeCliBinaryWithInstall } from './claude-auth.mjs'
 import { buildCanUseTool } from './claude-permission.mjs'
@@ -657,6 +657,16 @@ async function buildQueryOptions(s, sessionId, prompt) {
   }
   const sdkMode = s.permissionMode === 'bypassPlan' ? 'plan' : s.permissionMode
   const sdkModel = sdkModelForClaudeSelection(s.model)
+  // Display == actual: a session record can lose its window (older renderer
+  // resume paths didn't carry it), but the selected preset id still encodes
+  // it — re-derive at send time so the spawned CLI always matches the UI.
+  if (s.autoCompactWindow === null || s.autoCompactWindow === undefined) {
+    const derived = autoCompactWindowForClaudeSelection(s.model)
+    if (typeof derived === 'number') {
+      s.autoCompactWindow = derived
+      logInfo(`claude.sendMessage(${shortSessionId(sessionId)}): recovered autoCompactWindow=${derived} from model=${s.model}`)
+    }
+  }
   const claudeCodePath = await resolveClaudeCliBinaryWithInstall()
   const queryOptions = {
     cwd,
