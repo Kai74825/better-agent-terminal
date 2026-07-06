@@ -26,7 +26,7 @@
 //
 // Usage:
 //   node scripts/build-bat-server-bundle.mjs \
-//     --bin src-tauri/target/x86_64-unknown-linux-gnu/release/bat-server \
+//     --bin src-tauri/target/x86_64-unknown-linux-musl/release/bat-server \
 //     --target linux-x86_64 [--appimage] [--out dist-bat-server]
 
 import { mkdir, rm, cp, writeFile, chmod, access, stat, readdir } from 'node:fs/promises'
@@ -39,10 +39,12 @@ const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
 
 // Rust-style arch names, matching node-sidecar/runtime/<target> and the Rust
-// resolver's `<plat>-<arch>` (std::env::consts::ARCH).
+// resolver's `<plat>-<arch>` (std::env::consts::ARCH). bat-server is built
+// static-musl so one binary runs on any Linux regardless of glibc age; the
+// bundle's glibc floor comes from the official Node runtime (>= 2.28).
 const TARGETS = {
-  'linux-x86_64': { rustTriple: 'x86_64-unknown-linux-gnu', appImageArch: 'x86_64' },
-  'linux-aarch64': { rustTriple: 'aarch64-unknown-linux-gnu', appImageArch: 'aarch64' },
+  'linux-x86_64': { rustTriple: 'x86_64-unknown-linux-musl', appImageArch: 'x86_64' },
+  'linux-aarch64': { rustTriple: 'aarch64-unknown-linux-musl', appImageArch: 'aarch64' },
 }
 
 function parseArgs(argv) {
@@ -134,6 +136,13 @@ TOKEN="\${BAT_TOKEN:-$(head -c32 /dev/urandom | od -An -tx1 | tr -d ' \\n')}"
 
 echo "[bat-server] installing to $PREFIX"
 mkdir -p "$PREFIX" "$DATA_DIR"
+# Upgrades over a previous install: stop the running service first so cp can
+# overwrite the live binary (otherwise: "Text file busy"). It is started
+# again by "systemctl enable --now" below.
+if systemctl is-active --quiet bat-server.service 2>/dev/null; then
+  echo "[bat-server] stopping running service for upgrade"
+  systemctl stop bat-server.service
+fi
 # Copy the whole bundle tree (binary + node-sidecar + node-runtime + codex-runtime).
 cp -a "$SRC"/. "$PREFIX"/
 chmod +x "$PREFIX/bat-server"

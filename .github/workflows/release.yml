@@ -820,6 +820,9 @@ jobs:
   bat-server-bundle:
     needs: release
     runs-on: ubuntu-22.04
+    # Normal duration is well under an hour; without a cap a hung apt/runner
+    # zombie holds the run "in_progress" for 12h+ (seen on v3.1.37-pre.2).
+    timeout-minutes: 60
     permissions:
       contents: write
     env:
@@ -846,8 +849,10 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
-      - name: Install libfuse2 (appimagetool runtime)
+      - name: Install libfuse2 (appimagetool runtime) + musl toolchain
         run: |
           sudo apt-get update
           if apt-cache show libfuse2t64 >/dev/null 2>&1; then
@@ -855,6 +860,9 @@ jobs:
           else
             sudo apt-get install -y libfuse2
           fi
+          # musl-gcc compiles the C deps (ring, vendored libdbus, zstd,
+          # mimalloc) for the fully static bat-server build below.
+          sudo apt-get install -y musl-tools
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
@@ -872,8 +880,23 @@ jobs:
           # Codex is optional; a failure here just yields a Claude-only bundle.
           pnpm run prepare:tauri-codex-runtime || echo "codex runtime prep failed; bundle will be Claude-only"
 
-      - name: Build bat-server (headless, no WebKit)
-        run: cargo build --release --bin bat-server --no-default-features --features headless --manifest-path src-tauri/Cargo.toml
+      - name: Build bat-server (headless, static musl)
+        # Static musl build so the server runs on any Linux regardless of
+        # glibc age. Building on ubuntu-22.04 for the gnu target linked
+        # GLIBC_2.34 symbols, which refused to load on RHEL 8-era hosts
+        # (glibc 2.28). With a static binary the bundle's floor is set by the
+        # official Node runtime instead (glibc >= 2.28).
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin bat-server --no-default-features --features headless --manifest-path src-tauri/Cargo.toml
+
+      - name: Verify bat-server is fully static
+        run: |
+          BIN=src-tauri/target/x86_64-unknown-linux-musl/release/bat-server
+          file "$BIN"
+          # Rust musl targets emit "static-pie linked"; plain static would say
+          # "statically linked". Either is fine — dynamic is not.
+          file "$BIN" | grep -Eq 'statically linked|static-pie linked' || { echo "::error::bat-server is not statically linked"; exit 1; }
 
       - name: Fetch appimagetool
         run: |
@@ -885,7 +908,7 @@ jobs:
       - name: Assemble self-contained bundle (tar.gz + AppImage)
         run: |
           node scripts/build-bat-server-bundle.mjs \
-            --bin src-tauri/target/release/bat-server \
+            --bin src-tauri/target/x86_64-unknown-linux-musl/release/bat-server \
             --target linux-x86_64 \
             --appimage \
             --out dist-bat-server
