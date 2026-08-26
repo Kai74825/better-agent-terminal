@@ -85,9 +85,16 @@
   border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
-.path-preview-btn:hover {
+.path-preview-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+/* A remote download is chunked and can take a moment; the button stays
+   disabled for the duration so a second click can't open a second save
+   dialog on top of the first. */
+.path-preview-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .path-preview-close {

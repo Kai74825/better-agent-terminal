@@ -181,6 +181,9 @@ export function FilePreviewModal({ filePath: rawFilePath, onClose }: FilePreview
   const [openError, setOpenError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [matchCount, setMatchCount] = useState(0)
@@ -249,6 +252,29 @@ export function FilePreviewModal({ filePath: rawFilePath, onClose }: FilePreview
       const message = formatErrorMessage(revealError, 'Unable to open the containing folder')
       setOpenError(message)
       void host.debug.log(`[FilePreview] revealPath failed: ${message}`)
+    }
+  }, [filePath])
+
+  // Save a copy wherever the user picks. Not a duplicate of open/reveal: those
+  // two act on the *host*, so in remote mode this is the only way to get the
+  // bytes onto the machine the user is actually sitting at. It reads from disk
+  // rather than from `content`, so it still works when the preview itself
+  // failed — a file over the 512KB read cap, or a binary.
+  const handleDownload = useCallback(async () => {
+    setOpenError(null)
+    setDownloading(true)
+    try {
+      // Resolves to null when the save dialog is cancelled; that is not an
+      // error and needs no feedback.
+      await host.fs.downloadFile(filePath)
+    } catch (downloadError) {
+      const message = formatErrorMessage(downloadError, 'Unable to download the file')
+      if (mountedRef.current) setOpenError(message)
+      void host.debug.log(`[FilePreview] downloadFile failed: ${message}`)
+    } finally {
+      // A remote pull is chunked and can outlive the modal if the user closes
+      // it mid-transfer, so don't touch state after unmount.
+      if (mountedRef.current) setDownloading(false)
     }
   }, [filePath])
 
@@ -367,6 +393,14 @@ export function FilePreviewModal({ filePath: rawFilePath, onClose }: FilePreview
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
             </svg>
+          </button>
+          <button
+            className="path-preview-btn"
+            onClick={() => { void handleDownload() }}
+            disabled={downloading}
+            title={t('common.downloadFile')}
+          >
+            &#10515;
           </button>
           <button
             className="path-preview-btn"

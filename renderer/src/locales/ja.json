@@ -15,7 +15,8 @@
     "loading": "読み込み中...",
     "preview": "プレビュー",
     "openContainingFolder": "ファイルの場所を開く",
-    "openFile": "ファイルを開く"
+    "openFile": "ファイルを開く",
+    "downloadFile": "コピーをダウンロード"
   },
   "app": {
     "workspaceNotFound": "ワークスペースが見つかりません",

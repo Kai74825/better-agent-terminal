@@ -15,7 +15,8 @@
     "loading": "Loading...",
     "preview": "Preview",
     "openContainingFolder": "Open Containing Folder",
-    "openFile": "Open File"
+    "openFile": "Open File",
+    "downloadFile": "Download a copy"
   },
 
   "app": {
