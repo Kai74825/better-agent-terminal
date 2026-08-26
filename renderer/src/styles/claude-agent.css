@@ -99,8 +99,16 @@
   cursor: pointer;
   border-radius: 4px;
   transition: background 0.12s;
-  flex: 0 1 auto;
-  min-width: 0;
+  /* Not shrinkable, on purpose. With `flex: 0 1 auto` + `min-width: 0` the
+     pills compressed to fit however many there were, so the container's
+     content width never exceeded the container and the `overflow-x: auto`
+     above could not produce a scrollbar. Past a handful of tasks each pill
+     collapsed to just its flex-shrink:0 children (time, tag, Stop), which
+     then overlapped their neighbours into an unreadable row of Stop buttons
+     (GH #128). Keeping the pills at content width is what lets the bar
+     scroll instead. max-width still caps a single long one; the label and
+     progress text inside shrink and ellipsize to honour it. */
+  flex: 0 0 auto;
   max-width: 380px;
 }
 .claude-active-task-item:hover {
@@ -163,6 +171,17 @@
 /* Agent activity tree (expanded view of the active-tasks bar) */
 .claude-agent-tree-bar .claude-agent-tree-controls {
   margin-left: auto;
+  /* Pinned to the right edge because the bar scrolls horizontally once the
+     pills overflow. Without this, "expand" scrolls out of reach at exactly
+     the moment there are too many tasks to read in the bar — which is when
+     the tree view is most needed. margin-left:auto still right-aligns it
+     while everything fits; sticky only takes over once it doesn't. The
+     background matches the bar so pills pass underneath rather than
+     through. */
+  position: sticky;
+  right: 0;
+  padding-left: 6px;
+  background: linear-gradient(180deg, rgba(224, 153, 86, 0.06) 0%, var(--bg-primary) 100%);
 }
 
 .claude-agent-tree {
