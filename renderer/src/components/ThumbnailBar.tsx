@@ -10,6 +10,7 @@ import { groupAgentPresetsForMenu, worktreeMenuName } from '../utils/agent-prese
 interface ThumbnailBarProps {
   terminals: TerminalInstance[]
   focusedTerminalId: string | null
+  isActive: boolean
   onFocus: (id: string) => void
   onAddTerminal?: () => void
   onAddWorktreeTerminal?: () => void
@@ -28,6 +29,7 @@ interface ThumbnailBarProps {
 export function ThumbnailBar({
   terminals,
   focusedTerminalId,
+  isActive,
   onFocus,
   onAddTerminal,
   onAddWorktreeTerminal,
@@ -70,6 +72,16 @@ export function ThumbnailBar({
     dragging: boolean
   } | null>(null)
   const suppressClickRef = useRef(false)
+
+  useEffect(() => {
+    if (isActive) return
+    setShowAddMenu(false)
+    setContextMenu(null)
+    setContextMenuPos(null)
+    pointerDragRef.current = null
+    setDraggedId(null)
+    setDropTargetId(null)
+  }, [isActive])
 
   // Close menu on outside click
   useEffect(() => {
@@ -313,7 +325,7 @@ export function ThumbnailBar({
               >
                 +
               </button>
-              {showAddMenu && createPortal(
+              {isActive && showAddMenu && createPortal(
                 <div className="thumbnail-add-menu" ref={addMenuPopupRef} style={menuStyle}>
                   <div className="thumbnail-add-menu-section">Standard</div>
                   <div
@@ -454,7 +466,7 @@ export function ThumbnailBar({
           </div>
         ))}
       </div>
-      {contextMenu && onCloseTerminal && createPortal(
+      {isActive && contextMenu && onCloseTerminal && createPortal(
         <div
           ref={contextMenuRef}
           className="workspace-context-menu"

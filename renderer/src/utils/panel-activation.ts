@@ -32,6 +32,33 @@ export function createPanelActivation(initialActive: boolean): MutablePanelActiv
   }
 }
 
+export function bindPanelActiveEvent(
+  activation: PanelActivation,
+  target: EventTarget,
+  eventName: string,
+  listener: EventListenerOrEventListenerObject,
+): () => void {
+  let attached = false
+
+  const apply = (active: boolean) => {
+    if (active && !attached) {
+      target.addEventListener(eventName, listener)
+      attached = true
+    } else if (!active && attached) {
+      target.removeEventListener(eventName, listener)
+      attached = false
+    }
+  }
+
+  const unsubscribe = activation.subscribe(apply)
+  apply(activation.current)
+
+  return () => {
+    unsubscribe()
+    if (attached) target.removeEventListener(eventName, listener)
+  }
+}
+
 // Keep frequently changing visibility/focus state outside heavy panel props.
 // The controller notifies small imperative effects without making the full
 // message timeline reconcile whenever a workspace is shown or hidden.

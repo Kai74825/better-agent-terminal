@@ -166,7 +166,10 @@ export default function App() {
     return (localStorage.getItem('bat-right-panel-tab') as 'snippets' | 'skills' | 'agents') || 'snippets'
   })
   // Markdown preview in right panel
-  const [previewMarkdownPath, setPreviewMarkdownPath] = useState<string | null>(null)
+  const [previewMarkdown, setPreviewMarkdown] = useState<{
+    path: string
+    workspaceId: string | null
+  } | null>(null)
   // Track collapsed state before markdown preview opened, to restore on close
   const previewPrevCollapsed = useRef<boolean | null>(null)
   // Panel settings for resizable panels
@@ -352,14 +355,32 @@ export default function App() {
     })
   }, [])
 
+  const closeMarkdownPreview = useCallback(() => {
+    setPreviewMarkdown(null)
+    const wasCollapsed = previewPrevCollapsed.current
+    previewPrevCollapsed.current = null
+    if (!wasCollapsed) return
+
+    setPanelSettings(prev => {
+      const updated = { ...prev, snippetSidebar: { ...prev.snippetSidebar, collapsed: true } }
+      savePanelSettings(updated)
+      return updated
+    })
+  }, [])
+
   // Listen for markdown preview requests from PathLinker
   useEffect(() => {
     const handler = (e: Event) => {
       const { path } = (e as CustomEvent).detail as { path: string }
-      setPreviewMarkdownPath(path)
+      setPreviewMarkdown({
+        path,
+        workspaceId: workspaceStore.getState().activeWorkspaceId,
+      })
       // Save current collapsed state so we can restore it on close, then expand panel
       setPanelSettings(prev => {
-        previewPrevCollapsed.current = prev.snippetSidebar.collapsed
+        if (previewPrevCollapsed.current === null) {
+          previewPrevCollapsed.current = prev.snippetSidebar.collapsed
+        }
         if (prev.snippetSidebar.collapsed) {
           const updated = { ...prev, snippetSidebar: { ...prev.snippetSidebar, collapsed: false } }
           savePanelSettings(updated)
@@ -371,6 +392,11 @@ export default function App() {
     window.addEventListener('preview-markdown', handler)
     return () => window.removeEventListener('preview-markdown', handler)
   }, [])
+
+  useEffect(() => {
+    if (!previewMarkdown || previewMarkdown.workspaceId === state.activeWorkspaceId) return
+    closeMarkdownPreview()
+  }, [closeMarkdownPreview, previewMarkdown, state.activeWorkspaceId])
 
   // Cmd+N / Ctrl+N: open new empty window
   useEffect(() => {
@@ -1279,26 +1305,12 @@ export default function App() {
         }
 
         // Markdown preview mode: takes over the entire right panel
-        if (previewMarkdownPath) {
+        if (previewMarkdown && previewMarkdown.workspaceId === state.activeWorkspaceId) {
           return (
             <div className="right-sidebar-wrapper" style={{ width: `${panelSettings.snippetSidebar.width}px`, minWidth: `${panelSettings.snippetSidebar.width}px`, display: 'flex', flexDirection: 'column' }}>
               <MarkdownPreviewPanel
-                filePath={previewMarkdownPath}
-                onClose={() => {
-                  setPreviewMarkdownPath(null)
-                  // Restore panel collapsed state from before the preview opened
-                  if (previewPrevCollapsed.current !== null) {
-                    const wasCollapsed = previewPrevCollapsed.current
-                    previewPrevCollapsed.current = null
-                    if (wasCollapsed) {
-                      setPanelSettings(prev => {
-                        const updated = { ...prev, snippetSidebar: { ...prev.snippetSidebar, collapsed: true } }
-                        savePanelSettings(updated)
-                        return updated
-                      })
-                    }
-                  }
-                }}
+                filePath={previewMarkdown.path}
+                onClose={closeMarkdownPreview}
               />
             </div>
           )

@@ -1,5 +1,8 @@
 import * as assert from 'node:assert/strict'
-import { createPanelActivation } from '../renderer/src/utils/panel-activation.ts'
+import {
+  bindPanelActiveEvent,
+  createPanelActivation,
+} from '../renderer/src/utils/panel-activation.ts'
 import { touchBoundedLru } from '../renderer/src/utils/bounded-lru.ts'
 import {
   rememberMountedWorkspace,
@@ -26,6 +29,36 @@ assert.equal(activation.current, false)
 unsubscribe()
 activation.set(true)
 assert.deepEqual(changes, [true, false], 'unsubscribed panels must not receive activation work')
+
+const previewEvents = new EventTarget()
+const firstPanel = createPanelActivation(true)
+const secondPanel = createPanelActivation(false)
+const previewRecipients: string[] = []
+const unbindFirst = bindPanelActiveEvent(
+  firstPanel,
+  previewEvents,
+  'preview-file',
+  () => previewRecipients.push('first'),
+)
+const unbindSecond = bindPanelActiveEvent(
+  secondPanel,
+  previewEvents,
+  'preview-file',
+  () => previewRecipients.push('second'),
+)
+
+previewEvents.dispatchEvent(new Event('preview-file'))
+firstPanel.set(false)
+secondPanel.set(true)
+previewEvents.dispatchEvent(new Event('preview-file'))
+
+assert.deepEqual(
+  previewRecipients,
+  ['first', 'second'],
+  'global preview events must reach only the active panel after a workspace switch',
+)
+unbindFirst()
+unbindSecond()
 
 let mountedWorkspaces = new Set<string>()
 mountedWorkspaces = rememberMountedWorkspace(mountedWorkspaces, 'one')

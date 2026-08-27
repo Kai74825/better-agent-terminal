@@ -39,7 +39,7 @@ import { buildAskUserQnA, formatAskUserPrompt, normalizePendingAskUser, summariz
 import { AgentAskUserQnA } from './AgentAskUserQnA'
 import { AgentActivityTree } from './AgentActivityTree'
 import { buildAgentTaskTree, findAgentNode, formatAgentNodeElapsed, summarizeAgentTree, terminateLifecycleEntries, type TaskLifecycle } from '../lib/agent-task-tree'
-import { usePanelActivation, usePanelActiveEffect, type PanelActivation } from '../utils/panel-activation'
+import { bindPanelActiveEvent, usePanelActivation, usePanelActiveEffect, type PanelActivation } from '../utils/panel-activation'
 import { prepareFilePickerResults, type FilePickerSearchEntry } from '../utils/file-picker-search'
 
 interface SessionMeta {
@@ -876,9 +876,17 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
       const { path } = (e as CustomEvent).detail as { path: string }
       setFilePickerPreview(path)
     }
-    window.addEventListener('preview-file', handler)
-    return () => window.removeEventListener('preview-file', handler)
-  }, [])
+    return bindPanelActiveEvent(activation, window, 'preview-file', handler)
+  }, [activation])
+
+  useEffect(() => {
+    const closeWhenInactive = (active: boolean) => {
+      if (!active) setFilePickerPreview(null)
+    }
+    const unsubscribe = activation.subscribe(closeWhenInactive)
+    closeWhenInactive(activation.current)
+    return unsubscribe
+  }, [activation])
 
 
   // Only auto-scroll if user hasn't scrolled up

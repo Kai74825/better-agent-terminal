@@ -41,7 +41,7 @@ import { AgentToolRow } from './AgentToolRow'
 import type { AttachedFile, AttachedImage, CodexAccountEntry, CodexAgentPanelProps, MessageItem, ModelInfo, PendingAskUser, PendingPermission, SessionMeta, SessionSummary, SlashCommandInfo } from './CodexAgentPanel.types'
 import { CodexTodoChecklist } from './CodexTodoChecklist'
 import { ReasoningSummary } from './ReasoningSummary'
-import { usePanelActivation, usePanelActiveEffect, type PanelActivation } from '../utils/panel-activation'
+import { bindPanelActiveEvent, usePanelActivation, usePanelActiveEffect, type PanelActivation } from '../utils/panel-activation'
 import { prepareFilePickerResults, type FilePickerSearchEntry } from '../utils/file-picker-search'
 
 function clearRuntimeStatusMeta(meta: SessionMeta | null): SessionMeta | null {
@@ -925,9 +925,17 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
       const { path } = (e as CustomEvent).detail as { path: string }
       setFilePickerPreview(path)
     }
-    window.addEventListener('preview-file', handler)
-    return () => window.removeEventListener('preview-file', handler)
-  }, [])
+    return bindPanelActiveEvent(activation, window, 'preview-file', handler)
+  }, [activation])
+
+  useEffect(() => {
+    const closeWhenInactive = (active: boolean) => {
+      if (!active) setFilePickerPreview(null)
+    }
+    const unsubscribe = activation.subscribe(closeWhenInactive)
+    closeWhenInactive(activation.current)
+    return unsubscribe
+  }, [activation])
 
 
   // Only auto-scroll if user hasn't scrolled up

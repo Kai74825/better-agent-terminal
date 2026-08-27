@@ -222,6 +222,14 @@ export const WorkspaceView = memo(function WorkspaceView({ workspace, terminals,
   const [showQuickPick, setShowQuickPick] = useState(false)
   const [accountChip, setAccountChip] = useState<WorkspaceAccountChip | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (isActive) return
+    setShowCloseConfirm(null)
+    setShowProcfilePicker(false)
+    setShowQuickPick(false)
+    setAccountMenuOpen(false)
+  }, [isActive])
   // Host-wide usage snapshot for the account dropdown — provider follows the
   // chip kind (claude vs codex). Fed by the Rust per-host poller; no polling
   // from this component.
@@ -1461,6 +1469,7 @@ export const WorkspaceView = memo(function WorkspaceView({ workspace, terminals,
       <ThumbnailBar
         terminals={thumbnailTerminals}
         focusedTerminalId={focusedTerminalId}
+        isActive={isActive}
         onFocus={handleFocus}
         onAddTerminal={handleAddTerminal}
         onAddWorktreeTerminal={isGitRepo ? handleAddWorktreeTerminal : undefined}
