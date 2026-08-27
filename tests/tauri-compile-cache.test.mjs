@@ -99,11 +99,11 @@ assert.match(workflow, /steps\.winartifact\.outcome == 'success'/)
 // a machine CI cannot verify the state of.
 //
 // 1. Default is hosted. `runs-on` reads verify's decision, which falls back to
-//    ["windows-latest"] whenever WIN_RUNNER_LABELS is unset — so all of this is
+//    ["windows-2025"] whenever WIN_RUNNER_LABELS is unset — so all of this is
 //    inert until someone opts in, and non-Windows legs keep using matrix.os.
 assert.match(workflow, /runs-on:\s*\$\{\{ matrix\.platform == 'win' && fromJSON\(needs\.verify\.outputs\.win_labels\) \|\| matrix\.os \}\}/)
 assert.match(workflow, /win_labels:\s*\$\{\{ steps\.win-runner\.outputs\.labels \}\}/)
-assert.match(workflow, /hosted='\["windows-latest"\]'/)
+assert.match(workflow, /hosted='\["windows-2025"\]'/)
 // 2. Keeping the target dir is the entire point, so checkout must not be allowed
 //    to `git clean -x` it away — and the replacement clean must exclude exactly
 //    that one path and nothing else.
