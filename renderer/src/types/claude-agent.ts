@@ -56,7 +56,7 @@ export interface ClaudeSessionState {
 
 // Discriminator helper
 function isRecord(item: unknown): item is Record<string, unknown> {
-  return item !== null && typeof item === 'object'
+  return item !== null && typeof item === 'object' && !Array.isArray(item)
 }
 
 export function isToolCall(item: unknown): item is ClaudeToolCall {
@@ -69,4 +69,28 @@ export function isClaudeMessage(item: unknown): item is ClaudeMessage {
 
 export function isMessageItem(item: unknown): item is ClaudeMessage | ClaudeToolCall {
   return isToolCall(item) || isClaudeMessage(item)
+}
+
+/**
+ * Runtime payloads can come from an older remote host or a persisted archive,
+ * so their shape is not guaranteed by the renderer's TypeScript interfaces.
+ * Keep otherwise usable tool rows, but make their input safe for consumers
+ * that read fields such as `description`, `command`, or `file_path`.
+ */
+export function normalizeMessageItem(item: unknown): ClaudeMessage | ClaudeToolCall | null {
+  if (isToolCall(item)) {
+    const input = isRecord(item.input) ? item.input : {}
+    return input === item.input ? item : { ...item, input }
+  }
+  return isClaudeMessage(item) ? item : null
+}
+
+export function normalizeMessageItems(items: unknown): (ClaudeMessage | ClaudeToolCall)[] {
+  if (!Array.isArray(items)) return []
+  const normalized: (ClaudeMessage | ClaudeToolCall)[] = []
+  for (const item of items) {
+    const message = normalizeMessageItem(item)
+    if (message) normalized.push(message)
+  }
+  return normalized
 }

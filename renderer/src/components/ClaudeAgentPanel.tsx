@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { ClaudeMessage, ClaudeSessionState, ClaudeToolCall } from '../types/claude-agent'
-import { isMessageItem, isToolCall } from '../types/claude-agent'
+import { isToolCall, normalizeMessageItem, normalizeMessageItems } from '../types/claude-agent'
 import type { CodexApprovalPolicy, CodexSandboxMode } from '../types'
 import { CLAUDE_EFFORT_MODES, CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES, EFFORT_LEVELS, effortLevelForClaudeMode, isUltracodeEffortMode } from '../types'
 import { normalizeAgentParams } from '../types/agent-profiles'
@@ -945,7 +945,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
       .then((result: { messages: unknown[]; total: number; hasMore: boolean }) => {
         if (cancelled) return
         const rawMessages = result.messages || []
-        const archived = rawMessages.filter(isMessageItem)
+        const archived = normalizeMessageItems(rawMessages)
         archiveDlog(
           `[Claude:${sessionId.slice(0, 8)}] auto-load archived result messages=${archived.length}/${rawMessages.length} total=${result.total || 0} hasMore=${result.hasMore} live=${messages.length}`
         )
@@ -1137,7 +1137,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
     try {
       const result = await host.claude.loadArchived(sessionId, loadedFromArchiveRef.current, LOAD_BATCH)
       if (result.messages.length > 0) {
-        const archived = result.messages.filter(isMessageItem)
+        const archived = normalizeMessageItems(result.messages)
         loadedFromArchiveRef.current += result.messages.length
         for (const m of archived) archivedIdsRef.current.add(m.id)
         setLoadedArchive(prev => [...archived, ...prev])
@@ -1325,7 +1325,12 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
         noteAgentEvent()
         workspaceStore.updateTerminalActivity(sessionId)
         setSessionMeta(prev => clearRuntimeStatusMeta(prev))
-        const toolCall = tool as ClaudeToolCall
+        const normalizedTool = normalizeMessageItem(tool)
+        if (!normalizedTool || !isToolCall(normalizedTool)) {
+          host.debug.log('[ClaudeAgentPanel] ignored malformed tool-use payload')
+          return
+        }
+        const toolCall = normalizedTool
         if (host.debug.isDebugMode === true) {
           host.debug.log(`[renderer] onToolUse name=${toolCall.toolName} id=${toolCall.id?.slice(0, 12)} status=${toolCall.status} parentToolUseId=${toolCall.parentToolUseId || 'none'}`)
         }
@@ -1721,7 +1726,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
         // Partition history items: main timeline vs subagent buckets
         const mainItems: MessageItem[] = []
         const subagentBuckets = new Map<string, MessageItem[]>()
-        for (const item of items as MessageItem[]) {
+        for (const item of normalizeMessageItems(items)) {
           const parentId = (item as { parentToolUseId?: string }).parentToolUseId
           if (parentId) {
             const bucket = subagentBuckets.get(parentId) || []
@@ -1940,7 +1945,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
         if (cancelled) return
         const existingState = await host.claude.getSessionState(sessionId).catch(() => null)
         if (cancelled || !existingState) return
-        const existingMessages = (existingState.messages || []) as MessageItem[]
+        const existingMessages = normalizeMessageItems(existingState.messages)
         historyLoadedRef.current = true
         setIsResumingHistory(false)
         // clientResume can emit claude:history while getSessionState remains
