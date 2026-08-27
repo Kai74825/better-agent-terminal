@@ -126,7 +126,7 @@ where
             match run_server(args) {
                 Ok(()) => 0,
                 Err(err) => {
-                    eprintln!("bat-server failed to start: {err}");
+                    eprintln!("bat-server failed: {err}");
                     1
                 }
             }
@@ -528,9 +528,14 @@ fn run_headless_server(args: HeadlessServerArgs) -> Result<(), String> {
     // the server fully usable for claude. Idempotent — a no-op once installed.
     ensure_codex_runtime_async(data_dir.join("runtimes"));
 
-    // The accept loop runs on its own thread; keep the process alive.
+    // The accept loop runs on its own thread. Check it periodically instead of
+    // parking forever: if that critical thread ever panics, returning an error
+    // gives systemd a non-zero exit and lets Restart=on-failure recover service.
     loop {
-        std::thread::park();
+        std::thread::park_timeout(std::time::Duration::from_secs(1));
+        if !remote_state.is_accepting() {
+            return Err("remote accept loop stopped unexpectedly".to_string());
+        }
     }
 }
 

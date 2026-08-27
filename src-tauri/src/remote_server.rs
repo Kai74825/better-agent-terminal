@@ -38,7 +38,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -54,6 +54,15 @@ const INVOKE_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNTIME_STATUS_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_INVOKE_TIMEOUT: Duration = Duration::from_secs(300);
 const CLAUDE_REMOTE_LOGIN_TTL: Duration = Duration::from_secs(180);
+const REMOTE_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_SOCKET_POLL_TIMEOUT: Duration = Duration::from_millis(200);
+const REMOTE_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const REMOTE_ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(250);
+const REMOTE_RESOURCE_LOG_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_REMOTE_CONNECTIONS: usize = 64;
+const MAX_REMOTE_INVOKES: usize = 128;
+const REMOTE_OUTBOUND_QUEUE_CAPACITY: usize = 256;
+const REMOTE_OUTBOUND_BURST: usize = 64;
 /// Owner label for sessions a remote client established. Remote clients are not
 /// host windows, so they have no registry id of their own. One shared, stable
 /// label keeps a reconnecting client from tripping the cross-window ownership
@@ -209,6 +218,9 @@ struct RunningServer {
     // a token rotation kicks everyone). Pruned by TTL on read/record.
     recent: Arc<Mutex<Vec<RecentClient>>>,
     event_buffer: Arc<Mutex<RemoteEventBuffer>>,
+    accepting: Arc<AtomicBool>,
+    active_connections: Arc<AtomicUsize>,
+    active_invokes: Arc<AtomicUsize>,
     stop: mpsc::Sender<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -217,10 +229,42 @@ struct RunningServer {
 struct RemoteClientRecord {
     id: String,
     info: RemoteClientInfo,
-    tx: mpsc::Sender<Value>,
+    tx: mpsc::SyncSender<Value>,
     // Set true to force this client's connection thread to close on its next
     // poll iteration. Used by token rotation to revoke existing sessions.
     close: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+struct ResourceSlot {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for ResourceSlot {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn try_acquire_resource_slot(active: &Arc<AtomicUsize>, limit: usize) -> Option<ResourceSlot> {
+    active
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current < limit).then_some(current + 1)
+        })
+        .ok()
+        .map(|_| ResourceSlot {
+            active: Arc::clone(active),
+        })
+}
+
+struct AcceptLoopGuard {
+    accepting: Arc<AtomicBool>,
+}
+
+impl Drop for AcceptLoopGuard {
+    fn drop(&mut self) {
+        self.accepting.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -317,37 +361,51 @@ impl RustRemoteServerState {
         let clients = Arc::new(Mutex::new(Vec::new()));
         let recent = Arc::new(Mutex::new(Vec::new()));
         let event_buffer = Arc::new(Mutex::new(RemoteEventBuffer::default()));
+        let accepting = Arc::new(AtomicBool::new(true));
+        let active_connections = Arc::new(AtomicUsize::new(0));
+        let active_invokes = Arc::new(AtomicUsize::new(0));
         let (stop_tx, stop_rx) = mpsc::channel();
         let thread_clients = Arc::clone(&clients);
         let thread_recent = Arc::clone(&recent);
         let thread_token = Arc::clone(&token);
+        let thread_accepting = Arc::clone(&accepting);
+        let thread_active_connections = Arc::clone(&active_connections);
+        let thread_active_invokes = Arc::clone(&active_invokes);
         let thread_ctx = ctx.clone();
         let thread_sidecar = sidecar.clone();
         let log_bound_host = bound_host.clone();
         let log_bind_interface = bind_interface.clone();
         let log_fingerprint = fingerprint.clone();
-        let handle = thread::spawn(move || {
-            remote_debug_log(
-                &thread_ctx,
-                format!(
-                    "server started host={} port={} iface={} fingerprint={}",
-                    log_bound_host,
-                    port,
-                    log_bind_interface,
-                    log_fingerprint.chars().take(23).collect::<String>()
-                ),
-            );
-            run_accept_loop(
-                listener,
-                config,
-                thread_token,
-                thread_ctx,
-                thread_sidecar,
-                thread_clients,
-                thread_recent,
-                stop_rx,
-            );
-        });
+        let handle = thread::Builder::new()
+            .name("bat-remote-acc".to_string())
+            .spawn(move || {
+                let _accept_loop_guard = AcceptLoopGuard {
+                    accepting: thread_accepting,
+                };
+                remote_debug_log(
+                    &thread_ctx,
+                    format!(
+                        "server started host={} port={} iface={} fingerprint={}",
+                        log_bound_host,
+                        port,
+                        log_bind_interface,
+                        log_fingerprint.chars().take(23).collect::<String>()
+                    ),
+                );
+                run_accept_loop(
+                    listener,
+                    config,
+                    thread_token,
+                    thread_ctx,
+                    thread_sidecar,
+                    thread_clients,
+                    thread_recent,
+                    thread_active_connections,
+                    thread_active_invokes,
+                    stop_rx,
+                );
+            })
+            .map_err(|err| format!("remote accept thread start failed: {err}"))?;
 
         let running = RunningServer {
             port,
@@ -358,6 +416,9 @@ impl RustRemoteServerState {
             clients,
             recent,
             event_buffer,
+            accepting,
+            active_connections,
+            active_invokes,
             stop: stop_tx,
             thread: Some(handle),
         };
@@ -373,11 +434,29 @@ impl RustRemoteServerState {
         let Some(mut running) = guard.take() else {
             return true;
         };
+        if let Ok(clients) = running.clients.lock() {
+            for client in clients.iter() {
+                client.close.store(true, Ordering::Release);
+            }
+        }
         let _ = running.stop.send(());
         if let Some(handle) = running.thread.take() {
             let _ = handle.join();
         }
         true
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub fn is_accepting(&self) -> bool {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(|running| running.accepting.load(Ordering::Acquire))
+            })
+            .unwrap_or(false)
     }
 
     pub fn status(&self) -> Value {
@@ -427,10 +506,16 @@ impl RustRemoteServerState {
         }
         json!({
             "running": true,
+            "accepting": running.accepting.load(Ordering::Acquire),
             "port": running.port,
             "fingerprint": running.fingerprint,
             "bindInterface": running.bind_interface,
             "boundHost": running.bound_host,
+            "activeConnections": running.active_connections.load(Ordering::Acquire),
+            "activeInvokes": running.active_invokes.load(Ordering::Acquire),
+            "connectionLimit": MAX_REMOTE_CONNECTIONS,
+            "invokeLimit": MAX_REMOTE_INVOKES,
+            "outboundQueueCapacity": REMOTE_OUTBOUND_QUEUE_CAPACITY,
             "clients": clients,
         })
     }
@@ -473,7 +558,7 @@ impl RustRemoteServerState {
         let mut revoked: Vec<RemoteClientInfo> = Vec::new();
         if let Ok(mut clients) = running.clients.lock() {
             for client in clients.iter() {
-                client.close.store(true, Ordering::Relaxed);
+                client.close.store(true, Ordering::Release);
                 revoked.push(client.info.clone());
             }
             clients.clear();
@@ -716,9 +801,26 @@ fn send_remote_event_to_clients(
                 "params": params.clone(),
                 "args": args.clone(),
             });
-            client.tx.send(frame).is_ok()
+            try_queue_remote_frame(&client.tx, &client.close, frame)
         });
     };
+}
+
+fn try_queue_remote_frame(
+    tx: &mpsc::SyncSender<Value>,
+    close: &Arc<AtomicBool>,
+    frame: Value,
+) -> bool {
+    match tx.try_send(frame) {
+        Ok(()) => true,
+        Err(mpsc::TrySendError::Full(_)) | Err(mpsc::TrySendError::Disconnected(_)) => {
+            // Never let an unread remote client turn event broadcasts into an
+            // unbounded memory sink. Revoking it also makes the connection loop
+            // drop the socket on its next poll.
+            close.store(true, Ordering::Release);
+            false
+        }
+    }
 }
 
 fn buffered_remote_event_key(channel: &str, params: &Value) -> Option<String> {
@@ -972,41 +1074,100 @@ fn run_accept_loop(
     sidecar: SidecarState,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
     recent: Arc<Mutex<Vec<RecentClient>>>,
+    active_connections: Arc<AtomicUsize>,
+    active_invokes: Arc<AtomicUsize>,
     stop_rx: mpsc::Receiver<()>,
 ) {
+    let mut last_capacity_log = None;
+    let mut last_accept_error_log = None;
     loop {
-        if stop_rx.try_recv().is_ok() {
-            break;
+        match stop_rx.try_recv() {
+            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {}
         }
         match listener.accept() {
             Ok((stream, addr)) => {
+                let Some(connection_slot) =
+                    try_acquire_resource_slot(&active_connections, MAX_REMOTE_CONNECTIONS)
+                else {
+                    let now = Instant::now();
+                    if last_capacity_log.is_none_or(|last: Instant| {
+                        now.duration_since(last) >= REMOTE_RESOURCE_LOG_INTERVAL
+                    }) {
+                        crate::commands::app::log_tauri(
+                            &ctx,
+                            &format!(
+                                "[remote-server] connection capacity reached active={} limit={}",
+                                active_connections.load(Ordering::Acquire),
+                                MAX_REMOTE_CONNECTIONS
+                            ),
+                        );
+                        last_capacity_log = Some(now);
+                    }
+                    drop(stream);
+                    continue;
+                };
                 let config = Arc::clone(&config);
                 let token = Arc::clone(&token);
-                let ctx = ctx.clone();
+                let client_ctx = ctx.clone();
                 let sidecar = sidecar.clone();
                 let clients = Arc::clone(&clients);
                 let recent = Arc::clone(&recent);
+                let active_invokes = Arc::clone(&active_invokes);
                 let peer = addr.to_string();
                 remote_debug_log(&ctx, format!("tcp accepted peer={peer}"));
-                thread::spawn(move || {
-                    if let Err(err) = handle_client(
-                        stream,
-                        config,
-                        token,
-                        ctx.clone(),
-                        sidecar,
-                        clients,
-                        recent,
-                        peer.clone(),
-                    ) {
-                        remote_debug_log(&ctx, format!("client closed peer={peer} error={err}"));
-                    }
-                });
+                let spawn_peer = peer.clone();
+                if let Err(err) = thread::Builder::new()
+                    .name("bat-remote-cli".to_string())
+                    .spawn(move || {
+                        let _connection_slot = connection_slot;
+                        if let Err(err) = handle_client(
+                            stream,
+                            config,
+                            token,
+                            client_ctx.clone(),
+                            sidecar,
+                            clients,
+                            recent,
+                            active_invokes,
+                            spawn_peer.clone(),
+                        ) {
+                            remote_debug_log(
+                                &client_ctx,
+                                format!("client closed peer={spawn_peer} error={err}"),
+                            );
+                        }
+                    })
+                {
+                    crate::commands::app::log_tauri(
+                        &ctx,
+                        &format!(
+                            "[remote-server] client thread start failed peer={peer} active={} error={err}",
+                            active_connections.load(Ordering::Acquire)
+                        ),
+                    );
+                }
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
             }
-            Err(_) => break,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                // Resource pressure (for example EMFILE/ENFILE) is recoverable.
+                // Keep the listener alive and retry instead of leaving a headless
+                // process parked forever with a dead accept loop.
+                let now = Instant::now();
+                if last_accept_error_log.is_none_or(|last: Instant| {
+                    now.duration_since(last) >= REMOTE_RESOURCE_LOG_INTERVAL
+                }) {
+                    crate::commands::app::log_tauri(
+                        &ctx,
+                        &format!("[remote-server] accept failed; retrying error={err}"),
+                    );
+                    last_accept_error_log = Some(now);
+                }
+                thread::sleep(REMOTE_ACCEPT_RETRY_DELAY);
+            }
         }
     }
 }
@@ -1019,6 +1180,7 @@ fn handle_client(
     sidecar: SidecarState,
     clients: Arc<Mutex<Vec<RemoteClientRecord>>>,
     recent: Arc<Mutex<Vec<RecentClient>>>,
+    active_invokes: Arc<AtomicUsize>,
     peer: String,
 ) -> Result<(), String> {
     // Desktop bridge during the app->ctx migration: most of this function still
@@ -1029,8 +1191,11 @@ fn handle_client(
         .set_nonblocking(false)
         .map_err(|err| format!("remote stream blocking mode failed: {err}"))?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(REMOTE_HANDSHAKE_TIMEOUT))
         .map_err(|err| format!("remote stream timeout failed: {err}"))?;
+    stream
+        .set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT))
+        .map_err(|err| format!("remote stream write timeout failed: {err}"))?;
     let connection =
         ServerConnection::new(config).map_err(|err| format!("remote TLS failed: {err}"))?;
     let tls = StreamOwned::new(connection, stream);
@@ -1038,7 +1203,7 @@ fn handle_client(
         .map_err(|err| format!("remote websocket accept failed: {err}"))?;
     ws.get_mut()
         .sock
-        .set_read_timeout(Some(Duration::from_millis(200)))
+        .set_read_timeout(Some(REMOTE_SOCKET_POLL_TIMEOUT))
         .map_err(|err| format!("remote stream polling timeout failed: {err}"))?;
     remote_debug_log(&ctx, format!("websocket accepted peer={peer}"));
     let mut authenticated = false;
@@ -1046,16 +1211,19 @@ fn handle_client(
     let mut client_id = String::new();
     let mut client_protocol = RemoteProtocol::LegacyV1;
     let mut client_compression = RemoteCompression::None;
-    let (out_tx, out_rx) = mpsc::channel::<Value>();
+    let (out_tx, out_rx) = mpsc::sync_channel::<Value>(REMOTE_OUTBOUND_QUEUE_CAPACITY);
     let close = Arc::new(AtomicBool::new(false));
 
     loop {
-        if close.load(Ordering::Relaxed) {
+        if close.load(Ordering::Acquire) {
             remote_debug_log(&ctx, format!("client revoked peer={peer}"));
             break;
         }
-        while let Ok(frame) = out_rx.try_recv() {
-            send_frame(&mut ws, frame, client_compression)?;
+        for _ in 0..REMOTE_OUTBOUND_BURST {
+            match out_rx.try_recv() {
+                Ok(frame) => send_frame(&mut ws, frame, client_compression)?,
+                Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => break,
+            }
         }
         let msg = match ws.read() {
             Ok(msg) => msg,
@@ -1258,40 +1426,77 @@ fn handle_client(
                 .to_string();
             log_remote_pty_write_frame(&ctx, "remote-server.recv-frame", &channel, &frame);
             remote_debug_log(&ctx, format!("invoke start peer={peer} channel={channel}"));
+            let Some(invoke_slot) = try_acquire_resource_slot(&active_invokes, MAX_REMOTE_INVOKES)
+            else {
+                send_frame(
+                    &mut ws,
+                    json!({
+                        "type": "invoke-error",
+                        "id": id,
+                        "error": "Remote server is busy; retry this request shortly"
+                    }),
+                    client_compression,
+                )?;
+                continue;
+            };
             let invoke_app = ctx.clone();
             let invoke_ctx = ctx.clone();
             let invoke_sidecar = sidecar.clone();
             let invoke_peer = peer.clone();
             let invoke_frame = frame.clone();
             let invoke_tx = out_tx.clone();
-            thread::spawn(move || {
-                let result = invoke_sidecar_for_remote(
-                    &invoke_ctx,
-                    &invoke_sidecar,
-                    client_protocol,
-                    &channel,
-                    &invoke_frame,
+            let invoke_close = Arc::clone(&close);
+            let spawn_id = id.clone();
+            let spawn_channel = channel.clone();
+            if let Err(err) = thread::Builder::new()
+                .name("bat-remote-inv".to_string())
+                .spawn(move || {
+                    let _invoke_slot = invoke_slot;
+                    let result = invoke_sidecar_for_remote(
+                        &invoke_ctx,
+                        &invoke_sidecar,
+                        client_protocol,
+                        &channel,
+                        &invoke_frame,
+                    );
+                    let response = match result {
+                        Ok(value) => {
+                            remote_debug_log(
+                                &invoke_app,
+                                format!("invoke ok peer={invoke_peer} channel={channel}"),
+                            );
+                            json!({ "type": "invoke-result", "id": id, "result": value })
+                        }
+                        Err(err) => {
+                            remote_debug_log(
+                                &invoke_app,
+                                format!(
+                                    "invoke error peer={invoke_peer} channel={channel} error={err}"
+                                ),
+                            );
+                            json!({ "type": "invoke-error", "id": id, "error": err })
+                        }
+                    };
+                    let _ = try_queue_remote_frame(&invoke_tx, &invoke_close, response);
+                })
+            {
+                crate::commands::app::log_tauri(
+                    &ctx,
+                    &format!(
+                        "[remote-server] invoke thread start failed peer={peer} channel={spawn_channel} active={} error={err}",
+                        active_invokes.load(Ordering::Acquire)
+                    ),
                 );
-                let response = match result {
-                    Ok(value) => {
-                        remote_debug_log(
-                            &invoke_app,
-                            format!("invoke ok peer={invoke_peer} channel={channel}"),
-                        );
-                        json!({ "type": "invoke-result", "id": id, "result": value })
-                    }
-                    Err(err) => {
-                        remote_debug_log(
-                            &invoke_app,
-                            format!(
-                                "invoke error peer={invoke_peer} channel={channel} error={err}"
-                            ),
-                        );
-                        json!({ "type": "invoke-error", "id": id, "error": err })
-                    }
-                };
-                let _ = invoke_tx.send(response);
-            });
+                send_frame(
+                    &mut ws,
+                    json!({
+                        "type": "invoke-error",
+                        "id": spawn_id,
+                        "error": "Remote server could not start this request; retry shortly"
+                    }),
+                    client_compression,
+                )?;
+            }
             continue;
         }
     }
@@ -1461,7 +1666,7 @@ fn accept_websocket_tls(
 ) -> Result<WebSocket<StreamOwned<ServerConnection, TcpStream>>, String> {
     let mut request = Vec::with_capacity(1024);
     let mut buf = [0_u8; 1024];
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + REMOTE_HANDSHAKE_TIMEOUT;
     while request.len() < 16 * 1024 {
         let n = match tls.read(&mut buf) {
             Ok(n) => n,
@@ -3135,7 +3340,7 @@ mod tests {
         assert!(!client_already_recorded(&clients, &recent, &key, later));
 
         // A currently-connected client also counts as known.
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::sync_channel(1);
         clients.lock().unwrap().push(RemoteClientRecord {
             id: "c1".to_string(),
             info: test_client_info(Some("win-3"), "Tablet"),
@@ -3144,6 +3349,39 @@ mod tests {
         });
         let live_key = (Some("win-3".to_string()), "Tablet".to_string());
         assert!(client_already_recorded(&clients, &recent, &live_key, later));
+    }
+
+    #[test]
+    fn resource_slots_enforce_the_limit_and_release_on_drop() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let first = try_acquire_resource_slot(&active, 2).expect("first slot");
+        let second = try_acquire_resource_slot(&active, 2).expect("second slot");
+        assert!(try_acquire_resource_slot(&active, 2).is_none());
+        assert_eq!(active.load(Ordering::Acquire), 2);
+
+        drop(first);
+        let replacement = try_acquire_resource_slot(&active, 2).expect("released slot");
+        assert_eq!(active.load(Ordering::Acquire), 2);
+        drop((second, replacement));
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_full_outbound_queue_revokes_the_slow_client() {
+        let (tx, _rx) = mpsc::sync_channel(1);
+        tx.try_send(json!({ "already": "queued" })).unwrap();
+        let close = Arc::new(AtomicBool::new(false));
+        let clients = Arc::new(Mutex::new(vec![RemoteClientRecord {
+            id: "slow-client".to_string(),
+            info: test_client_info(None, "slow client"),
+            tx,
+            close: Arc::clone(&close),
+        }]));
+
+        send_remote_event_to_clients(&clients, "workspace:reload", &json!({ "data": "{}" }));
+
+        assert!(clients.lock().unwrap().is_empty());
+        assert!(close.load(Ordering::Acquire));
     }
 
     #[test]
@@ -3296,7 +3534,7 @@ mod tests {
         // Drives the real choke point rather than the sanitizer in isolation, so
         // deleting the sanitize call — or moving it after the legacy v1 conversion —
         // fails here instead of passing quietly.
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(1);
         let clients = Arc::new(Mutex::new(vec![RemoteClientRecord {
             id: "client-1".to_string(),
             info: RemoteClientInfo {

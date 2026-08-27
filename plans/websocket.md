@@ -330,6 +330,34 @@ Disconnected invoke behavior:
   preserve the user's input, avoid surfacing the raw error string, and let the
   reconnect path restore the session.
 
+### Server resource guardrails
+
+The headless server must stay recoverable when clients disappear mid-write or
+the host is under process/thread pressure:
+
+- At most 64 TCP connection handlers may be live at once, including TLS/WS
+  handshakes. Excess connections are accepted and immediately closed so the
+  listen backlog can continue draining.
+- TLS/WS handshakes have a 10-second read deadline, and every socket write has a
+  10-second timeout. A peer that stops reading cannot pin a connection thread
+  forever.
+- At most 128 remote invokes may execute concurrently across all clients. New
+  invokes over the limit receive a retryable `invoke-error` instead of spawning
+  another OS thread.
+- Each authenticated client has a bounded 256-frame outbound queue. The server
+  writes at most 64 queued frames per poll iteration; a client whose queue fills
+  is revoked rather than consuming unbounded memory.
+- Accept, client, and invoke threads use fallible named thread creation. An OS
+  task-limit error is logged and handled without panicking the accept loop.
+- Recoverable `accept(2)` failures are rate-limited in logs and retried. The
+  headless supervisor also checks the accept-loop liveness once per second and
+  exits non-zero if that critical thread stops, allowing
+  `Restart=on-failure` to recover the service.
+
+`remote_server_status` exposes the additive diagnostics `accepting`,
+`activeConnections`, `activeInvokes`, `connectionLimit`, `invokeLimit`, and
+`outboundQueueCapacity`.
+
 ## Current Channel Groups
 
 App metadata:

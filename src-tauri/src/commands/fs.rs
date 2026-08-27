@@ -24,8 +24,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+    mpsc, Arc, Mutex,
 };
 use std::time::Duration;
 #[cfg(feature = "desktop")]
@@ -33,6 +33,7 @@ use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 const MAX_READ_BYTES: u64 = 512 * 1024;
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
+const MAX_FS_WATCHERS: usize = 64;
 const RESOLVE_PATH_LINK_LIMIT: usize = 200;
 
 // Directory names we skip in listings/search — these are typically build
@@ -155,11 +156,35 @@ pub struct PathLinkResult {
 
 struct FsWatchEntry {
     _watcher: RecommendedWatcher,
+    _debounce_thread: std::thread::JoinHandle<()>,
+    _slot: FsWatchSlot,
+}
+
+struct FsWatchSlot {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for FsWatchSlot {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct FsWatcherState {
     watchers: Arc<Mutex<HashMap<String, FsWatchEntry>>>,
+    active: Arc<AtomicUsize>,
+}
+
+fn try_acquire_fs_watch_slot(active: &Arc<AtomicUsize>) -> Option<FsWatchSlot> {
+    active
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            (current < MAX_FS_WATCHERS).then_some(current + 1)
+        })
+        .ok()
+        .map(|_| FsWatchSlot {
+            active: Arc::clone(active),
+        })
 }
 
 pub(crate) fn fs_read_file_impl(path: String) -> FsReadResult {
@@ -976,12 +1001,42 @@ pub async fn fs_resolve_path_links(
         .unwrap_or_default()
 }
 
+fn normalized_watch_path(dir_path: &str) -> Option<(String, PathBuf)> {
+    if dir_path.trim().is_empty() {
+        return None;
+    }
+    let absolute = std::path::absolute(dir_path).ok()?;
+    let key = absolute.to_string_lossy().to_string();
+    Some((key, absolute))
+}
+
 fn remove_watcher(state: &FsWatcherState, dir_path: &str) -> bool {
+    let Some((key, _)) = normalized_watch_path(dir_path) else {
+        return false;
+    };
     let Ok(mut guard) = state.watchers.lock() else {
         return false;
     };
-    guard.remove(dir_path);
+    guard.remove(&key);
     true
+}
+
+fn run_watch_debounce(receiver: mpsc::Receiver<()>, debounce: Duration, mut publish: impl FnMut()) {
+    loop {
+        if receiver.recv().is_err() {
+            return;
+        }
+        loop {
+            match receiver.recv_timeout(debounce) {
+                Ok(()) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    publish();
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -1005,50 +1060,56 @@ pub fn fs_watch(
 }
 
 pub(crate) fn fs_watch_native(app: HostContext, state: &FsWatcherState, dir_path: String) -> bool {
-    if dir_path.trim().is_empty() {
+    let Some((key, abs)) = normalized_watch_path(&dir_path) else {
         return false;
-    }
+    };
     if state
         .watchers
         .lock()
-        .map(|guard| guard.contains_key(&dir_path))
+        .map(|guard| guard.contains_key(&key))
         .unwrap_or(false)
     {
         return true;
     }
-    let abs = match std::path::absolute(&dir_path) {
-        Ok(path) => path,
-        Err(_) => return false,
-    };
     let abs_string = abs.to_string_lossy().to_string();
     if is_sensitive_path(&abs_string) {
         return false;
     }
-    let key = dir_path.clone();
+    let Some(slot) = try_acquire_fs_watch_slot(&state.active) else {
+        return false;
+    };
+
+    // One worker per watched directory coalesces any number of notify events.
+    // The previous implementation spawned one sleeping thread per event, so a
+    // busy checkout/node_modules tree could exhaust the process task limit in
+    // a few hundred milliseconds.
+    let (debounce_tx, debounce_rx) = mpsc::sync_channel(1);
+    let app_for_debounce = app.clone();
+    let abs_for_debounce = abs_string.clone();
+    let debounce_thread = match std::thread::Builder::new()
+        .name("bat-fs-debounce".to_string())
+        .spawn(move || {
+            run_watch_debounce(debounce_rx, WATCH_DEBOUNCE, move || {
+                publish_runtime_event(
+                    &app_for_debounce,
+                    "fs:changed",
+                    serde_json::Value::String(abs_for_debounce.clone()),
+                    "rust-fs-watch",
+                );
+            });
+        }) {
+        Ok(thread) => thread,
+        Err(_) => return false,
+    };
+
     let watchers = state.watchers.clone();
-    let debounce = Arc::new(AtomicU64::new(0));
-    let debounce_for_event = debounce.clone();
-    let app_for_event = app.clone();
-    let abs_for_event = abs_string.clone();
     let key_for_error = key.clone();
     let mut watcher = match RecommendedWatcher::new(
         move |event| match event {
             Ok(_) => {
-                let ticket = debounce_for_event.fetch_add(1, Ordering::SeqCst) + 1;
-                let debounce_check = debounce_for_event.clone();
-                let app_emit = app_for_event.clone();
-                let changed_path = abs_for_event.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(WATCH_DEBOUNCE);
-                    if debounce_check.load(Ordering::SeqCst) == ticket {
-                        publish_runtime_event(
-                            &app_emit,
-                            "fs:changed",
-                            serde_json::Value::String(changed_path),
-                            "rust-fs-watch",
-                        );
-                    }
-                });
+                // A full capacity-one queue already represents a pending
+                // change, so dropping additional notifications is intentional.
+                let _ = debounce_tx.try_send(());
             }
             Err(_) => {
                 if let Ok(mut guard) = watchers.lock() {
@@ -1064,7 +1125,11 @@ pub(crate) fn fs_watch_native(app: HostContext, state: &FsWatcherState, dir_path
     if watcher.watch(&abs, RecursiveMode::Recursive).is_err() {
         return false;
     }
-    let entry = FsWatchEntry { _watcher: watcher };
+    let entry = FsWatchEntry {
+        _watcher: watcher,
+        _debounce_thread: debounce_thread,
+        _slot: slot,
+    };
     if let Ok(mut guard) = state.watchers.lock() {
         if guard.contains_key(&key) {
             true
@@ -1718,6 +1783,45 @@ fn stream_host_file_to_local(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn fs_watch_slots_enforce_the_limit_and_release_on_drop() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let slots = (0..MAX_FS_WATCHERS)
+            .map(|_| try_acquire_fs_watch_slot(&active).expect("watch slot"))
+            .collect::<Vec<_>>();
+        assert!(try_acquire_fs_watch_slot(&active).is_none());
+        assert_eq!(active.load(Ordering::Acquire), MAX_FS_WATCHERS);
+
+        drop(slots);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn fs_watch_debounce_coalesces_an_event_burst() {
+        let (event_tx, event_rx) = mpsc::sync_channel(1);
+        let (publish_tx, publish_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_watch_debounce(event_rx, Duration::from_millis(20), move || {
+                let _ = publish_tx.send(());
+            });
+        });
+
+        for _ in 0..1_000 {
+            let _ = event_tx.try_send(());
+        }
+        publish_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("one debounced publish");
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(matches!(
+            publish_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        drop(event_tx);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn upload_roundtrip_writes_file_to_tmp() {
