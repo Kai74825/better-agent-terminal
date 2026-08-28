@@ -435,7 +435,7 @@ class WorkspaceStore {
   addTerminal(
     workspaceId: string,
     agentPreset?: AgentPresetId,
-    init?: { id?: string; cwd?: string; worktreePath?: string; worktreeBranch?: string },
+    init?: { id?: string; cwd?: string; worktreePath?: string; worktreeBranch?: string; focus?: boolean },
   ): TerminalInstance {
     const workspace = this.state.workspaces.find(w => w.id === workspaceId)
     if (!workspace) throw new Error('Workspace not found')
@@ -468,7 +468,8 @@ class WorkspaceStore {
     }
 
     // Auto-focus if it's an agent terminal or no current focus
-    const shouldFocus = (agentPreset && agentPreset !== 'none') || !this.state.focusedTerminalId
+    const shouldFocus = init?.focus
+      ?? ((agentPreset && agentPreset !== 'none') || !this.state.focusedTerminalId)
 
     this.state = {
       ...this.state,

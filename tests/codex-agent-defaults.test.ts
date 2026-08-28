@@ -39,6 +39,15 @@ async function main() {
   assert.equal(claude.model, undefined, 'Codex defaults must not leak into Claude agents')
   assert.equal(claude.agentParams, undefined, 'Codex params must not leak into Claude agents')
 
+  const focusedBeforeStaging = workspaceStore.getState().focusedTerminalId
+  const staged = workspaceStore.addTerminal(workspace.id, 'codex-agent', { focus: false })
+  assert.equal(
+    workspaceStore.getState().focusedTerminalId,
+    focusedBeforeStaging,
+    'a staged handoff target must not mount before its session and context are ready',
+  )
+  assert.notEqual(staged.id, focusedBeforeStaging)
+
   console.log('Codex agent defaults: passed')
 }
 

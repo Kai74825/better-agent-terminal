@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict'
+import {
+  BAT_CONTEXT_TRANSFER_MARKER,
+  buildClaudeToCodexContext,
+  redactTransferSecrets,
+} from '../renderer/src/utils/agent-context-transfer'
+
+const redacted = redactTransferSecrets([
+  'Authorization: Bearer abcdef123456',
+  'api_key=super-secret-value',
+  'token sk-ant-abcdefghijklmnop',
+].join('\n'))
+assert.equal(redacted.count, 3)
+assert.doesNotMatch(redacted.text, /abcdef123456|super-secret-value|sk-ant-/)
+
+const result = buildClaudeToCodexContext({
+  sourceSessionId: 'bat-source',
+  sourceSdkSessionId: 'claude-source',
+  cwd: 'C:/repo',
+  gitRoot: 'C:/repo',
+  gitBranch: 'feature/context-transfer\n```malicious markdown',
+  gitStatus: [{ status: 'M', file: 'src/app.ts' }],
+  gitDiff: 'diff --git a/src/app.ts b/src/app.ts\n+const changed = true',
+  exportedAt: Date.UTC(2026, 7, 28, 4, 0, 0),
+  messages: [
+    { id: 'u1', sessionId: 'bat-source', role: 'user', content: 'Continue the migration', timestamp: 1 },
+    { id: 'thinking', sessionId: 'bat-source', role: 'assistant', content: 'Visible answer', thinking: 'private reasoning', timestamp: 2 },
+    { id: 'tool', sessionId: 'bat-source', toolName: 'Bash', input: { command: 'echo secret' }, status: 'completed', result: 'secret tool result', timestamp: 3 },
+    { id: 'sys', sessionId: 'bat-source', role: 'system', content: 'private system instruction', timestamp: 4 },
+  ],
+})
+
+assert.ok(result.markdown.startsWith(BAT_CONTEXT_TRANSFER_MARKER))
+assert.match(result.markdown, /Continue the migration/)
+assert.match(result.markdown, /Visible answer/)
+assert.match(result.markdown, /src\/app\.ts/)
+assert.doesNotMatch(result.markdown, /private reasoning|secret tool result|private system instruction|echo secret/)
+assert.doesNotMatch(result.markdown, /Git branch:.*\n```malicious/)
+assert.equal(result.includedMessages, 2)
+assert.equal(result.omittedMessages, 0)
+
+const longResult = buildClaudeToCodexContext({
+  sourceSessionId: 'bat-source',
+  cwd: '/repo',
+  gitDiff: 'x'.repeat(40_000),
+  messages: Array.from({ length: 40 }, (_, index) => ({
+    id: `u${index}`,
+    sessionId: 'bat-source',
+    role: 'user' as const,
+    content: `message ${index}`,
+    timestamp: index,
+  })),
+})
+assert.equal(longResult.includedMessages, 30)
+assert.equal(longResult.omittedMessages, 10)
+assert.equal(longResult.truncated, true)
+assert.ok(longResult.markdown.length <= 64_000)
+
+const conversationBudgetResult = buildClaudeToCodexContext({
+  sourceSessionId: 'bat-source',
+  cwd: '/repo',
+  messages: Array.from({ length: 30 }, (_, index) => ({
+    id: `large-${index}`,
+    sessionId: 'bat-source',
+    role: 'user' as const,
+    content: `${index}: ${'z'.repeat(3_990)}`,
+    timestamp: index,
+  })),
+})
+assert.ok(conversationBudgetResult.includedMessages < 30)
+assert.match(conversationBudgetResult.markdown, /"content": "29: z+/)
+assert.doesNotMatch(conversationBudgetResult.markdown, /"content": "0: z+/)
+
+console.log('agent-context-transfer: passed')

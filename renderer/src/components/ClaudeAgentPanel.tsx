@@ -1,6 +1,7 @@
 import { host, isTauri } from '../host-api'
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, cloneElement, isValidElement, memo } from 'react'
 import { flushSync } from 'react-dom'
+import { v4 as uuidv4 } from 'uuid'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import type { ClaudeMessage, ClaudeSessionState, ClaudeToolCall } from '../types/claude-agent'
@@ -41,6 +42,7 @@ import { AgentActivityTree } from './AgentActivityTree'
 import { buildAgentTaskTree, findAgentNode, formatAgentNodeElapsed, summarizeAgentTree, terminateLifecycleEntries, type TaskLifecycle } from '../lib/agent-task-tree'
 import { bindPanelActiveEvent, usePanelActivation, usePanelActiveEffect, type PanelActivation } from '../utils/panel-activation'
 import { prepareFilePickerResults, type FilePickerSearchEntry } from '../utils/file-picker-search'
+import { buildClaudeToCodexContext, CODEX_CONTEXT_VERIFICATION_PROMPT } from '../utils/agent-context-transfer'
 
 interface SessionMeta {
   model?: string
@@ -506,6 +508,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
   const markdownCwd = worktreeInfo?.worktreePath || terminal?.worktreePath || cwd
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
   const [isResumingHistory, setIsResumingHistory] = useState(false)
+  const [isTransferringToCodex, setIsTransferringToCodex] = useState(false)
   const [activePlanFile, setActivePlanFile] = useState<string | null>(null)
   const [planFileTitle, setPlanFileTitle] = useState<string | null>(null)
   const [planFileTrigger, setPlanFileTrigger] = useState(0)
@@ -2706,6 +2709,95 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
     const stored = workspaceStore.getState().terminals.find(t => t.id === newTerminal.id)
     dlog(`${tag} stored terminal: sdkSessionId=${stored?.sdkSessionId?.slice(0, 8)} pendingPrompt="${stored?.pendingPrompt}" pendingImages=${stored?.pendingImages?.length ?? 0}`)
   }, [sessionId, workspaceId, hasSdkSession, currentModel, attachedImages])
+
+  const handleTransferToCodex = useCallback(async () => {
+    if (
+      host.debug.isDebugMode !== true
+      || !isTauri()
+      || isRemoteConnected
+      || isCodexSession
+      || isStreaming
+      || isTransferringToCodex
+      || !workspaceId
+    ) return
+
+    const tag = `[ContextTransfer:${sessionId.slice(0, 8)}]`
+    let targetSessionId: string | null = null
+    setIsTransferringToCodex(true)
+    try {
+      const [gitRoot, gitBranch, gitStatus, gitDiff] = await Promise.all([
+        host.git.getRoot(cwd).catch(() => null),
+        host.git.getBranch(cwd).catch(() => null),
+        host.git.getStatus(cwd).catch(() => []),
+        host.git.getDiff(cwd).catch(() => ''),
+      ])
+      const transfer = buildClaudeToCodexContext({
+        sourceSessionId: sessionId,
+        sourceSdkSessionId: sessionMeta?.sdkSessionId || terminal?.sdkSessionId,
+        cwd,
+        gitRoot,
+        gitBranch,
+        gitStatus,
+        gitDiff,
+        messages: allMessages,
+      })
+      const confirmed = window.confirm(t('claude.transferToCodexConfirm', {
+        messages: transfer.includedMessages,
+        files: gitStatus.length,
+        redactions: transfer.redactionCount,
+        fidelity: transfer.truncated || transfer.omittedMessages > 0
+          ? t('claude.transferToCodexPartial')
+          : t('claude.transferToCodexComplete'),
+      }))
+      if (!confirmed) return
+
+      const settings = settingsStore.getSettings()
+      const model = settings.defaultCodexModel || undefined
+      const effort = settings.defaultCodexEffort || 'high'
+      const target = workspaceStore.addTerminal(workspaceId, 'codex-agent' as AgentPresetId, {
+        id: uuidv4(),
+        cwd,
+        focus: false,
+      })
+      targetSessionId = target.id
+      workspaceStore.setTerminalGeneratedTitle(target.id, 'Codex (from Claude)')
+      workspaceStore.updateTerminalAgentParams(target.id, {
+        effortLevel: effort,
+        sandboxMode: 'workspace-write',
+        approvalPolicy: 'on-request',
+      })
+      if (model) workspaceStore.updateTerminalModel(target.id, model)
+
+      const started = await host.claude.startSession(target.id, {
+        cwd,
+        model,
+        effort,
+        agentPreset: 'codex-agent',
+        codexSandboxMode: 'workspace-write',
+        codexApprovalPolicy: 'on-request',
+      }) as { sdkSessionId?: string } | null
+      const injected = await host.claude.injectCodexContext(target.id, transfer.markdown) as { sdkSessionId?: string } | null
+      const sdkSessionId = injected?.sdkSessionId || started?.sdkSessionId
+      if (!sdkSessionId) throw new Error('Codex backend returned no thread ID after context injection.')
+
+      workspaceStore.setTerminalSdkSessionId(target.id, sdkSessionId)
+      workspaceStore.setTerminalPendingPrompt(target.id, CODEX_CONTEXT_VERIFICATION_PROMPT)
+      workspaceStore.setFocusedTerminal(target.id)
+      workspaceStore.save()
+      host.debug.log(`${tag} complete target=${target.id.slice(0, 8)} messages=${transfer.includedMessages} omitted=${transfer.omittedMessages} redactions=${transfer.redactionCount} truncated=${transfer.truncated}`)
+    } catch (error) {
+      const message = formatUnknownError(error)
+      host.debug.log(`${tag} failed target=${targetSessionId?.slice(0, 8) || 'none'} error=${message}`)
+      if (targetSessionId) {
+        await host.claude.stopSession(targetSessionId).catch(() => {})
+        workspaceStore.removeTerminal(targetSessionId)
+        workspaceStore.save()
+      }
+      alert(t('claude.transferToCodexFailed', { error: message }))
+    } finally {
+      setIsTransferringToCodex(false)
+    }
+  }, [allMessages, cwd, isCodexSession, isRemoteConnected, isStreaming, isTransferringToCodex, sessionId, sessionMeta?.sdkSessionId, t, terminal?.sdkSessionId, workspaceId])
 
   const handleRewindToPrompt = useCallback(async (promptIndex: number, promptCount: number) => {
     const removed = promptCount - promptIndex
@@ -5809,6 +5901,16 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
           </div>
 
           <div className="claude-input-actions">
+            {host.debug.isDebugMode === true && isTauri() && !isRemoteConnected && !isCodexSession && allMessages.length > 0 && (
+              <button
+                className="claude-fork-btn"
+                onClick={handleTransferToCodex}
+                disabled={isStreaming || isTransferringToCodex}
+                title={t('claude.transferToCodex')}
+              >
+                {isTransferringToCodex ? t('claude.transferToCodexWorking') : t('claude.transferToCodexButton')}
+              </button>
+            )}
             {hasSdkSession && !isCodexSession && (
               <button
                 className="claude-fork-btn"

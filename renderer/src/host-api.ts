@@ -935,6 +935,10 @@ function createTauriHost(): BatAppAPI {
                 : await attachWorkspaceIdentity(sessionId, options as Record<string, unknown>),
             })
         }
+        if (key === 'injectCodexContext') {
+          return (sessionId: string, contextMarkdown: string) =>
+            getInvoke()<unknown>('claude_inject_codex_context', { sessionId, contextMarkdown })
+        }
         if (key === 'sendMessage') {
           return async (
             sessionId: string,

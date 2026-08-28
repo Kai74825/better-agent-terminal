@@ -1906,7 +1906,26 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
         const existingMessages = normalizeMessageItems(existingState.messages)
         historyLoadedRef.current = true
         setIsResumingHistory(false)
-        if (existingMessages.length > 0) {
+        const terminalState = workspaceStore.getState().terminals.find(t => t.id === sessionId)
+        let sentPendingPrompt = false
+        if (!pendingPromptSentRef.current && (terminalState?.pendingPrompt || terminalState?.pendingImages?.length)) {
+          sentPendingPrompt = true
+          pendingPromptSentRef.current = true
+          const prompt = terminalState.pendingPrompt || ''
+          const images = terminalState.pendingImages
+          workspaceStore.setTerminalPendingPrompt(sessionId, '')
+          dlog(`${stag} mount state AUTO-SENDING pending prompt: "${prompt}" images=${images?.length ?? 0}`)
+          setMessages([...existingMessages, {
+            id: `user-pending-${Date.now()}`,
+            sessionId,
+            role: 'user' as const,
+            content: prompt,
+            timestamp: Date.now(),
+          }])
+          scrollToBottomAfterRender()
+          setIsStreaming(true)
+          void sendClaudeMessage(prompt, images)
+        } else if (existingMessages.length > 0) {
           setMessages(existingMessages)
         } else if (
           messageCountRef.current === 0 &&
@@ -1924,7 +1943,7 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
         // host that is mid-turn. Remote pairs versions independently, so this
         // also has to hold against an older host whose session-state probe
         // answers from a snapshot that carries none of these fields.
-        if (typeof existingState.isStreaming === 'boolean') {
+        if (!sentPendingPrompt && typeof existingState.isStreaming === 'boolean') {
           setIsStreaming(existingState.isStreaming)
           setStreamingText(existingState.streamingText || '')
           setStreamingThinking(existingState.streamingThinking || '')

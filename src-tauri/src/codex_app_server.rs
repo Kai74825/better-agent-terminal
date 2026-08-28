@@ -45,6 +45,8 @@ const COMMAND_OUTPUT_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 const CODEX_CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CODEX_IDLE_REAPER_INTERVAL: Duration = Duration::from_secs(30);
 const CODEX_ACCOUNT_STATE_FILE: &str = "codex-account-state.json";
+const BAT_CONTEXT_TRANSFER_MARKER: &str = "# BAT Context Transfer";
+const MAX_CONTEXT_TRANSFER_BYTES: usize = 256 * 1024;
 static CODEX_TEMP_IMAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CODEX_HOME_PROBE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1359,6 +1361,30 @@ fn text_from_value(value: &Value) -> String {
     }
 }
 
+fn codex_context_transfer_item(context_markdown: &str) -> Result<Value, String> {
+    let context = context_markdown.trim();
+    if context.is_empty() {
+        return Err("Codex context transfer is empty".to_string());
+    }
+    if !context.starts_with(BAT_CONTEXT_TRANSFER_MARKER) {
+        return Err("Codex context transfer is missing the BAT marker".to_string());
+    }
+    if context.len() > MAX_CONTEXT_TRANSFER_BYTES {
+        return Err(format!(
+            "Codex context transfer exceeds the {} byte limit",
+            MAX_CONTEXT_TRANSFER_BYTES
+        ));
+    }
+    Ok(json!({
+        "type": "message",
+        "role": "assistant",
+        "content": [{
+            "type": "output_text",
+            "text": context,
+        }],
+    }))
+}
+
 fn sanitize_terminal_output(value: &str) -> String {
     let mut stripped = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
@@ -2053,6 +2079,24 @@ fn codex_history_items_from_content(session_id: &str, content: &str) -> Vec<Valu
                 _ => {}
             },
             Some("response_item") => match payload.get("type").and_then(Value::as_str) {
+                Some("message") => {
+                    let context = text_from_value(payload.get("content").unwrap_or(&Value::Null));
+                    if context.starts_with(BAT_CONTEXT_TRANSFER_MARKER) {
+                        let id = payload
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("hist-context-transfer-{}", items.len()));
+                        items.push(json!({
+                            "id": id,
+                            "sessionId": session_id,
+                            "role": "assistant",
+                            "content": context,
+                            "timestamp": timestamp,
+                        }));
+                    }
+                }
                 Some("reasoning") => {
                     let thinking = reasoning_text_from_item(payload);
                     if !thinking.trim().is_empty() {
@@ -4553,6 +4597,74 @@ impl CodexAppServerState {
                 self.send_message(app, session_id.clone(), prompt.to_string(), Vec::new())?;
             }
         }
+        Ok(json!({ "ok": true, "sessionId": session_id, "sdkSessionId": thread_id }))
+    }
+
+    pub fn inject_context(
+        &self,
+        app: &HostContext,
+        session_id: String,
+        context_markdown: String,
+    ) -> Result<Value, BridgeError> {
+        let item = codex_context_transfer_item(&context_markdown).map_err(bridge_error)?;
+        let turn_operation_lock = self.turn_operation_lock(&session_id);
+        let _turn_operation_guard = turn_operation_lock
+            .lock()
+            .map_err(|_| bridge_error("Codex turn operation lock poisoned"))?;
+        let thread_id = {
+            let sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get(&session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            if session.is_running {
+                return Err(bridge_error(
+                    "Cannot inject transferred context while a Codex turn is running",
+                ));
+            }
+            session
+                .thread_id
+                .clone()
+                .ok_or_else(|| bridge_error("Codex thread not started"))?
+        };
+
+        log_codex(
+            app,
+            &session_id,
+            format!(
+                "inject_context requested thread={} bytes={}",
+                thread_id,
+                context_markdown.len()
+            ),
+        );
+        let connection = self.ensure_connection(app).map_err(bridge_error)?;
+        connection
+            .request_logged(
+                app,
+                &session_id,
+                "thread/inject_items",
+                json!({ "threadId": thread_id, "items": [item] }),
+                REQUEST_TIMEOUT,
+            )
+            .map_err(bridge_error)?;
+        self.touch_connection_activity();
+
+        let message = json!({
+            "id": format!("context-transfer-{}", now_millis()),
+            "sessionId": session_id,
+            "role": "assistant",
+            "content": context_markdown.trim(),
+            "timestamp": now_millis(),
+        });
+        {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions
+                .get_mut(&session_id)
+                .ok_or_else(|| bridge_error("Codex session stopped during context transfer"))?;
+            session.thread_has_started_turn = true;
+            push_session_item(session, message.clone());
+        }
+        emit(app, "claude:message", &session_id, "message", message);
+        log_codex(app, &session_id, "inject_context complete");
         Ok(json!({ "ok": true, "sessionId": session_id, "sdkSessionId": thread_id }))
     }
 
@@ -8083,6 +8195,42 @@ mod tests {
         assert_eq!(items[1]["role"], "assistant");
         assert_eq!(items[1]["content"], "pong");
         assert_eq!(items[1]["timestamp"].as_u64(), Some(1_778_457_602_000));
+    }
+
+    #[test]
+    fn context_transfer_item_is_marked_assistant_history() {
+        let item = codex_context_transfer_item(
+            "# BAT Context Transfer\n\n## Provenance\n\n- Source provider: Claude Code",
+        )
+        .expect("valid context transfer item");
+        assert_eq!(item["type"], "message");
+        assert_eq!(item["role"], "assistant");
+        assert_eq!(item["content"][0]["type"], "output_text");
+        assert!(item["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with(BAT_CONTEXT_TRANSFER_MARKER)));
+        assert!(codex_context_transfer_item("ordinary assistant text").is_err());
+        let oversized = format!(
+            "{}\n{}",
+            BAT_CONTEXT_TRANSFER_MARKER,
+            "x".repeat(MAX_CONTEXT_TRANSFER_BYTES)
+        );
+        assert!(codex_context_transfer_item(&oversized).is_err());
+    }
+
+    #[test]
+    fn codex_history_loader_restores_only_marked_injected_messages() {
+        let content = r##"
+{"timestamp":"2026-05-11T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"# BAT Context Transfer\n\nportable context"}]}}
+{"timestamp":"2026-05-11T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ordinary response item"}]}}
+"##;
+        let items = codex_history_items_from_content("s-1", content);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["role"], "assistant");
+        assert_eq!(
+            items[0]["content"],
+            "# BAT Context Transfer\n\nportable context"
+        );
     }
 
     #[test]

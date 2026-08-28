@@ -3424,6 +3424,28 @@ pub async fn claude_start_session(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+pub async fn claude_inject_codex_context(
+    app: AppHandle,
+    window: WebviewWindow,
+    codex_state: State<'_, CodexAppServerState>,
+    session_id: String,
+    context_markdown: String,
+) -> Result<Value, BridgeError> {
+    if !bat_debug_enabled() {
+        return Err(BridgeError {
+            message: "Claude to Codex context transfer requires BAT_DEBUG=1".to_string(),
+        });
+    }
+    ensure_local_agent_session_access(&app, &window, &session_id)?;
+    codex_state.inject_context(
+        &HostContext::from_app(app.clone()),
+        session_id,
+        context_markdown,
+    )
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn claude_send_message(
     app: AppHandle,
     window: WebviewWindow,
