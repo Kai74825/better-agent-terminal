@@ -274,6 +274,50 @@ struct DeviceLoginSession {
     started: Instant,
 }
 
+/// Why ensure_connection() took a running app-server out of service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecycleReason {
+    /// The unified-account auth id no longer matches the one the process was
+    /// spawned with.
+    AuthMismatch,
+    /// A different codex binary resolves now (typically the managed runtime
+    /// finished installing after a fallback spawn) and no turn is in flight.
+    BinaryChanged,
+}
+
+impl RecycleReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            RecycleReason::AuthMismatch => "connection-auth-mismatch",
+            RecycleReason::BinaryChanged => "binary-changed",
+        }
+    }
+}
+
+/// A connection ensure_connection() removed from the slot. The process is
+/// being reaped on a background thread; only these facts remain for logging.
+struct RecycledConnection {
+    pid: u32,
+    reason: RecycleReason,
+    auth_account_id: Option<String>,
+    binary_identity: String,
+}
+
+/// Outcome of checking the running app-server against what resolves now.
+enum ConnectionReuse {
+    /// No app-server is running; the caller must spawn one.
+    Missing,
+    /// Keep using the running app-server. `stale_binary` is set when a
+    /// different binary resolves but a turn is in flight, so recycling was
+    /// deferred to a later idle call.
+    Reuse {
+        existing: Arc<CodexConnection>,
+        stale_binary: bool,
+    },
+    /// The running app-server was taken out of the slot; spawn a fresh one.
+    Recycled(RecycledConnection),
+}
+
 #[derive(Clone, Default)]
 pub struct CodexAppServerState {
     inner: Arc<CodexInner>,
@@ -2912,25 +2956,93 @@ impl CodexAppServerState {
         });
     }
 
-    fn drop_connection(&self, app: &HostContext, reason: &str) {
+    /// Empty the connection slot and reap the old app-server off-thread.
+    /// Returns the pid that was running, if any. Takes no HostContext so the
+    /// recycle decision in reuse_or_recycle_connection() stays unit-testable.
+    fn take_connection_for_reap(&self) -> Option<u32> {
         let old = match self.inner.connection.lock() {
             Ok(mut guard) => guard.take(),
-            Err(_) => return,
+            Err(_) => return None,
         };
         // Dropping a CodexConnection kills AND waits the child app-server, which
         // can block for up to ~1s. On account switch the identity files are
         // already swapped, so reap the old process off-thread; this keeps the
         // switch snappy and lets the new app-server spawn in parallel.
-        if let Some(old) = old {
-            let pid = old.pid;
-            log_codex_global(
+        let old = old?;
+        let pid = old.pid;
+        std::thread::spawn(move || drop(old));
+        Some(pid)
+    }
+
+    fn drop_connection(&self, app: &HostContext, reason: &str) {
+        match self.take_connection_for_reap() {
+            Some(pid) => log_codex_global(
                 app,
                 format!("drop_connection reason={reason} pid={pid} action=kill-and-wait"),
-            );
-            std::thread::spawn(move || drop(old));
-        } else {
-            log_codex_global(app, format!("drop_connection reason={reason} pid=none"));
+            ),
+            None => log_codex_global(app, format!("drop_connection reason={reason} pid=none")),
         }
+    }
+
+    /// Decide whether the running app-server can serve the next request.
+    ///
+    /// The connection mutex is locked only for single statements here: once to
+    /// clone the slot, and (inside take_connection_for_reap) once to empty it.
+    /// The recycle branches used to live inside
+    /// `if let Some(existing) = self.inner.connection.lock()?.clone() { .. }`;
+    /// under Rust 2021 temporary-lifetime rules that guard stays held for the
+    /// whole body, so the nested drop_connection() re-locked the same mutex and
+    /// parked the invoke thread forever. Every later Codex call then queued on
+    /// that lock while Claude (sidecar-backed) kept working. Keeping this logic
+    /// free of HostContext lets the unit tests cover exactly that shape.
+    fn reuse_or_recycle_connection(
+        &self,
+        unified: bool,
+        current_auth_id: &Option<String>,
+        resolved_identity: &str,
+    ) -> Result<ConnectionReuse, String> {
+        let existing = self
+            .inner
+            .connection
+            .lock()
+            .map_err(|_| "codex connection lock poisoned")?
+            .clone();
+        let Some(existing) = existing else {
+            return Ok(ConnectionReuse::Missing);
+        };
+
+        let reason = if unified && existing.auth_account_id != *current_auth_id {
+            Some(RecycleReason::AuthMismatch)
+        } else if existing.binary_identity != resolved_identity && !self.any_session_running() {
+            // A different codex binary resolves now — typically the managed
+            // runtime finished installing after this app-server was spawned
+            // from a PATH/npm fallback (which can be releases old and reject
+            // newer models). Recycle while no turn is in flight so the next
+            // request spawns the catalog-pinned CLI instead of staying on
+            // the stale binary until an app restart.
+            Some(RecycleReason::BinaryChanged)
+        } else {
+            None
+        };
+
+        let Some(reason) = reason else {
+            return Ok(ConnectionReuse::Reuse {
+                stale_binary: existing.binary_identity != resolved_identity,
+                existing,
+            });
+        };
+
+        let recycled = RecycledConnection {
+            pid: existing.pid,
+            reason,
+            auth_account_id: existing.auth_account_id.clone(),
+            binary_identity: existing.binary_identity.clone(),
+        };
+        // Release our clone first so the reaper thread holds the last reference
+        // and the kill-and-wait never runs on this invoke thread.
+        drop(existing);
+        self.take_connection_for_reap();
+        Ok(ConnectionReuse::Recycled(recycled))
     }
 
     fn switch_unified(&self, app: &HostContext, selector: String) -> Result<Value, String> {
@@ -4260,42 +4372,17 @@ impl CodexAppServerState {
             self.drop_connection(app, "sync-active-changed");
         }
 
-        if let Some(existing) = self
-            .inner
-            .connection
-            .lock()
-            .map_err(|_| "codex connection lock poisoned")?
-            .clone()
-        {
-            let resolved_identity = resolve_codex_binary(app).identity();
-            if codex_unified_enabled(app) && existing.auth_account_id != current_auth_id {
-                log_codex_global(
-                    app,
-                    format!(
-                        "ensure_connection dropping pid={} auth changed from {} to {}",
-                        existing.pid,
-                        existing.auth_account_id.as_deref().unwrap_or("none"),
-                        current_auth_id.as_deref().unwrap_or("none")
-                    ),
-                );
-                self.drop_connection(app, "connection-auth-mismatch");
-            } else if existing.binary_identity != resolved_identity && !self.any_session_running() {
-                // A different codex binary resolves now — typically the managed
-                // runtime finished installing after this app-server was spawned
-                // from a PATH/npm fallback (which can be releases old and reject
-                // newer models). Recycle while no turn is in flight so the next
-                // request spawns the catalog-pinned CLI instead of staying on
-                // the stale binary until an app restart.
-                log_codex_global(
-                    app,
-                    format!(
-                        "ensure_connection dropping pid={} binary changed [{}] -> [{}]",
-                        existing.pid, existing.binary_identity, resolved_identity
-                    ),
-                );
-                self.drop_connection(app, "binary-changed");
-            } else {
-                if existing.binary_identity != resolved_identity {
+        let resolved_identity = resolve_codex_binary(app).identity();
+        match self.reuse_or_recycle_connection(
+            codex_unified_enabled(app),
+            &current_auth_id,
+            &resolved_identity,
+        )? {
+            ConnectionReuse::Reuse {
+                existing,
+                stale_binary,
+            } => {
+                if stale_binary {
                     log_codex_global(
                         app,
                         format!(
@@ -4313,6 +4400,35 @@ impl CodexAppServerState {
                 self.ensure_idle_reaper(app);
                 return Ok(existing);
             }
+            ConnectionReuse::Recycled(recycled) => {
+                match recycled.reason {
+                    RecycleReason::AuthMismatch => log_codex_global(
+                        app,
+                        format!(
+                            "ensure_connection dropping pid={} auth changed from {} to {}",
+                            recycled.pid,
+                            recycled.auth_account_id.as_deref().unwrap_or("none"),
+                            current_auth_id.as_deref().unwrap_or("none")
+                        ),
+                    ),
+                    RecycleReason::BinaryChanged => log_codex_global(
+                        app,
+                        format!(
+                            "ensure_connection dropping pid={} binary changed [{}] -> [{}]",
+                            recycled.pid, recycled.binary_identity, resolved_identity
+                        ),
+                    ),
+                }
+                log_codex_global(
+                    app,
+                    format!(
+                        "drop_connection reason={} pid={} action=kill-and-wait",
+                        recycled.reason.as_str(),
+                        recycled.pid
+                    ),
+                );
+            }
+            ConnectionReuse::Missing => {}
         }
 
         let (spawn_auth_id, spawn_auth_summary) = if codex_unified_enabled(app) {
@@ -8479,5 +8595,190 @@ mod tests {
         assert_eq!(recovered["pendingPermission"], request_data);
         // Another session's approval is not this session's problem.
         assert!(state.get_session_state("session-2").is_none());
+    }
+    const BUNDLED_CODEX: &str = "native:/opt/bat-server/releases/v3.2.5/codex-runtime/bin/codex";
+    const MANAGED_CODEX: &str =
+        "native:/home/u/.bat-server/runtimes/codex/0.152.1/linux-x64/bin/codex";
+
+    /// A CodexConnection around a short-lived child. These tests never write
+    /// to stdin; Drop only kills and reaps whatever is left.
+    fn test_connection(binary_identity: &str, auth_account_id: Option<&str>) -> Arc<CodexConnection> {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "exit", "0"]);
+            command
+        } else {
+            Command::new("true")
+        };
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn test child");
+        let stdin = child.stdin.take().expect("test child stdin");
+        let pid = child.id();
+        Arc::new(CodexConnection {
+            stdin: Mutex::new(stdin),
+            next_id: AtomicU64::new(0),
+            pending: Arc::new(PendingTable::default()),
+            child: Mutex::new(child),
+            pid,
+            auth_account_id: auth_account_id.map(str::to_string),
+            binary_identity: binary_identity.to_string(),
+        })
+    }
+
+    /// Runs the reuse/recycle decision on a helper thread so a regression back
+    /// to holding the connection mutex across the recycle fails the test
+    /// instead of hanging the whole run.
+    fn reuse_or_recycle_with_watchdog(
+        state: &CodexAppServerState,
+        unified: bool,
+        current_auth_id: Option<&str>,
+        resolved_identity: &str,
+    ) -> ConnectionReuse {
+        let worker = state.clone();
+        let current_auth_id = current_auth_id.map(str::to_string);
+        let resolved_identity = resolved_identity.to_string();
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(worker.reuse_or_recycle_connection(
+                unified,
+                &current_auth_id,
+                &resolved_identity,
+            ));
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("reuse_or_recycle_connection deadlocked on the connection mutex")
+            .expect("reuse_or_recycle_connection failed")
+    }
+
+    // Regression: bat-server on a fresh host spawned the app-server from the
+    // bundled fallback while the managed runtime was still installing; once
+    // the install finished the binary identity changed and the recycle branch
+    // self-deadlocked on the connection mutex, hanging every Codex call.
+    #[test]
+    fn binary_change_recycles_connection_without_holding_the_lock() {
+        let state = CodexAppServerState::default();
+        let old = test_connection(BUNDLED_CODEX, None);
+        let old_pid = old.pid;
+        *state.inner.connection.lock().unwrap() = Some(old);
+
+        match reuse_or_recycle_with_watchdog(&state, false, None, MANAGED_CODEX) {
+            ConnectionReuse::Recycled(recycled) => {
+                assert_eq!(recycled.reason, RecycleReason::BinaryChanged);
+                assert_eq!(recycled.pid, old_pid);
+                assert_eq!(recycled.binary_identity, BUNDLED_CODEX);
+                assert_eq!(recycled.auth_account_id, None);
+            }
+            ConnectionReuse::Reuse { .. } => panic!("stale binary must be recycled while idle"),
+            ConnectionReuse::Missing => panic!("connection slot was populated"),
+        }
+        let slot = state
+            .inner
+            .connection
+            .try_lock()
+            .expect("connection mutex must be free for the spawn path");
+        assert!(slot.is_none(), "recycled connection must leave the slot empty");
+    }
+
+    #[test]
+    fn auth_mismatch_recycles_connection_without_holding_the_lock() {
+        let state = CodexAppServerState::default();
+        let old = test_connection(MANAGED_CODEX, Some("acct-old"));
+        let old_pid = old.pid;
+        *state.inner.connection.lock().unwrap() = Some(old);
+
+        match reuse_or_recycle_with_watchdog(&state, true, Some("acct-new"), MANAGED_CODEX) {
+            ConnectionReuse::Recycled(recycled) => {
+                assert_eq!(recycled.reason, RecycleReason::AuthMismatch);
+                assert_eq!(recycled.pid, old_pid);
+                assert_eq!(recycled.auth_account_id.as_deref(), Some("acct-old"));
+            }
+            _ => panic!("auth mismatch must recycle the connection"),
+        }
+        let slot = state
+            .inner
+            .connection
+            .try_lock()
+            .expect("connection mutex must be free for the spawn path");
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn auth_mismatch_is_ignored_outside_unified_mode() {
+        let state = CodexAppServerState::default();
+        let old = test_connection(MANAGED_CODEX, Some("acct-old"));
+        let old_pid = old.pid;
+        *state.inner.connection.lock().unwrap() = Some(old);
+
+        match reuse_or_recycle_with_watchdog(&state, false, Some("acct-new"), MANAGED_CODEX) {
+            ConnectionReuse::Reuse {
+                existing,
+                stale_binary,
+            } => {
+                assert!(!stale_binary);
+                assert_eq!(existing.pid, old_pid);
+            }
+            _ => panic!("legacy mode must not recycle on auth id differences"),
+        }
+    }
+
+    #[test]
+    fn stale_binary_is_reused_while_a_turn_is_in_flight() {
+        let state = CodexAppServerState::default();
+        let old = test_connection(BUNDLED_CODEX, None);
+        let old_pid = old.pid;
+        *state.inner.connection.lock().unwrap() = Some(old);
+        // test_codex_session() is mid-turn (is_running: true).
+        state
+            .inner
+            .sessions
+            .lock()
+            .unwrap()
+            .insert("session-1".to_string(), test_codex_session());
+
+        match reuse_or_recycle_with_watchdog(&state, false, None, MANAGED_CODEX) {
+            ConnectionReuse::Reuse {
+                existing,
+                stale_binary,
+            } => {
+                assert!(stale_binary, "deferred recycle must be reported as stale");
+                assert_eq!(existing.pid, old_pid);
+            }
+            _ => panic!("recycling must be deferred while a turn is in flight"),
+        }
+        assert!(state.inner.connection.try_lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn matching_binary_and_auth_reuse_the_connection() {
+        let state = CodexAppServerState::default();
+        let old = test_connection(MANAGED_CODEX, Some("acct-1"));
+        let old_pid = old.pid;
+        *state.inner.connection.lock().unwrap() = Some(old);
+
+        match reuse_or_recycle_with_watchdog(&state, true, Some("acct-1"), MANAGED_CODEX) {
+            ConnectionReuse::Reuse {
+                existing,
+                stale_binary,
+            } => {
+                assert!(!stale_binary);
+                assert_eq!(existing.pid, old_pid);
+            }
+            _ => panic!("matching connection must be reused"),
+        }
+        assert!(state.inner.connection.try_lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn missing_connection_reports_missing() {
+        let state = CodexAppServerState::default();
+        assert!(matches!(
+            reuse_or_recycle_with_watchdog(&state, true, Some("acct-1"), MANAGED_CODEX),
+            ConnectionReuse::Missing
+        ));
+        assert!(state.inner.connection.try_lock().unwrap().is_none());
     }
 }
