@@ -36,6 +36,15 @@ async function settleTurn(session, attempts = 20) {
 async function inProcess() {
   const mod = await import('../src/server.mjs')
   const { dispatch, handlers, registerHandler } = mod
+
+  const { getCodexSupportedModels } = await import('../src/handlers/codex.mjs')
+  const codexModels = getCodexSupportedModels()
+  assert.deepEqual(
+    codexModels.slice(0, 3).map(model => model.value),
+    ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    'Codex sidecar model catalog should lead with the current GPT-5.6 family',
+  )
+  assert.ok(codexModels.every(model => model.source === 'builtin' && typeof model.description === 'string'))
   function writeClaudeHistory(projectsDir, cwd, sdkSessionId, entries = null) {
     const encoded = String(cwd || process.cwd()).replace(/[^a-zA-Z0-9]/g, '-')
     const dir = join(projectsDir, encoded)
@@ -3502,6 +3511,7 @@ async function inProcess() {
   // expectedContextWindowForModel: hits map; falls back to base id by
   // stripping [1m]; returns null for unknown.
   assert.equal(expectedContextWindowForModel('claude-opus-5[1m]'), 1000000)
+  assert.equal(expectedContextWindowForModel('claude-fable-5-1[1m]'), 1000000)
   assert.equal(expectedContextWindowForModel('claude-opus-4-8[1m]'), 1000000)
   assert.equal(expectedContextWindowForModel('claude-opus-4-7'), 1000000)
   assert.equal(expectedContextWindowForModel('claude-opus-4-7[1m]'), 1000000)

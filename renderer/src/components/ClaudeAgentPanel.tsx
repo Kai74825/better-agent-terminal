@@ -6051,15 +6051,17 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
         // Ref: https://platform.claude.com/docs/en/about-claude/pricing
         const P = (input: number, output: number) => ({ input, output, cacheRead: input * 0.1, cacheWrite5m: input * 1.25, cacheWrite1h: input * 2 })
         const MODEL_PRICING: Record<string, ReturnType<typeof P>> = {
+          'fable-5-1': { ...P(10, 50), cacheRead: 0.25 },
           'fable-5':   P(10, 50),
           'opus-5':    P(5, 25),    'opus-4-8':  P(5, 25),    'opus-4-7':  P(5, 25),    'opus-4-6':  P(5, 25),    'opus-4-5':  P(5, 25),
           'opus-4-1':  P(15, 75),   'opus-4':    P(15, 75),   'opus-3': P(15, 75),
-          'sonnet-5':  P(3, 15),
+          'sonnet-5':  P(2, 10),
           'sonnet-4-6': P(3, 15),   'sonnet-4-5': P(3, 15),   'sonnet-4': P(3, 15),
           'sonnet-3-7': P(3, 15),   'sonnet-3-5': P(3, 15),
           'haiku-4-5': P(1, 5),     'haiku-3-5': P(0.80, 4),  'haiku-3': P(0.25, 1.25),
         }
         const getModelPricing = (model: string) => {
+          if (model.includes('fable-5-1')) return MODEL_PRICING['fable-5-1']
           if (model.includes('fable-5')) return MODEL_PRICING['fable-5']
           if (model.includes('opus-5')) return MODEL_PRICING['opus-5']
           if (model.includes('opus-4-8')) return MODEL_PRICING['opus-4-8']

@@ -1,13 +1,29 @@
 import * as assert from 'assert'
-import { CLAUDE_BUILTIN_MODELS, groupClaudeModelRows } from '../renderer/src/utils/claude-model-presets'
+import { readFileSync } from 'fs'
+import {
+  CLAUDE_BUILTIN_MODELS,
+  contextWindowForClaudeSelection,
+  groupClaudeModelRows,
+  sdkModelForClaudeSelection,
+} from '../renderer/src/utils/claude-model-presets'
+import { CODEX_MODELS, DEFAULT_CODEX_MODEL } from '../renderer/src/utils/codex-models'
 
 function main() {
+  assert.equal(DEFAULT_CODEX_MODEL, 'gpt-5.6-sol')
+  assert.deepEqual(
+    CODEX_MODELS.slice(0, 3).map(model => model.value),
+    ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    'the Codex picker should lead with the current GPT-5.6 family',
+  )
+  assert.ok(CODEX_MODELS.every(model => typeof model.description === 'string' && model.description.length > 0))
+
   const rows = groupClaudeModelRows(CLAUDE_BUILTIN_MODELS)
 
-  // Opus 5 is the newest model and must stay at the top of the picker.
-  assert.equal(rows[0].key, 'claude-opus-5', 'Opus 5 should be the first row')
-  assert.equal(rows[0].label, 'Opus 5')
-  assert.equal(rows[1].key, 'claude-fable-5')
+  // Fable 5.1 is the newest model and must stay at the top of the picker.
+  assert.equal(rows[0].key, 'claude-fable-5-1', 'Fable 5.1 should be the first row')
+  assert.equal(rows[0].label, 'Fable 5.1')
+  assert.equal(rows[1].key, 'claude-opus-5')
+  assert.equal(rows[2].key, 'claude-fable-5')
 
   // Every preset in the flat list must survive grouping exactly once, so no
   // model becomes unreachable from the picker.
@@ -25,13 +41,22 @@ function main() {
     `expected fewer rows than presets, got ${rows.length} vs ${CLAUDE_BUILTIN_MODELS.length}`,
   )
 
-  const opus5 = rows[0]
+  const fable51 = rows[0]
   assert.deepEqual(
-    opus5.options.map(o => o.label),
+    fable51.options.map(o => o.label),
     ['200K', '300K', '1M'],
     'windows sort ascending with the full window last',
   )
-  assert.deepEqual(opus5.options.map(o => o.window), [200000, 300000, null])
+  assert.deepEqual(fable51.options.map(o => o.window), [200000, 300000, null])
+  assert.equal(sdkModelForClaudeSelection('claude-fable-5-1:auto-compact-300k'), 'claude-fable-5-1[1m]')
+  assert.equal(contextWindowForClaudeSelection('claude-fable-5-1:1m'), 1000000)
+
+  const panelSource = readFileSync('renderer/src/components/ClaudeAgentPanel.tsx', 'utf8')
+  assert.ok(
+    panelSource.includes("'fable-5-1': { ...P(10, 50), cacheRead: 0.25 }"),
+    'Fable 5.1 should use the published $10/$50 pricing and $0.25 cache-read price',
+  )
+  assert.match(panelSource, /'sonnet-5':\s+P\(2, 10\)/, 'Sonnet 5 pricing should be $2/$10 per MTok')
 
   // Opus 4.7 is the widest model today (200K/300K/400K/1M).
   const opus47 = rows.find(r => r.key === 'claude-opus-4-7')
