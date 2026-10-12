@@ -37,6 +37,7 @@ import { AgentFastModeCheckbox } from './AgentFastModeCheckbox'
 import { useRafBatchedString } from '../utils/use-raf-batched-string'
 import { translateRuntimeMessage } from '../utils/runtime-status-message'
 import { agentSendResultError, isMissingSessionCwdError } from '../utils/agent-send-recovery'
+import { formatErrorMessage } from '../utils/error-message'
 import { dispatchWorkerCommand, parseWorkerSlashCommand } from '../utils/worker-command'
 import { BAT_FAST_SLASH_COMMAND, executeBatFastCommand, parseBatFastCommand } from '../utils/fast-mode-command'
 import { BAT_RELOAD_SLASH_COMMAND } from '../utils/session-reload'
@@ -460,6 +461,8 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
     if (typeof globalDefault === 'string' && CODEX_EFFORT_LEVELS.includes(globalDefault as CodexEffortLevel)) return globalDefault
     return 'high'
   })
+  const [effortChangePending, setEffortChangePending] = useState(false)
+  const [effortChangeError, setEffortChangeError] = useState('')
   const adoptHostSessionMeta = useCallback((meta: SessionMeta) => {
     workspaceStore.applyTerminalSessionMeta(sessionId, meta)
     if (Object.prototype.hasOwnProperty.call(meta, 'sdkSessionId')) setHasSdkSession(!!meta.sdkSessionId)
@@ -471,7 +474,11 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
     if (approval === 'untrusted' || approval === 'on-request' || approval === 'never') {
       setCodexApprovalPolicy(approval)
     }
-  }, [sessionId])
+    if (isCodexSession && typeof meta.effort === 'string'
+      && CODEX_EFFORT_LEVELS.includes(meta.effort as CodexEffortLevel)) {
+      setEffortLevel(meta.effort)
+    }
+  }, [sessionId, isCodexSession])
   const [claudeUsage, setClaudeUsage] = useState(workspaceStore.claudeUsage)
   const [usageAccount, setUsageAccount] = useState(workspaceStore.usageAccount)
   const [rateLimits, setRateLimits] = useState<Record<string, { resetsAt: number; utilization: number | null; isUsingOverage: boolean }>>({})
@@ -3469,12 +3476,23 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
 
   const handleEffortChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value
-    setEffortLevel(next)
-    if (isCodexSession) {
-      workspaceStore.updateTerminalAgentParams(sessionId, { effortLevel: next })
+    setEffortChangePending(true)
+    setEffortChangeError('')
+    try {
+      await ensureSessionStarted()
+      const applied = await host.claude.setEffort(sessionId, next)
+      if (applied !== true) throw new Error('The host did not apply the reasoning effort change.')
+      setEffortLevel(next)
+      setSessionMeta(previous => previous ? { ...previous, effort: next } : previous)
+      if (isCodexSession) {
+        workspaceStore.updateTerminalAgentParams(sessionId, { effortLevel: next })
+      }
+    } catch (error) {
+      setEffortChangeError(formatErrorMessage(error, 'Unable to change reasoning effort.'))
+    } finally {
+      setEffortChangePending(false)
     }
-    await host.claude.setEffort(sessionId, next)
-  }, [sessionId, isCodexSession])
+  }, [sessionId, isCodexSession, ensureSessionStarted])
 
   const handleCodexSandboxModeChange = useCallback(async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const next = e.target.value as CodexSandboxMode
@@ -5638,6 +5656,7 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
                 className="claude-effort-select"
                 value={effortLevel}
                 onChange={handleEffortChange}
+                disabled={effortChangePending}
                 title={t('claude.effortLevel')}
               >
                 {effortOptions.map(level => (
@@ -5645,6 +5664,7 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
                 ))}
               </select>
             )}
+            {effortChangeError && <span className="claude-fast-error" role="alert">{effortChangeError}</span>}
             {!isCodexSession && accountInfo?.organization && (
               <span className="claude-status-btn claude-account-info" title={`${accountInfo.email || ''} (${accountInfo.subscriptionType || 'unknown'})`}>
                 {accountInfo.organization}

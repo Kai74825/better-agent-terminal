@@ -55,6 +55,8 @@ try {
   policy(true)
   delete process.env.BAT_DEBUG
   assert.equal(readFastModePolicy().allowed, false, 'saved opt-in cannot bypass the debug gate')
+  assert.equal(buildSessionMeta(s).fastModeAllowed, false, 'remote metadata must expose the host debug gate')
+  assert.match(buildSessionMeta(s).fastModeDisabledReason, /BAT_DEBUG=1 on the host/)
   assert.match((await setFast(true)).error.message, /BAT_DEBUG/)
   s.fastMode = true
   s.fastModeEpoch = 0
@@ -64,12 +66,16 @@ try {
 
   process.env.BAT_DEBUG = '1'
   policy(false)
+  assert.equal(buildSessionMeta(s).fastModeAllowed, false)
+  assert.match(buildSessionMeta(s).fastModeDisabledReason, /host settings first/)
   assert.match((await setFast(true)).error.message, /settings/)
   policy(true)
+  assert.equal(buildSessionMeta(s).fastModeAllowed, true)
   await turn()
   assert.equal(options.at(-1).settings.fastMode, false, 'global opt-in must not enable a conversation')
 
   const enabled = await setFast(true)
+  assert.equal(enabled.result.fastModeAllowed, true)
   assert.equal(enabled.result.fastMode, true)
   assert.equal(enabled.result.fastModeState, 'pending')
   await turn()

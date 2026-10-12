@@ -1,6 +1,7 @@
 import { host } from '../host-api'
 import { v4 as uuidv4 } from 'uuid'
 import type { Workspace, TerminalInstance, AppState } from '../types'
+import { CODEX_EFFORT_LEVELS } from '../types'
 import { AgentPresetId, getAgentPreset } from '../types/agent-presets'
 import { normalizeAgentParams } from '../types/agent-profiles'
 import { clearPreviewCache } from '../components/TerminalThumbnail'
@@ -339,11 +340,12 @@ class WorkspaceStore {
     this.save()
   }
 
-  /** Adopt host identity and Codex permissions together, including on late attachment. */
+  /** Adopt host identity and Codex settings together, including on late attachment. */
   applyTerminalSessionMeta(terminalId: string, meta: {
     sdkSessionId?: string | null
     codexSandboxMode?: string
     codexApprovalPolicy?: string
+    effort?: string
   }): void {
     const terminal = this.state.terminals.find(t => t.id === terminalId)
     if (!terminal) return
@@ -353,6 +355,10 @@ class WorkspaceStore {
     }
     if (meta.codexApprovalPolicy && ['untrusted', 'on-request', 'never'].includes(meta.codexApprovalPolicy)) {
       params.approvalPolicy = meta.codexApprovalPolicy
+    }
+    if (sdkSessionRuntimeFamily(terminal.agentPreset) === 'codex'
+      && typeof meta.effort === 'string' && (CODEX_EFFORT_LEVELS as readonly string[]).includes(meta.effort)) {
+      params.effortLevel = meta.effort
     }
     const hasSdkId = Object.prototype.hasOwnProperty.call(meta, 'sdkSessionId')
       && (meta.sdkSessionId === null || typeof meta.sdkSessionId === 'string')

@@ -1,5 +1,6 @@
 import { host } from '../host-api'
 import { settingsStore } from '../stores/settings-store'
+import { formatErrorMessage } from './error-message'
 import type { SlashCommandInfo } from './slash-commands'
 
 export const BAT_FAST_SLASH_COMMAND: SlashCommandInfo = {
@@ -48,7 +49,7 @@ export async function executeBatFastCommand(command: BatFastCommand, options: Co
     const value: unknown = await host.claude.setFastMode(options.sessionId, enabled)
     const meta = value as { fastMode?: boolean; fastModeState?: string; fastModeDisabledReason?: string } | null
     if (!meta || typeof meta.fastMode !== 'boolean') throw new Error('Fast mode is unavailable on this host.')
-    if (meta.fastMode !== enabled) throw new Error(meta.fastModeDisabledReason || 'The host did not apply the Fast mode change.')
+    if (meta.fastMode !== enabled) throw new Error(formatErrorMessage(meta.fastModeDisabledReason, 'The host did not apply the Fast mode change.'))
     // The setter broadcasts canonical session status, which also updates the checkbox.
     if (!enabled) return 'Fast mode disabled for this session.'
     if (meta.fastModeState === 'cooldown') {
@@ -58,7 +59,7 @@ export async function executeBatFastCommand(command: BatFastCommand, options: Co
       ? 'Fast mode enabled for this session. Higher usage or additional charges may apply.'
       : 'Fast mode requested for this session. Higher usage or additional charges may apply.'
   } catch (error) {
-    return `Fast mode change failed: ${error instanceof Error ? error.message : String(error)}`
+    return `Fast mode change failed: ${formatErrorMessage(error, 'Fast mode is unavailable on this host.')}`
   } finally {
     options.pending.current = false
   }

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { host } from '../host-api'
 import { settingsStore } from '../stores/settings-store'
+import { formatErrorMessage } from '../utils/error-message'
 
 const subscribeSettings = (listener: () => void) => settingsStore.subscribe(listener)
 const getFastModeConfigured = () => settingsStore.getSettings().allowFastMode === true
@@ -10,6 +11,7 @@ const getFastModeEpoch = () => settingsStore.getSettings().fastModeEpoch || 0
 interface FastModeMeta {
   fastMode: boolean
   supportsFastMode: boolean
+  fastModeAllowed?: boolean
   fastModeState?: string
   fastModeDisabledReason?: string | null
 }
@@ -67,8 +69,10 @@ export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessi
 
   if (!allowed) return null
   const unsupported = meta?.supportsFastMode === false
+  const policyBlocked = meta?.fastModeAllowed === false && meta.fastMode !== true
   const state = meta?.fastModeState
-  const hint = unsupported ? t('claude.fastModeUnsupported')
+  const hint = policyBlocked ? formatErrorMessage(meta?.fastModeDisabledReason, t('claude.fastModeUnavailable'))
+    : unsupported ? t('claude.fastModeUnsupported')
     : disabled ? t('claude.fastModeBusy')
       : state === 'cooldown' ? t('claude.fastModeCooldown')
         : state === 'pending' ? t('claude.fastModePending') : t('claude.fastModeHint')
@@ -83,18 +87,19 @@ export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessi
       const request = ++revision.current
       const value: unknown = await host.claude.setFastMode(sessionId, enabled)
       if (!isFastModeMeta(value)) throw new Error(t('claude.fastModeUnavailable'))
+      if (value.fastMode !== enabled) throw new Error(formatErrorMessage(value.fastModeDisabledReason, t('claude.fastModeUnavailable')))
       // A status broadcast may arrive first. Both carry host-owned state.
       if (generation.current === startedGeneration && revision.current === request) setMeta(value)
     } catch (err) {
-      if (generation.current === startedGeneration) setError(err instanceof Error ? err.message : String(err))
+      if (generation.current === startedGeneration) setError(formatErrorMessage(err, t('claude.fastModeUnavailable')))
     } finally {
       if (generation.current === startedGeneration) setPending(false)
     }
   }
 
   return <span className="claude-fast-control">
-    <label className="claude-fast-checkbox" title={meta?.fastModeDisabledReason || hint}>
-      <input type="checkbox" checked={meta?.fastMode === true} disabled={disabled || pending || unsupported}
+    <label className="claude-fast-checkbox" title={formatErrorMessage(meta?.fastModeDisabledReason, hint)}>
+      <input type="checkbox" checked={meta?.fastMode === true} disabled={disabled || pending || unsupported || policyBlocked}
         onChange={event => { void toggle(event.target.checked) }} />
       Fast{pending ? '…' : state === 'cooldown' ? ` (${t('claude.fastModeCooling')})` : ''}
     </label>

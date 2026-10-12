@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict'
 async function main() {
   let debug = false
   let response: unknown = { fastMode: true, fastModeState: 'pending' }
-  let hostError: Error | null = null
+  let hostError: unknown = null
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = []
   const order: string[] = []
   ;(globalThis as any).window = {
@@ -74,6 +74,14 @@ async function main() {
   hostError = new Error('This model does not support Fast mode.')
   assert.match(await execute('on', options), /failed: This model does not support/)
   assert.equal(pending.current, false)
+  // A remote rejection crosses Rust/Tauri as a serialized BridgeError, not Error.
+  hostError = { message: 'Fast mode requires BAT_DEBUG=1 on the host.' }
+  assert.equal(await execute('on', options), 'Fast mode change failed: Fast mode requires BAT_DEBUG=1 on the host.')
+  assert.equal(pending.current, false)
+  hostError = { error: { message: 'Enable Fast mode in host settings first.' } }
+  assert.match(await execute('on', options), /failed: Enable Fast mode in host settings first/)
+  hostError = { unexpected: 'Do not render the remote error object' }
+  assert.equal(await execute('on', options), 'Fast mode change failed: Fast mode is unavailable on this host.')
   hostError = null
 
   const callsBeforeStartupError = calls.length

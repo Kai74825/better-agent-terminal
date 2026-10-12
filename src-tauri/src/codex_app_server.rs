@@ -601,7 +601,15 @@ impl CodexSession {
         // protocol, so adding it again would double-count context usage.
         // `last`, not lifetime `total`, represents the active context window.
         let context_tokens = self.last_input_tokens + self.last_output_tokens;
-        let fast_mode = self.effective_fast_mode();
+        let (fast_mode_allowed, fast_mode_epoch) = crate::commands::settings::fast_mode_policy(self.fast_mode_data_dir.as_deref());
+        let fast_mode = self.fast_mode && fast_mode_allowed && self.fast_mode_epoch == fast_mode_epoch && supports_codex_fast_mode(&self.model);
+        let fast_mode_disabled_reason = if !crate::commands::settings::fast_mode_debug_enabled() {
+            Some("Fast mode requires BAT_DEBUG=1 on the host.")
+        } else if !fast_mode_allowed {
+            Some("Enable Fast mode in host settings first.")
+        } else {
+            None
+        };
         json!({
             "model": self.model,
             "contextWindowOverride": codex_context_window_override(&self.model),
@@ -625,6 +633,8 @@ impl CodexSession {
             "effort": self.effort,
             "fastMode": fast_mode,
             "supportsFastMode": supports_codex_fast_mode(&self.model),
+            "fastModeAllowed": fast_mode_allowed,
+            "fastModeDisabledReason": fast_mode_disabled_reason,
             "fastModeState": if fast_mode { "pending" } else { "off" },
             "lastTurnFirstTokenMs": self.last_turn_first_token_ms,
             "lastTurnDurationMs": self.last_turn_duration_ms,
@@ -8849,6 +8859,8 @@ mod tests {
         let mut session = test_codex_session();
         session.fast_mode = true;
         assert_eq!(session.metadata()["fastMode"], false, "an in-memory opt-in cannot bypass the host policy");
+        assert_eq!(session.metadata()["fastModeAllowed"], false, "remote clients must see the host policy rather than their local opt-in");
+        assert!(session.metadata()["fastModeDisabledReason"].as_str().is_some());
     }
 
     #[test]
