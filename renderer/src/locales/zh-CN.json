@@ -39,6 +39,8 @@
     "noMatches": "没有符合的终端类型"
   },
   "settings": {
+    "autoResumeAfterRateLimit": "5H/7D额度恢复后自动继续",
+    "autoResumeAfterRateLimitHint": "默认关闭。Claude 与 Codex Agent 因额度限制中断后，主机持续运行时会在报告的重置时间到达后自动继续。手动发送消息、停止对话或关闭此设置会取消等待。远程对话请在主机设置。",
     "allowFastMode": "允许使用 Fast 模式",
     "allowFastModeHint": "Fast 可能消耗更多额度或产生额外费用。启用此设置只会显示模型旁的 checkbox，仍需逐个对话手动勾选。关闭设置会撤销先前的勾选，后续回合停用 Fast。远程对话也需要主机允许 Fast。",
     "title": "设置",

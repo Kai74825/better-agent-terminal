@@ -1856,7 +1856,7 @@ fn parse_fixed_digits(text: &str, start: usize, len: usize) -> Option<u32> {
     text.get(start..start + len)?.parse::<u32>().ok()
 }
 
-fn parse_rfc3339_timestamp_millis(text: &str) -> Option<u128> {
+pub(crate) fn parse_rfc3339_timestamp_millis(text: &str) -> Option<u128> {
     if text.len() < 20 {
         return None;
     }

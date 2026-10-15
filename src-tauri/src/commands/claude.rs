@@ -606,6 +606,62 @@ fn log_auth_line(app: &HostContext, message: &str) {
     let _ = crate::log_file::append_line_blocking(&dir.join("logs").join("debug.log"), &line);
 }
 
+/// Continue only an existing, idle runtime. Never recreate a stopped session or
+/// use the notification snapshot as proof that its runtime is still alive.
+pub(crate) async fn resume_after_rate_limit(
+    app: &HostContext,
+    session_id: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<bool, BridgeError> {
+    use std::sync::atomic::Ordering;
+    if cancelled.load(Ordering::SeqCst) || !crate::rate_limit_resume::enabled(app) {
+        return Ok(false);
+    }
+    let router = ClaudeRuntimeRouter {
+        app: app.clone(),
+        sidecar: app.sidecar(),
+        codex: app.state::<CodexAppServerState>(),
+    };
+    let state = if router.codex.is_owned(session_id) {
+        if router.codex.is_resting(session_id) == Some(json!(true)) {
+            return Ok(false);
+        }
+        router.codex.get_session_state(session_id).unwrap_or(Value::Null)
+    } else {
+        let resting = router
+            .sidecar_call("claude.isResting", json!({ "sessionId": session_id }), DEFAULT_TIMEOUT)
+            .await?;
+        if resting == true {
+            return Ok(false);
+        }
+        router
+            .sidecar_call("claude.getSessionState", json!({ "sessionId": session_id }), DEFAULT_TIMEOUT)
+            .await?
+    };
+    if !rate_limit_resume_can_send(&state)
+        || cancelled.load(Ordering::SeqCst)
+        || !crate::rate_limit_resume::enabled(app)
+    {
+        return Ok(false);
+    }
+    let result = router
+        .send_message(
+            session_id.to_string(),
+            "Continue the interrupted task from where you stopped. (Automatically sent by BAT after the usage limit reset.)".to_string(),
+            None, None, None, None, None,
+        )
+        .await?;
+    Ok(result.get("ok").and_then(Value::as_bool) != Some(false))
+}
+
+fn rate_limit_resume_can_send(state: &Value) -> bool {
+    state["isStreaming"].as_bool() == Some(false)
+        && state["meta"]["isStreaming"] != true
+        && state["meta"]["runtimeStatus"].as_str().is_none_or(str::is_empty)
+        && state["pendingPermission"].is_null()
+        && state["pendingAskUser"].is_null()
+}
+
 /// The renderer-facing channel for "the active account set just changed".
 pub(crate) const ACCOUNT_CHANGED_EVENT: &str = "claude:account-changed";
 
@@ -2637,6 +2693,7 @@ impl ClaudeRuntimeRouter {
         session_id: String,
         options: Option<Value>,
     ) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if should_handle_codex(&options) {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
@@ -2697,6 +2754,7 @@ impl ClaudeRuntimeRouter {
         display_prompt: Option<String>,
         suppress_user_echo: Option<bool>,
     ) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if self.codex.is_owned(&session_id) {
             claude_debug_log(
                 &self.app,
@@ -2735,6 +2793,7 @@ impl ClaudeRuntimeRouter {
     }
 
     async fn stop_session(&self, session_id: String) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if self.codex.is_owned(&session_id) {
             return Ok(self.codex.stop_session(session_id));
         }
@@ -2747,6 +2806,7 @@ impl ClaudeRuntimeRouter {
     }
 
     async fn abort_session(&self, session_id: String) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if self.codex.is_owned(&session_id) {
             claude_debug_log(
                 &self.app,
@@ -2775,6 +2835,7 @@ impl ClaudeRuntimeRouter {
     }
 
     async fn interrupt_turn(&self, session_id: String) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         // Soft interrupt (1× Esc): end the current turn but keep the
         // subprocess / session alive. For codex this is the app-server's
         // turn interrupt (abort_session), which already keeps the session;
@@ -2827,6 +2888,7 @@ impl ClaudeRuntimeRouter {
     }
 
     async fn reload_session(&self, session_id: String) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if self.codex.is_owned(&session_id) {
             let codex = self.codex.clone();
             let app = self.app.clone();
@@ -2837,6 +2899,7 @@ impl ClaudeRuntimeRouter {
     }
 
     async fn reset_session(&self, session_id: String) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         if self.codex.is_owned(&session_id) {
             let codex = self.codex.clone();
             let codex_app = self.app.clone();
@@ -2863,6 +2926,7 @@ impl ClaudeRuntimeRouter {
         sdk_session_id: String,
         options: Option<Value>,
     ) -> Result<Value, BridgeError> {
+        crate::rate_limit_resume::cancel(&self.app, &session_id);
         let should_use_codex = should_handle_codex(&options);
         if should_use_codex || self.codex.is_owned(&session_id) {
             let codex = self.codex.clone();
@@ -5245,6 +5309,7 @@ pub async fn claude_rest_session(
         return result;
     }
     ensure_local_agent_session_access(&app, &window, &session_id)?;
+    crate::rate_limit_resume::cancel(&HostContext::from_app(app.clone()), &session_id);
     if let Some(value) = codex_state.rest_session(&HostContext::from_app(app.clone()), &session_id)
     {
         return Ok(value);
@@ -5653,6 +5718,22 @@ mod tests {
     use super::*;
     use std::env;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn rate_limit_resume_requires_a_live_idle_session_without_pending_input() {
+        assert!(rate_limit_resume_can_send(&json!({"isStreaming":false, "meta":{"runtimeStatus":null}})));
+        for snapshot in [
+            Value::Null,
+            json!({"meta":{}}),
+            json!({"isStreaming":true}),
+            json!({"isStreaming":false,"meta":{"runtimeStatus":"starting"}}),
+            json!({"isStreaming":false,"meta":{"isStreaming":true}}),
+            json!({"isStreaming":false,"pendingPermission":{"toolUseId":"p"}}),
+            json!({"isStreaming":false,"pendingAskUser":{"toolUseId":"q"}}),
+        ] {
+            assert!(!rate_limit_resume_can_send(&snapshot), "must not resume {snapshot}");
+        }
+    }
 
     // Mirrors node-sidecar/tests/harness-noise.test.mjs. Harness-injected
     // background-task updates arrive as role=user records, so a session preview

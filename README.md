@@ -218,6 +218,15 @@ After installing, run `cx lang add <language>` for each language you want gramma
 
 ### Auto-Continue
 
+**Resume after usage limits reset:** Settings → Agent → Agent Behavior →
+“Automatically continue after 5H/7D usage limits reset” is a separate, default-off
+setting for Claude and Codex Agent conversations. When enabled on the host, a
+turn interrupted by a usage limit automatically sends a continuation in the same
+conversation after the reported reset time. The host must remain running; waits
+are cancelled by a manual message, stop, reset, account switch, or disabling the
+setting. Reconnecting a remote client does not cancel a wait. When no reliable
+reset time is available, BAT waits for usage data instead of guessing a delay.
+
 Some tasks are too long to finish in a single turn — the agent stops mid-plan, or pauses waiting for the user to say "keep going". `/auto-continue` (alias `/ac`) tells the host to re-send a prompt automatically when the turn ends, up to N times.
 
 **Syntax** (typed into the agent input box):

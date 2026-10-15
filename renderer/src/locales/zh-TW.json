@@ -44,6 +44,8 @@
   },
 
   "settings": {
+    "autoResumeAfterRateLimit": "5H/7D額度恢復後自動繼續",
+    "autoResumeAfterRateLimitHint": "預設關閉。Claude 與 Codex Agent 因額度限制中斷後，主機持續執行時會在回報的重置時間到達後自動繼續。手動送訊息、停止對話或關閉此設定會取消等待。遠端對話請在主機設定。",
     "allowFastMode": "允許使用 Fast 模式",
     "allowFastModeHint": "Fast 可能消耗更多額度或產生額外費用。啟用此設定只會顯示模型旁的 checkbox，仍需逐個對話手動勾選。關閉設定會撤銷先前的勾選，後續回合停用 Fast。遠端對話也需要主機允許 Fast。",
     "title": "設定",

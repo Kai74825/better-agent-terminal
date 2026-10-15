@@ -44,6 +44,8 @@
   },
 
   "settings": {
+    "autoResumeAfterRateLimit": "Automatically continue after 5H/7D usage limits reset",
+    "autoResumeAfterRateLimitHint": "Off by default. Claude and Codex Agent conversations interrupted by a usage limit continue after the reported reset time while the host is running. Sending a message, stopping the conversation, or disabling this setting cancels the wait. Configure this on the host for remote conversations.",
     "allowFastMode": "Allow Fast mode",
     "allowFastModeHint": "Fast may use more quota or incur additional charges. This only shows the checkbox beside the model; enable it separately for each conversation. Disabling this setting revokes previous selections for future turns. Remote sessions also require the host to allow Fast.",
     "title": "Settings",

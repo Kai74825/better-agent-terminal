@@ -27,6 +27,7 @@ mod codex_app_server;
 mod codex_auth;
 mod commands;
 mod event_hub;
+mod rate_limit_resume;
 mod host_context;
 // Not desktop-gated: turns run on the headless bat-server too, and its samples
 // are the ones worth having — that is the machine actually calling the API.

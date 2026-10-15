@@ -612,14 +612,15 @@ function processMessage(s, sessionId, msg) {
   }
   if (t === 'rate_limit_event') {
     const info = msg.rate_limit_info
-    if (info && typeof info.rateLimitType === 'string' && typeof info.resetsAt === 'number') {
+    if (info && (typeof info.rateLimitType === 'string' || info.status === 'rejected') && typeof info.resetsAt === 'number') {
       sendEvent('claude:rate-limit', {
         sessionId,
         info: {
-          rateLimitType: info.rateLimitType,
+          rateLimitType: info.rateLimitType || 'unknown',
           resetsAt: info.resetsAt * 1000,
           utilization: typeof info.utilization === 'number' ? info.utilization : null,
           isUsingOverage: info.isUsingOverage ?? false,
+          ...(typeof info.status === 'string' ? { status: info.status } : {}),
         },
       })
       debugLog('emit-rate-limit', sessionId, {
@@ -710,6 +711,7 @@ function processMessage(s, sessionId, msg) {
         sessionId,
         role: 'assistant',
         content: text || '',
+        ...(typeof msg.error === 'string' ? { error: msg.error } : {}),
         ...(flatThinking ? { thinking: flatThinking } : {}),
         ...(msg.parent_tool_use_id ? { parentToolUseId: msg.parent_tool_use_id } : {}),
         timestamp: Date.now(),
