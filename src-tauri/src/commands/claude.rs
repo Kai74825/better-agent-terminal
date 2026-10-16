@@ -1702,6 +1702,13 @@ const CLAUDE_MODEL_TABLE: &[ClaudeModelDef] = &[
         description: None,
     },
     ClaudeModelDef {
+        id: "claude-haiku-5-5",
+        label: "Haiku 5.5",
+        context_window: 1_000_000,
+        windows: &[Some(200_000), Some(300_000), None],
+        description: None,
+    },
+    ClaudeModelDef {
         id: "claude-haiku-4-5-20251001",
         label: "Haiku 4.5",
         context_window: 200_000,
@@ -6312,6 +6319,10 @@ mod tests {
         assert!(values.contains(&"claude-opus-4-8:auto-compact-200k"));
         assert!(values.contains(&"claude-opus-4-7:auto-compact-200k"));
         assert!(values.contains(&"claude-sonnet-4-6"));
+        assert!(values.contains(&"claude-sonnet-5-5:1m"));
+        assert!(values.contains(&"claude-haiku-5-5:auto-compact-200k"));
+        assert!(values.contains(&"claude-haiku-5-5:auto-compact-300k"));
+        assert!(values.contains(&"claude-haiku-5-5:1m"));
         assert!(models
             .as_array()
             .unwrap()

@@ -1,5 +1,6 @@
 import * as assert from 'assert'
 import { readFileSync } from 'fs'
+import { getClaudeModelPricing } from '../renderer/src/utils/claude-model-pricing'
 import {
   CLAUDE_BUILTIN_MODELS,
   claudeSelectionForModelAndWindow,
@@ -101,17 +102,32 @@ function main() {
   assert.equal(sdkModelForClaudeSelection('claude-fable-5-1:auto-compact-300k'), 'claude-fable-5-1[1m]')
   assert.equal(contextWindowForClaudeSelection('claude-fable-5-1:1m'), 1000000)
 
-  const panelSource = readFileSync('renderer/src/components/ClaudeAgentPanel.tsx', 'utf8')
-  assert.ok(
-    panelSource.includes("'fable-5-1': { ...P(10, 50), cacheRead: 0.25 }"),
-    'Fable 5.1 should use the published $10/$50 pricing and $0.25 cache-read price',
-  )
-  assert.match(panelSource, /'sonnet-5':\s+P\(2, 10\)/, 'Sonnet 5 pricing should be $2/$10 per MTok')
-  assert.match(panelSource, /'sonnet-5-5':\s+P\(2, 10\)/, 'Sonnet 5.5 keeps the Sonnet 5 price of $2/$10 per MTok')
-  assert.ok(
-    panelSource.indexOf("includes('sonnet-5-5')") < panelSource.indexOf("includes('sonnet-5')"),
-    'the Sonnet 5.5 pricing branch must be checked before the broader Sonnet 5 branch',
-  )
+  for (const panel of ['ClaudeAgentPanel', 'CodexAgentPanel']) {
+    const source = readFileSync(`renderer/src/components/${panel}.tsx`, 'utf8')
+    assert.ok(source.includes('getClaudeModelPricing(model, totalIn, true)'),
+      `${panel} must treat per-model SDK usage as cumulative when estimating tiered pricing`)
+  }
+  assert.deepEqual(getClaudeModelPricing('claude-fable-5-1[1m]'), {
+    input: 10, output: 50, cacheRead: 0.25, cacheWrite5m: 12.5, cacheWrite1h: 20,
+  })
+  assert.equal(getClaudeModelPricing('claude-sonnet-5')?.cacheRead, 0.20)
+  assert.deepEqual(getClaudeModelPricing('claude-sonnet-5-5[1m]'), {
+    input: 2, output: 10, cacheRead: 0.10, cacheWrite5m: 2.5, cacheWrite1h: 4,
+  })
+  const haikuShort = getClaudeModelPricing('claude-haiku-5-5[1m]', 100_000)!
+  assert.equal(haikuShort.input, 0.10)
+  assert.equal(haikuShort.output, 0.50)
+  assert.ok(Math.abs(haikuShort.cacheRead - 0.01) < 1e-10)
+  assert.equal(haikuShort.cacheWrite5m, 0.125)
+  assert.equal(haikuShort.cacheWrite1h, 0.20)
+  assert.deepEqual(getClaudeModelPricing('claude-haiku-5-5', 100_001), {
+    input: 0.50, output: 2.50, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1,
+  })
+  assert.equal(getClaudeModelPricing('claude-haiku-5-5', 200_000, true), null,
+    'cumulative tokens cannot identify which requests exceeded the pricing threshold')
+  assert.deepEqual(getClaudeModelPricing('claude-haiku-5-5', 90_000, true), haikuShort)
+  assert.equal(getClaudeModelPricing('claude-haiku-5-5'), null)
+  assert.equal(getClaudeModelPricing('unknown-model', 200_000), null)
   const sonnet55 = rows.find(r => r.key === 'claude-sonnet-5-5')
   assert.ok(sonnet55, 'Sonnet 5.5 row should exist')
   assert.deepEqual(sonnet55!.options.map(o => o.label), ['200K', '300K', '1M'])
@@ -130,6 +146,17 @@ function main() {
   const haiku = rows.find(r => r.key === 'claude-haiku-4-5-20251001')
   assert.ok(haiku, 'Haiku row should exist')
   assert.deepEqual(haiku!.options, [])
+
+  const haiku55 = rows.find(r => r.key === 'claude-haiku-5-5')
+  assert.ok(haiku55, 'Haiku 5.5 row should exist')
+  assert.deepEqual(haiku55!.options.map(o => o.label), ['200K', '300K', '1M'])
+  for (const option of haiku55!.options) {
+    const sdkModel = sdkModelForClaudeSelection(option.value)
+    assert.equal(sdkModel, 'claude-haiku-5-5[1m]')
+    assert.equal(contextWindowForClaudeSelection(option.value), 1_000_000)
+    assert.equal(claudeSelectionForModelAndWindow(sdkModel, option.window), option.value,
+      'host metadata must restore the selected Haiku 5.5 compact window')
+  }
 
   // A preset id newer than this build still groups under its base model, so a
   // remote host on a newer version stays usable.

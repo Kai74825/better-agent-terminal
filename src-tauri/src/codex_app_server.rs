@@ -2930,6 +2930,13 @@ fn image_generation_result(item: &Value) -> Option<String> {
     serde_json::to_string(&payload).ok()
 }
 
+// A viewed image reports `path`, not the `savedPath` of image generation.
+// Reuse the existing image-card envelope so older renderers can display it.
+fn image_view_result(item: &Value) -> Option<String> {
+    let path = first_str(item, &["path"])?;
+    serde_json::to_string(&json!({ "type": "image_generation", "path": path })).ok()
+}
+
 fn first_str<'a>(item: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
         .find_map(|key| item.get(*key).and_then(Value::as_str))
@@ -3187,8 +3194,8 @@ impl CodexAppServerState {
             json!({ "value": "gpt-5.6-sol", "displayName": "GPT-5.6 Sol", "description": "Older generation - upgrade path is GPT-6 Sol", "source": "builtin" }),
             json!({ "value": "gpt-5.6-terra", "displayName": "GPT-5.6 Terra", "description": "Older generation - balanced workhorse", "source": "builtin" }),
             json!({ "value": "gpt-5.6-luna", "displayName": "GPT-5.6 Luna", "description": "Older generation - fast, repeatable work", "source": "builtin" }),
-            json!({ "value": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark", "description": "Research preview - near-instant coding", "source": "builtin" }),
-            json!({ "value": "gpt-5.5", "displayName": "GPT-5.5", "description": "Previous frontier GPT-5.5", "source": "builtin" }),
+            json!({ "value": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark", "description": "Retired from Codex on 2026-09-14", "source": "builtin" }),
+            json!({ "value": "gpt-5.5", "displayName": "GPT-5.5", "description": "Legacy - API-key authentication only", "source": "builtin" }),
             json!({ "value": "gpt-5.4", "displayName": "GPT-5.4", "description": "Legacy - API-key authentication only", "source": "builtin" }),
             json!({ "value": "gpt-5.4-mini", "displayName": "GPT-5.4 Mini", "description": "Legacy - API-key authentication only", "source": "builtin" }),
             json!({ "value": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex", "description": "Legacy - API-key authentication only", "source": "builtin" }),
@@ -7997,7 +8004,7 @@ fn handle_item_completed(
                 json!({
                     "id": item_id(item),
                     "status": completed_tool_status(item),
-                    "result": image_generation_result(item),
+                    "result": image_view_result(item).map(Value::String).or_else(|| tool_result_value(item)),
                 }),
             );
         }
@@ -9736,6 +9743,38 @@ invalid json
         // No path means nothing to show; the caller falls back to the raw item.
         assert!(image_generation_result(&json!({"savedPath": ""})).is_none());
         assert!(image_generation_result(&json!({"status": "failed"})).is_none());
+    }
+
+    #[test]
+    fn codex_image_view_result_reads_the_viewed_path() {
+        let path = r"E:\SSIR開工區(Hermes)\Mermaid_桌面PNG連結測試.png";
+        let item = json!({"type":"imageView", "id":"view-1", "path":path});
+        let result = image_view_result(&item).expect("viewed images use path, not savedPath");
+        let result: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result, json!({"type":"image_generation", "path":path}));
+        assert!(image_view_result(&json!({"type":"imageView"})).is_none());
+    }
+
+    #[test]
+    #[cfg(not(feature = "desktop"))]
+    fn codex_image_view_completion_emits_a_renderable_image_result() {
+        let (app, events) = session_sync_test_host();
+        let state = CodexAppServerState::default();
+        state.inner.sessions.lock().unwrap().insert("session-1".into(), test_codex_session());
+        let path = r"E:\SSIR開工區(Hermes)\Mermaid_桌面PNG連結測試.png";
+        let item = json!({"type":"imageView", "id":"view-1", "path":path});
+        handle_item_started(&app, &state, "session-1", &item);
+        handle_item_completed(&app, &state, "session-1", &item);
+        let snapshot = state.get_session_state("session-1").unwrap();
+        let tool = snapshot["messages"].as_array().unwrap().iter().find(|item| item["id"] == "view-1").unwrap();
+        assert_eq!(tool["toolName"], "image_view");
+        assert_eq!(tool["input"]["path"], path);
+        assert_eq!(tool["status"], "completed");
+        let result: Value = serde_json::from_str(tool["result"].as_str().expect("image result must survive session snapshots")).unwrap();
+        assert_eq!(result, json!({"type":"image_generation", "path":path}));
+        let events = events.lock().unwrap();
+        let (_, event) = events.iter().find(|(topic, _)| topic == "claude:tool-result").unwrap();
+        assert_eq!(event["result"]["result"], tool["result"]);
     }
 
     #[test]

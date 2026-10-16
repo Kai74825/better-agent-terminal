@@ -1,5 +1,6 @@
 import { persistTranscriptArchive, readArchivePage, releaseArchivedSnapshots, resolveTranscriptPrompt, transcriptArchivePrefix, type ArchivePage } from '../utils/transcript-window'
 import { host, isTauri } from '../host-api'
+import { getClaudeModelPricing, type ClaudeModelPricing } from '../utils/claude-model-pricing'
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment, cloneElement, isValidElement, memo } from 'react'
 import { describePendingAction } from '../utils/attention'
 import { flushSync } from 'react-dom'
@@ -6367,54 +6368,15 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
         const hist = cacheHistoryRef.current
         const significant = hist.filter(h => h.totalInput >= 50000)
         const belowCount = significant.filter(h => h.pct < 50).length
-        // Per-MTok pricing — exact model match only, no fallback
-        // Ref: https://platform.claude.com/docs/en/about-claude/pricing
-        const P = (input: number, output: number) => ({ input, output, cacheRead: input * 0.1, cacheWrite5m: input * 1.25, cacheWrite1h: input * 2 })
-        const MODEL_PRICING: Record<string, ReturnType<typeof P>> = {
-          'opus-5-5': { ...P(4, 20), cacheRead: 0.20 },
-          'fable-5-1': { ...P(10, 50), cacheRead: 0.25 },
-          'fable-5':   P(10, 50),
-          'opus-5':    P(5, 25),    'opus-4-8':  P(5, 25),    'opus-4-7':  P(5, 25),    'opus-4-6':  P(5, 25),    'opus-4-5':  P(5, 25),
-          'opus-4-1':  P(15, 75),   'opus-4':    P(15, 75),   'opus-3': P(15, 75),
-          'sonnet-5-5': P(2, 10),
-          'sonnet-5':  P(2, 10),
-          'sonnet-4-6': P(3, 15),   'sonnet-4-5': P(3, 15),   'sonnet-4': P(3, 15),
-          'sonnet-3-7': P(3, 15),   'sonnet-3-5': P(3, 15),
-          'haiku-4-5': P(1, 5),     'haiku-3-5': P(0.80, 4),  'haiku-3': P(0.25, 1.25),
-        }
-        const getModelPricing = (model: string) => {
-          if (model.includes('opus-5-5')) return MODEL_PRICING['opus-5-5']
-          if (model.includes('fable-5-1')) return MODEL_PRICING['fable-5-1']
-          if (model.includes('fable-5')) return MODEL_PRICING['fable-5']
-          if (model.includes('opus-5')) return MODEL_PRICING['opus-5']
-          if (model.includes('opus-4-8')) return MODEL_PRICING['opus-4-8']
-          if (model.includes('opus-4-7')) return MODEL_PRICING['opus-4-7']
-          if (model.includes('opus-4-6')) return MODEL_PRICING['opus-4-6']
-          if (model.includes('opus-4-5')) return MODEL_PRICING['opus-4-5']
-          if (model.includes('opus-4-1')) return MODEL_PRICING['opus-4-1']
-          if (model.includes('opus-4-0') || model.match(/opus-4(?!-)\b/) || model.match(/opus-4-2\d{7}/)) return MODEL_PRICING['opus-4']
-          if (model.includes('opus-3') || model.includes('3-opus')) return MODEL_PRICING['opus-3']
-          if (model.includes('sonnet-5-5')) return MODEL_PRICING['sonnet-5-5']
-          if (model.includes('sonnet-5')) return MODEL_PRICING['sonnet-5']
-          if (model.includes('sonnet-4-6')) return MODEL_PRICING['sonnet-4-6']
-          if (model.includes('sonnet-4-5')) return MODEL_PRICING['sonnet-4-5']
-          if (model.includes('sonnet-4-0') || model.match(/sonnet-4(?!-)\b/) || model.match(/sonnet-4-2\d{7}/)) return MODEL_PRICING['sonnet-4']
-          if (model.includes('sonnet-3-7') || model.includes('3-7-sonnet')) return MODEL_PRICING['sonnet-3-7']
-          if (model.includes('sonnet-3-5') || model.includes('3-5-sonnet')) return MODEL_PRICING['sonnet-3-5']
-          if (model.includes('haiku-4') || model.includes('4-5-haiku')) return MODEL_PRICING['haiku-4-5']
-          if (model.includes('haiku-3-5') || model.includes('3-5-haiku')) return MODEL_PRICING['haiku-3-5']
-          if (model.includes('haiku-3') || model.includes('3-haiku')) return MODEL_PRICING['haiku-3']
-          return null
-        }
         const fmtCost = (v: number | null) => v === null ? '—' : `$${v.toFixed(4)}`
         // Calculate per-model cost for a history entry using pricing lookup
         const calcModelCosts = (h: typeof hist[0]) => {
           const hasModelUsage = h.modelUsage && Object.keys(h.modelUsage).length > 0
           if (hasModelUsage) {
-            const models: { model: string; cacheRead: number; cacheWrite: number; input: number; output: number; readCost: number | null; writeCost: number | null; totalCost: number | null; pricing: ReturnType<typeof P> | null }[] = []
+            const models: { model: string; cacheRead: number; cacheWrite: number; input: number; output: number; readCost: number | null; writeCost: number | null; totalCost: number | null; pricing: ClaudeModelPricing | null }[] = []
             for (const [model, stats] of Object.entries(h.modelUsage!)) {
-              const p = getModelPricing(model)
               const totalIn = stats.inputTokens + stats.cacheReadInputTokens + stats.cacheCreationInputTokens
+              const p = getClaudeModelPricing(model, totalIn, true)
               if (!p) {
                 models.push({ model, cacheRead: stats.cacheReadInputTokens, cacheWrite: stats.cacheCreationInputTokens, input: totalIn, output: stats.outputTokens, readCost: null, writeCost: null, totalCost: null, pricing: null })
                 continue
@@ -6436,7 +6398,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
           }
           // Fallback: estimate from entry-level model + turn tokens when modelUsage is unavailable (streaming)
           if (h.model) {
-            const p = getModelPricing(h.model)
+            const p = getClaudeModelPricing(h.model, h.totalInput, h.isResult === true)
             const output = h.outputTokens || 0
             if (!p) return [{ model: h.model, cacheRead: h.cacheRead, cacheWrite: h.cacheCreate, input: h.totalInput, output, readCost: null, writeCost: null, totalCost: null, pricing: null }]
             let writePrice = p.cacheWrite5m
