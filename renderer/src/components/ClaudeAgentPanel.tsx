@@ -6201,7 +6201,7 @@ const ClaudeAgentPanelContent = memo(function ClaudeAgentPanelContent({ sessionI
               </span>
             )}
             {!isV2Session && <AgentFastModeCheckbox sessionId={sessionId}
-              disabled={isStreaming} ensureSessionStarted={ensureSessionStarted} />}
+              isStreaming={isStreaming} ensureSessionStarted={ensureSessionStarted} />}
             {!isCodexSession && !isV2Session && (
               <select
                 className="claude-effort-select"

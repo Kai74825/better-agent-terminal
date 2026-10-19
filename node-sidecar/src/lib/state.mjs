@@ -60,6 +60,8 @@ export function ensureSession(sessionId) {
       fastMode: false,
       fastModeEpoch: 0,
       fastModeState: 'off',
+      fastModePending: false,
+      turnFastMode: null,
       fastModeDisabledReason: null,
       permissionMode: 'default',
       codexSandboxMode: undefined,
@@ -206,6 +208,8 @@ export function buildSessionMeta(s) {
     supportsFastMode: supportsClaudeFastMode(s.model),
     fastModeAllowed: fastModePolicy.allowed,
     fastModeState: fastMode ? s.fastModeState : 'off',
+    fastModePending: s.fastModePending === true && fastModePolicy.allowed
+      && s.fastModeEpoch === fastModePolicy.epoch && supportsClaudeFastMode(s.model),
     fastModeDisabledReason,
     autoCompactWindow: s.autoCompactWindow ?? null,
     sdkSessionId: s.sdkSessionId ?? null,

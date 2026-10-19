@@ -43,9 +43,15 @@ async function main() {
 
   await settingsStore.setAllowFastMode(true)
   assert.match(await execute('on', { ...options, available: false }), /unavailable/)
-  assert.match(await execute('on', { ...options, busy: true }), /current turn/)
-  assert.match(await execute('off', { ...options, busy: true }), /current turn/)
   assert.equal(calls.length, 0)
+
+  response = { fastMode: true, fastModeState: 'pending', fastModePending: true }
+  assert.match(await execute('on', { ...options, busy: true }), /next turn/)
+  response = { fastMode: false, fastModeState: 'off', fastModePending: true }
+  assert.match(await execute('off', { ...options, busy: true }), /disabled from the next turn/)
+  calls.length = 0
+  order.length = 0
+  response = { fastMode: true, fastModeState: 'pending' }
 
   const requested = await execute('on', options)
   assert.match(requested, /requested/)

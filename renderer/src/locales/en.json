@@ -558,7 +558,8 @@
 
   "claude": {
     "fastModeUnsupported": "This model does not support Fast mode.",
-    "fastModeBusy": "Wait for the current turn to finish before changing Fast.",
+    "fastModeBusy": "Fast changes apply from the next turn.",
+    "fastModeNextTurn": "next turn",
     "fastModeCooldown": "Fast is cooling down; the runtime is temporarily using standard speed.",
     "fastModePending": "Fast is requested for the next turn; availability depends on the account and runtime.",
     "fastModeHint": "Request Fast for this conversation. Higher usage or additional charges may apply.",

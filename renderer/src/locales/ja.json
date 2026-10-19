@@ -539,7 +539,8 @@
   },
   "claude": {
     "fastModeUnsupported": "このモデルは Fast に対応していません。",
-    "fastModeBusy": "現在のターンが終了してから Fast を変更してください。",
+    "fastModeBusy": "Fast の変更は次のターンから適用されます。",
+    "fastModeNextTurn": "次のターンから",
     "fastModeCooldown": "Fast はクールダウン中で、現在は通常速度を使用しています。",
     "fastModePending": "次のターンで Fast を要求します。利用可否はアカウントと実行環境に依存します。",
     "fastModeHint": "この会話で Fast を要求します。使用枠の消費や追加料金が増える場合があります。",

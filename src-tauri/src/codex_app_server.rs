@@ -489,6 +489,7 @@ struct CodexSession {
     effort: String,
     fast_mode: bool,
     fast_mode_epoch: u64,
+    turn_fast_mode: bool,
     fast_mode_data_dir: Option<PathBuf>,
     context_window: u64,
     start_time: Instant,
@@ -632,6 +633,7 @@ impl CodexSession {
             "codexApprovalPolicy": self.approval_policy,
             "effort": self.effort,
             "fastMode": fast_mode,
+            "fastModePending": fast_mode != self.turn_fast_mode,
             "supportsFastMode": supports_codex_fast_mode(&self.model),
             "fastModeAllowed": fast_mode_allowed,
             "fastModeDisabledReason": fast_mode_disabled_reason,
@@ -5206,6 +5208,7 @@ impl CodexAppServerState {
             effort,
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: app.data_dir_opt(),
             context_window: codex_context_window_for_model(&model),
             start_time: Instant::now(),
@@ -5503,6 +5506,7 @@ impl CodexAppServerState {
             effort: normalize_effort(options.get("effort").and_then(Value::as_str)),
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: app.data_dir_opt(),
             context_window,
             start_time: Instant::now(),
@@ -5659,6 +5663,15 @@ impl CodexAppServerState {
             || self.inner.reloading_sessions.lock().expect("codex reload lock").contains(&session_id) {
             return Ok(json!({ "ok": false, "cancelled": true, "error": "Agent restarted; queued message cancelled" }));
         }
+        // Freeze the preference before thread/process startup can block. A
+        // checkbox change during startup still belongs to the following turn.
+        let (fast_mode, fast_mode_epoch) = {
+            let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
+            let session = sessions.get_mut(&session_id)
+                .ok_or_else(|| bridge_error("Codex session not started"))?;
+            session.turn_fast_mode = session.effective_fast_mode();
+            (session.turn_fast_mode, session.fast_mode_epoch)
+        };
         let (input, mut temp_image_paths) = match build_turn_input(&prompt, images) {
             Ok(input) => input,
             Err(err) => {
@@ -5862,6 +5875,12 @@ impl CodexAppServerState {
             );
             local_turn_key
         };
+        // Keep the turn's tier through retries. A new preference affects the
+        // next turn, while host policy revocation still applies immediately.
+        let fast_mode_for_turn = || {
+            let (allowed, epoch) = crate::commands::settings::fast_mode_policy(app.data_dir_opt().as_deref());
+            fast_mode && allowed && fast_mode_epoch == epoch
+        };
         log_codex(
             app,
             &session_id,
@@ -5881,7 +5900,7 @@ impl CodexAppServerState {
                 &effort,
                 &approval_policy,
                 &sandbox_mode,
-                self.fast_mode_for_session(&session_id),
+                fast_mode_for_turn(),
             ),
             TURN_START_TIMEOUT,
         ) {
@@ -5942,7 +5961,7 @@ impl CodexAppServerState {
                                     &effort,
                                     &approval_policy,
                                     &sandbox_mode,
-                                    self.fast_mode_for_session(&session_id),
+                                    fast_mode_for_turn(),
                                 ),
                                 TURN_START_TIMEOUT,
                             ) {
@@ -6017,7 +6036,7 @@ impl CodexAppServerState {
                                         &effort,
                                         &approval_policy,
                                         &sandbox_mode,
-                                        self.fast_mode_for_session(&session_id),
+                                        fast_mode_for_turn(),
                                     ),
                                     TURN_START_TIMEOUT,
                                 ) {
@@ -6623,11 +6642,6 @@ impl CodexAppServerState {
         Some(json!(true))
     }
 
-    fn fast_mode_for_session(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().expect("codex sessions lock")
-            .get(session_id).is_some_and(CodexSession::effective_fast_mode)
-    }
-
     pub fn set_fast_mode(&self, app: &HostContext, session_id: &str, enabled: bool) -> Option<Result<Value, BridgeError>> {
         let mut sessions = self.inner.sessions.lock().expect("codex sessions lock");
         let session = sessions.get_mut(session_id)?;
@@ -6637,7 +6651,6 @@ impl CodexAppServerState {
         let (allowed, epoch) = crate::commands::settings::fast_mode_policy(app.data_dir_opt().as_deref());
         if enabled && !allowed { return Some(Err(bridge_error("Enable Fast mode in host settings first."))); }
         if enabled && !supports_codex_fast_mode(&session.model) { return Some(Err(bridge_error("This model does not support Fast mode."))); }
-        if session.is_running { return Some(Err(bridge_error("Wait for the current turn to finish before changing Fast mode."))); }
         session.fast_mode = enabled;
         session.fast_mode_epoch = epoch;
         let meta = session.metadata();
@@ -8388,6 +8401,7 @@ mod tests {
             effort: "high".to_string(),
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: None,
             context_window: GPT_5_6_CONTEXT_WINDOW_FALLBACK,
             start_time: Instant::now(),
@@ -8871,6 +8885,46 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "desktop"))]
+    fn codex_fast_change_during_turn_preserves_the_active_request() {
+        for running in [true, false] {
+            let (app, events) = session_sync_test_host();
+            let state = CodexAppServerState::default();
+            let mut session = test_codex_session();
+            session.fast_mode = true;
+            session.turn_fast_mode = true;
+            session.is_running = running;
+            set_runtime_status(&mut session, if running { "waiting_for_api" } else { "starting" }, "Preparing request");
+            let active_turn = session.active_turn_id.clone();
+            let transcript = session.messages.clone();
+            state.inner.sessions.lock().unwrap().insert("session-1".into(), session);
+
+            let meta = state.set_fast_mode(&app, "session-1", false).unwrap().unwrap();
+            assert_eq!(meta["fastMode"], false);
+            assert_eq!(meta["fastModePending"], true);
+            let mut sessions = state.inner.sessions.lock().unwrap();
+            let session = sessions.get_mut("session-1").unwrap();
+            assert_eq!(session.is_running, running);
+            assert_eq!(session.active_turn_id, active_turn);
+            assert_eq!(session.messages, transcript);
+            assert!(!session.abort_requested);
+            let current = build_turn_start_params("thread-1", json!([]), &session.model, &session.effort,
+                &session.approval_policy, &session.sandbox_mode, session.turn_fast_mode);
+            assert_eq!(current["serviceTier"], "fast", "the admitted turn and its retries retain their tier");
+            // Admit the next turn using the host-owned preference, as send_message does.
+            session.turn_fast_mode = session.effective_fast_mode();
+            let next = build_turn_start_params("thread-1", json!([]), &session.model, &session.effort,
+                &session.approval_policy, &session.sandbox_mode, session.turn_fast_mode);
+            assert_eq!(next["serviceTier"], "default");
+            assert_eq!(session.metadata()["fastModePending"], false);
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].0, "claude:status");
+            assert_eq!(events[0].1["meta"]["fastModePending"], true);
+        }
+    }
+
+    #[test]
     fn codex_model_selection_splits_context_window_preset() {
         assert_eq!(split_codex_model_selection("gpt-6-astra"), ("gpt-6-astra", None));
         assert_eq!(
@@ -9239,6 +9293,7 @@ mod tests {
             effort: "high".to_string(),
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: None,
             context_window: codex_context_window_for_model("gpt-5.6-sol"),
             start_time: Instant::now(),
@@ -9291,6 +9346,7 @@ mod tests {
             effort: "high".to_string(),
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: None,
             context_window: DEFAULT_CODEX_CONTEXT_WINDOW,
             start_time: Instant::now(),
@@ -9351,6 +9407,7 @@ mod tests {
             effort: "high".to_string(),
             fast_mode: false,
             fast_mode_epoch: 0,
+            turn_fast_mode: false,
             fast_mode_data_dir: None,
             context_window: DEFAULT_CODEX_CONTEXT_WINDOW,
             start_time: Instant::now(),

@@ -13,12 +13,13 @@ interface FastModeMeta {
   supportsFastMode: boolean
   fastModeAllowed?: boolean
   fastModeState?: string
+  fastModePending?: boolean
   fastModeDisabledReason?: string | null
 }
 
 interface Props {
   sessionId: string
-  disabled: boolean
+  isStreaming: boolean
   ensureSessionStarted: () => Promise<unknown>
 }
 
@@ -28,7 +29,7 @@ function isFastModeMeta(value: unknown): value is FastModeMeta {
     && typeof (value as FastModeMeta).supportsFastMode === 'boolean'
 }
 
-export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessionId, disabled, ensureSessionStarted }: Props) {
+export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessionId, isStreaming, ensureSessionStarted }: Props) {
   const { t } = useTranslation()
   const configured = useSyncExternalStore(subscribeSettings, getFastModeConfigured, getFastModeConfigured)
   const allowed = configured && host.debug.isDebugMode === true
@@ -73,7 +74,7 @@ export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessi
   const state = meta?.fastModeState
   const hint = policyBlocked ? formatErrorMessage(meta?.fastModeDisabledReason, t('claude.fastModeUnavailable'))
     : unsupported ? t('claude.fastModeUnsupported')
-    : disabled ? t('claude.fastModeBusy')
+    : meta?.fastModePending || isStreaming ? t('claude.fastModeBusy')
       : state === 'cooldown' ? t('claude.fastModeCooldown')
         : state === 'pending' ? t('claude.fastModePending') : t('claude.fastModeHint')
 
@@ -99,9 +100,10 @@ export const AgentFastModeCheckbox = memo(function AgentFastModeCheckbox({ sessi
 
   return <span className="claude-fast-control">
     <label className="claude-fast-checkbox" title={formatErrorMessage(meta?.fastModeDisabledReason, hint)}>
-      <input type="checkbox" checked={meta?.fastMode === true} disabled={disabled || pending || unsupported || policyBlocked}
+      <input type="checkbox" checked={meta?.fastMode === true} disabled={pending || unsupported || policyBlocked}
         onChange={event => { void toggle(event.target.checked) }} />
-      Fast{pending ? '…' : state === 'cooldown' ? ` (${t('claude.fastModeCooling')})` : ''}
+      Fast{pending ? '…' : meta?.fastModePending ? ` (${t('claude.fastModeNextTurn')})`
+        : state === 'cooldown' ? ` (${t('claude.fastModeCooling')})` : ''}
     </label>
     {error && <span className="claude-fast-error" role="alert">{error}</span>}
   </span>

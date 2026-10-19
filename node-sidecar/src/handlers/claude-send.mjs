@@ -943,7 +943,11 @@ function handleTaskMessage(s, sessionId, msg) {
   sendEvent('claude:task', { sessionId, task })
 }
 
-async function buildQueryOptions(s, sessionId, prompt) {
+function snapshotFastMode(s) {
+  return { fastMode: effectiveFastMode(s), fastModeEpoch: s.fastModeEpoch, model: s.model }
+}
+
+async function buildQueryOptions(s, sessionId, prompt, fastModeSnapshot) {
   const cwd = sessionCwd(s)
   if (!cwd) {
     throw new Error(missingSessionCwdError(sessionId))
@@ -990,7 +994,7 @@ async function buildQueryOptions(s, sessionId, prompt) {
   }
   // Explicit false overrides user/project CLI defaults. BAT requires its own
   // global opt-in and an explicit opt-in for this conversation.
-  queryOptions.settings = { ...queryOptions.settings, fastMode: effectiveFastMode(s) }
+  queryOptions.settings = { ...queryOptions.settings, fastMode: effectiveFastMode({ ...fastModeSnapshot, model: sdkModel }) }
   if (sdkModel) queryOptions.model = sdkModel
   if (claudeCodePath) queryOptions.pathToClaudeCodeExecutable = claudeCodePath
   // Capture the claude subprocess stderr so an opaque non-zero exit can be
@@ -1032,12 +1036,16 @@ function buildUserMessage(prompt, images) {
   return { type: 'user', message: { role: 'user', content: text } }
 }
 
-async function ensureLiveQuery(s, sessionId, sdk, prompt, isCurrent) {
+async function ensureLiveQuery(s, sessionId, sdk, prompt, isCurrent, fastModeSnapshot = snapshotFastMode(s)) {
   refreshFastMode(s)
-  const fastMode = effectiveFastMode(s)
+  const fastMode = effectiveFastMode(fastModeSnapshot)
+  s.turnFastMode = fastMode
   if (s.liveQuery && !s.liveQuery.isClosed && s.liveQueryFastMode !== fastMode) closeLiveQuery(s)
-  if (s.liveQuery && !s.liveQuery.isClosed) return s.liveQuery
-  const queryOptions = await buildQueryOptions(s, sessionId, prompt)
+  if (s.liveQuery && !s.liveQuery.isClosed) {
+    s.fastModePending = effectiveFastMode(s) !== s.liveQueryFastMode
+    return s.liveQuery
+  }
+  const queryOptions = await buildQueryOptions(s, sessionId, prompt, fastModeSnapshot)
   if (isCurrent && !isCurrent()) throw new Error('Session changed during reload')
   s.abortController = new AbortController()
   queryOptions.abortController = s.abortController
@@ -1084,6 +1092,8 @@ async function ensureLiveQuery(s, sessionId, sdk, prompt, isCurrent) {
   })
   s.liveQuery = live
   s.liveQueryFastMode = queryOptions.settings.fastMode
+  s.turnFastMode = queryOptions.settings.fastMode
+  s.fastModePending = effectiveFastMode(s) !== s.turnFastMode
   s.currentQuery = live.generator
   debugLog('live-query-ready', sessionId, {})
   return live
@@ -1227,6 +1237,11 @@ async function performSendMessage(params, onAccepted) {
   }
   const sid = shortSessionId(sessionId)
   if (s.isResting) s.isResting = false
+  // Freeze the admitted turn before SDK loading or subprocess startup awaits.
+  // Changes accepted during startup belong to the following turn as well.
+  refreshFastMode(s)
+  const fastModeSnapshot = snapshotFastMode(s)
+  s.turnFastMode = fastModeSnapshot.fastMode
   setRuntimeStatus(s, sessionId, 'starting', 'Preparing Claude request.')
 
   const sdk = await loadAnthropicSdk()
@@ -1250,7 +1265,7 @@ async function performSendMessage(params, onAccepted) {
   const userMessage = buildUserMessage(prompt, images)
   let live
   try {
-    live = await ensureLiveQuery(s, sessionId, sdk, prompt, isCurrent)
+    live = await ensureLiveQuery(s, sessionId, sdk, prompt, isCurrent, fastModeSnapshot)
   } catch (err) {
     if (!isCurrent()) return { ok: false, cancelled: true }
     const rawMsg = err instanceof Error ? err.message : String(err)

@@ -33,7 +33,6 @@ export async function executeBatFastCommand(command: BatFastCommand, options: Co
   if (command === 'on' && settingsStore.getSettings().allowFastMode !== true) {
     return 'Enable Fast mode in host settings first.'
   }
-  if (options.busy) return 'Wait for the current turn to finish before changing Fast mode.'
   if (options.pending.current) return 'A Fast mode change is already in progress.'
 
   const epoch = settingsStore.getSettings().fastModeEpoch || 0
@@ -47,10 +46,13 @@ export async function executeBatFastCommand(command: BatFastCommand, options: Co
       throw new Error('Fast mode settings changed; run /bat-fast on again after enabling Fast in host settings.')
     }
     const value: unknown = await host.claude.setFastMode(options.sessionId, enabled)
-    const meta = value as { fastMode?: boolean; fastModeState?: string; fastModeDisabledReason?: string } | null
+    const meta = value as { fastMode?: boolean; fastModeState?: string; fastModePending?: boolean; fastModeDisabledReason?: string } | null
     if (!meta || typeof meta.fastMode !== 'boolean') throw new Error('Fast mode is unavailable on this host.')
     if (meta.fastMode !== enabled) throw new Error(formatErrorMessage(meta.fastModeDisabledReason, 'The host did not apply the Fast mode change.'))
     // The setter broadcasts canonical session status, which also updates the checkbox.
+    if (meta.fastModePending) return enabled
+      ? 'Fast mode requested from the next turn. Higher usage or additional charges may apply.'
+      : 'Fast mode will be disabled from the next turn.'
     if (!enabled) return 'Fast mode disabled for this session.'
     if (meta.fastModeState === 'cooldown') {
       return 'Fast mode requested for this session; temporarily using standard speed during cooldown.'

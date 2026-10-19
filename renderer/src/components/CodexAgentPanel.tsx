@@ -5633,7 +5633,7 @@ const CodexAgentPanelContent = memo(function CodexAgentPanelContent({ sessionId,
               </span>
             )}
             {(isCodexSession || !isV2Session) && <AgentFastModeCheckbox sessionId={sessionId}
-              disabled={isStreaming} ensureSessionStarted={ensureSessionStarted} />}
+              isStreaming={isStreaming} ensureSessionStarted={ensureSessionStarted} />}
             {(isCodexSession || !isV2Session) && (
               <select
                 className="claude-effort-select"
